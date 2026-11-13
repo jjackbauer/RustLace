@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::{
-    Align, Align2, Color32, CursorIcon, FontId, Id, Key, Layout, Rect, RichText, Sense, Stroke,
-    StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
+    Align, Align2, Color32, CursorIcon, FontId, Id, Key, Layout, Rect, Response, RichText, Sense,
+    Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 
 use crate::engine::FunctionOrigin;
@@ -36,6 +36,7 @@ use super::editor::{TextEditor, surface_id};
 use super::file_dialogs::{self, FileDialogs, NativeFileDialogs};
 use super::plot::{self, Plot, PngBackground};
 use super::theme;
+use super::typography;
 
 /// Width of a splitter, in pixels.
 pub const SPLIT: f32 = 6.0;
@@ -1705,6 +1706,7 @@ impl WorkbenchApp {
                             .hint_text("42 or 42:8"),
                     )
                     .on_hover_text("The line to move the caret to");
+                label_input(ui, &field, "Go to line");
                 if prompt.focus {
                     // Retry until the field really owns the keyboard focus: the window's first
                     // pass or a UIA Invoke can leave another widget focused for a frame.
@@ -1776,6 +1778,7 @@ impl WorkbenchApp {
                             .hint_text("filter"),
                     )
                     .on_hover_text("Case-insensitive filter over the document's identifiers");
+                label_input(ui, &field, "Find symbol");
                 if prompt.focus {
                     // Retry until the field really owns the keyboard focus, exactly like the
                     // go-to-line prompt.
@@ -1850,6 +1853,10 @@ impl WorkbenchApp {
         }
         let mut preferences = self.settings.editor;
         let mut changed = false;
+        let mut ui_scale_percent = self.settings.ui_scale_percent;
+        let mut theme_follows_system = self.settings.theme_follows_system;
+        let mut changed_scale = false;
+        let mut changed_follows = false;
         let mut open = self.editor_settings_open;
         egui::Window::new("Editor settings")
             .collapsible(false)
@@ -1916,11 +1923,135 @@ impl WorkbenchApp {
                     .monospace()
                     .color(theme::dim()),
                 );
+                ui.separator();
+                // A11Y-005: the configurable editor typography. Every choice repaints in this
+                // same frame because the editor derives its metrics from these settings.
+                ui.label(RichText::new("Editor typography").strong());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Font").color(theme::dim()));
+                    egui::ComboBox::from_id_salt("editor_font_family")
+                        .selected_text(preferences.typography.font.label())
+                        .show_ui(ui, |ui| {
+                            for font in settings::EditorFont::ALL {
+                                let available = font.available();
+                                let text = if available {
+                                    font.label().to_string()
+                                } else {
+                                    format!("{} (not installed)", font.label())
+                                };
+                                ui.add_enabled_ui(available, |ui| {
+                                    ui.selectable_value(
+                                        &mut preferences.typography.font,
+                                        font,
+                                        text,
+                                    );
+                                });
+                            }
+                        });
+                });
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut preferences.typography.font_size_pt,
+                            settings::MIN_FONT_SIZE_PT..=settings::MAX_FONT_SIZE_PT,
+                        )
+                        .text("pt"),
+                    )
+                    .on_hover_text("Editor font size, 12-24 points")
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut preferences.typography.line_height_percent,
+                            settings::MIN_LINE_HEIGHT_PERCENT
+                                ..=settings::MAX_LINE_HEIGHT_PERCENT,
+                        )
+                        .text("line height %"),
+                    )
+                    .on_hover_text("Row height as a percentage of the font size")
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut preferences.typography.ligatures, "Ligatures")
+                    .on_hover_text(
+                        "Paint coding operator pairs as their single glyph (-> as an arrow, != \
+                         as a not-equal sign, ...). The buffer, the caret column and every \
+                         decoration keep their positions.",
+                    )
+                    .changed();
+                ui.label(
+                    RichText::new(typography::Typography::new(&preferences.typography).summary())
+                        .monospace()
+                        .color(theme::dim()),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "Row height {:.1} pt (never below the font's own row)",
+                        preferences.typography.row_height()
+                    ))
+                    .small()
+                    .color(theme::dim()),
+                );
+                ui.separator();
+                // A11Y-004: the interface scale is applied on top of the OS DPI scale.
+                ui.label(RichText::new("Interface scale").strong());
+                changed_scale |= ui
+                    .add(
+                        egui::Slider::new(
+                            &mut ui_scale_percent,
+                            settings::MIN_UI_SCALE_PERCENT..=settings::MAX_UI_SCALE_PERCENT,
+                        )
+                        .suffix(" %")
+                        .text("on top of the OS DPI"),
+                    )
+                    .on_hover_text(
+                        "Enlarge every control and label by this percentage; the window keeps \
+                         its size and the layout reflows",
+                    )
+                    .changed();
+                ui.label(
+                    RichText::new(format!(
+                        "The OS DPI scale is honoured; this adds {}% on top of it.",
+                        ui_scale_percent.saturating_sub(100)
+                    ))
+                    .small()
+                    .color(theme::dim()),
+                );
+                ui.separator();
+                // A11Y-006: follow the OS application theme, or keep the explicit override.
+                ui.label(RichText::new("Theme").strong());
+                changed_follows |= ui
+                    .checkbox(
+                        &mut theme_follows_system,
+                        "Follow the OS light/dark theme",
+                    )
+                    .on_hover_text(
+                        "On: an OS application-theme change repaints the window, keeping the \
+                         document, the caret, the run and the focus. Off: the toolbar's Dark/Light \
+                         choice is an explicit override.",
+                    )
+                    .changed();
+                ui.label(
+                    RichText::new(if theme_follows_system {
+                        format!("Following the OS theme (currently {})", self.theme_button_label())
+                    } else {
+                        format!("Explicit override: {}", self.theme_button_label())
+                    })
+                    .small()
+                    .color(theme::dim()),
+                );
             });
         self.editor_settings_open = open;
         if changed {
             self.settings.editor = preferences;
             self.apply_editor_settings();
+            self.persist_state(true);
+        }
+        if changed_scale {
+            self.settings.ui_scale_percent = ui_scale_percent;
+            self.persist_state(true);
+        }
+        if changed_follows {
+            self.settings.theme_follows_system = theme_follows_system;
             self.persist_state(true);
         }
     }
@@ -1930,7 +2061,8 @@ impl WorkbenchApp {
     fn file_bar(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.file_buttons.clear();
-        ui.horizontal(|ui| {
+        // A11Y-004: the file bar wraps instead of running under the window edge at a high scale.
+        ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("File").small().color(theme::dim()));
             if self.file_bar_button(ui, "New", "New document (Ctrl+N)") {
                 self.new_document();
@@ -2048,6 +2180,35 @@ impl WorkbenchApp {
     }
 
     fn ui_root(&mut self, ui: &mut Ui) {
+        // A11Y-005: the editor font family is registered before any text is laid out, so the
+        // first frame already draws the configured face.
+        typography::ensure_installed(ui.ctx(), &self.settings.editor.typography);
+        // A11Y-004: the persisted interface scale is applied as egui's zoom factor on top of the
+        // OS DPI scale. The workbench never replaces the OS scale, so honouring the system DPI is
+        // the default and the setting only adds accessibility zoom.
+        let scale = typography::scale_factor(self.settings.ui_scale_percent);
+        if (ui.ctx().zoom_factor() - scale).abs() > 1e-4 {
+            ui.ctx().set_zoom_factor(scale);
+        }
+        // A11Y-006: an OS application-theme change is followed when the user chose to follow it;
+        // an explicit override ignores it. Only the token set changes here — the workbench, the
+        // editors (caret, selection, history), the plot and the focused widget are untouched, so
+        // the switch cannot lose a document, a run or the focus.
+        if self.settings.theme_follows_system {
+            if let Some(system) = ui.ctx().system_theme() {
+                let wanted = match system {
+                    egui::Theme::Dark => theme::ThemeId::Dark,
+                    egui::Theme::Light => theme::ThemeId::Light,
+                };
+                if wanted != self.theme {
+                    self.theme = wanted;
+                    self.settings.theme = wanted;
+                    theme::apply(ui.ctx(), wanted);
+                    self.applied_theme = Some(wanted);
+                    self.persist_state(true);
+                }
+            }
+        }
         // VIS-002: every pass starts with the active theme's tokens applied to this Ui's style,
         // so no widget can inherit egui's default palette. When the theme changed, the context's
         // style slots are rewritten too, which is what windows, menus and tooltips created
@@ -2345,16 +2506,51 @@ impl WorkbenchApp {
             }
         }
 
-        egui::Panel::top("filebar").show(ui, |ui| self.file_bar(ui));
-        egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
+        egui::Panel::top("filebar").show(ui, |ui| {
+            ui.scope_builder(
+                UiBuilder::new()
+                    .accessibility_role(egui::Role::Pane)
+                    .accessibility_label("File bar"),
+                |ui| self.file_bar(ui),
+            );
+        });
+        egui::Panel::top("toolbar").show(ui, |ui| {
+            ui.scope_builder(
+                UiBuilder::new()
+                    .accessibility_role(egui::Role::Pane)
+                    .accessibility_label("Toolbar"),
+                |ui| self.toolbar(ui),
+            );
+        });
         if self.trace_pending {
             crate::run_trace::mark("toolbar_drawn", "");
         }
-        egui::Panel::top("tabstrip").show(ui, |ui| self.tab_strip(ui));
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        egui::Panel::top("tabstrip").show(ui, |ui| {
+            ui.scope_builder(
+                UiBuilder::new()
+                    .accessibility_role(egui::Role::TabList)
+                    .accessibility_label("Document tabs"),
+                |ui| self.tab_strip(ui),
+            );
+        });
+        egui::Panel::bottom("status").show(ui, |ui| {
+            ui.scope_builder(
+                UiBuilder::new()
+                    .accessibility_role(egui::Role::Pane)
+                    .accessibility_label("Status bar"),
+                |ui| self.status_bar(ui),
+            );
+        });
         egui::CentralPanel::default().show(ui, |ui| {
-            let full = ui.available_rect_before_wrap();
-            self.panes(ui, full);
+            ui.scope_builder(
+                UiBuilder::new()
+                    .accessibility_role(egui::Role::Pane)
+                    .accessibility_label("Workbench panes"),
+                |ui| {
+                    let full = ui.available_rect_before_wrap();
+                    self.panes(ui, full);
+                },
+            );
         });
         // PLT-006: the PNG options window sits over every pane, not inside the plot pane, so a
         // click on it cannot also reach the plot canvas underneath.
@@ -2400,7 +2596,9 @@ impl WorkbenchApp {
     }
 
     fn toolbar(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
+        // A11Y-004: at 125-200% the toolbar's controls wrap onto extra rows instead of being
+        // clipped by the window edge.
+        ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new("Lovelace Desktop")
                     .strong()
@@ -2456,6 +2654,7 @@ impl WorkbenchApp {
                 .on_hover_text(format!(
                     "Display precision for the active document: a whole number of digits from {MIN_PRECISION} to {MAX_PRECISION}"
                 ));
+            label_input(ui, &field, "Precision (digits)");
             let apply = ui
                 .add(egui::Button::new("Apply"))
                 .on_hover_text("Apply the typed precision to the active document");
@@ -2603,7 +2802,7 @@ impl WorkbenchApp {
     }
 
     fn tab_strip(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let tabs: Vec<String> = self
                 .workbench
                 .documents()
@@ -2612,7 +2811,19 @@ impl WorkbenchApp {
                 .collect();
             for (index, title) in tabs.iter().enumerate() {
                 let selected = index == self.workbench.active();
-                if ui.selectable_label(selected, title).clicked() {
+                let response = ui.selectable_label(selected, title);
+                // A11Y-002: a document tab is a `Tab` with a selected state, not an unnamed
+                // toggle button: a reader announces "round-43-a11y.lv, tab, selected" and the
+                // tab strip's `TabList` parent tells it how many tabs there are.
+                let name = title.clone();
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Tab, true, name.clone())
+                });
+                // The selected state is the tab's own property, not a checked toggle.
+                ui.ctx().accesskit_node_builder(response.id, |node| {
+                    node.set_selected(selected);
+                });
+                if response.clicked() {
                     self.workbench.set_active(index);
                     // A tab switch is a pointer click outside the editor: drop every popup so a
                     // stale one cannot reappear when the user switches back.
@@ -2636,21 +2847,87 @@ impl WorkbenchApp {
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            let active = self.workbench.active();
-            let (line, column) = self.editors[active].line_col_1based();
-            let status = self.workbench.status_text(line, column);
-            if self.trace_pending {
-                crate::run_trace::mark("status_bar_drawn", format!("status={status:?}"));
+        let active = self.workbench.active();
+        let (line, column) = self.editors[active].line_col_1based();
+        let status = self.workbench.status_text(line, column);
+        // A11Y-012: the run outcome carries a text marker, not only a colour. `[ERR]` and `[OK]`
+        // are readable in greyscale, by a screen reader, and in the UIA name below.
+        let marker = match self.view.run_state {
+            crate::run_state::RunState::Failed => Some("[ERR]"),
+            crate::run_state::RunState::Finished => Some("[OK]"),
+            crate::run_state::RunState::Stale => Some("[STALE]"),
+            _ => None,
+        };
+        let diagnostic = self.view.diagnostic.clone();
+        let mut label = match marker {
+            Some(marker) => format!("{marker} {status}"),
+            None => status.clone(),
+        };
+        if let Some(diagnostic) = &diagnostic {
+            label.push_str(&format!(
+                " | error at Ln {}, Col {}: {}",
+                diagnostic.line, diagnostic.column, diagnostic.message
+            ));
+        }
+        // A11Y-002: the status strip is one `Status` node whose name is the whole state line
+        // (marker, run state, caret and, after a failure, the error's location).
+        label_ui_node_as(ui, egui::Role::Status, &label);
+        if self.trace_pending {
+            crate::run_trace::mark("status_bar_drawn", format!("status={status:?}"));
+        }
+        ui.horizontal_wrapped(|ui| {
+            if let Some(marker) = marker {
+                ui.label(
+                    RichText::new(marker)
+                        .strong()
+                        .color(status_state_color(self.view.run_state)),
+                )
+                .on_hover_text(if diagnostic.is_some() {
+                    "The last run failed; the log names its line and column"
+                } else {
+                    "The last run finished"
+                });
             }
             // VIS-002: the run state's semantic colour is a theme token, not a fixed accent:
             // success is positive, an in-flight run progresses, failure is the error colour and
             // a stale/cancelled result is a warning.
             ui.label(
-                RichText::new(status)
+                RichText::new(&status)
                     .monospace()
                     .color(status_state_color(self.view.run_state)),
             );
+            // A11Y-012: a failed run's status names the error's location in text. The colour is
+            // redundant with the marker and the words.
+            if let Some(diagnostic) = &diagnostic {
+                ui.separator();
+                ui.label(
+                    RichText::new(format!(
+                        "error at Ln {}, Col {}",
+                        diagnostic.line, diagnostic.column
+                    ))
+                    .monospace()
+                    .color(theme::error()),
+                );
+            }
+            // A11Y-002: the committed progress is a real `ProgressIndicator` with a numeric
+            // value, not text a reader has to parse out of the status string. egui fills the
+            // node's value with a percentage; the explicit range below states the numbers a
+            // screen reader can act on (committed statements out of the run's total).
+            ui.separator();
+            let total = self.view.total.max(1);
+            let committed = self.view.committed_steps.min(total);
+            let progress = ui.add(
+                egui::ProgressBar::new(committed as f32 / total as f32)
+                    .desired_width(76.0)
+                    .text(format!("{committed}/{total}")),
+            );
+            ui.ctx()
+                .accesskit_node_builder(progress.id, |node| {
+                    node.set_min_numeric_value(0.0);
+                    node.set_max_numeric_value(total as f64);
+                    node.set_numeric_value(committed as f64);
+                });
+            progress.on_hover_text("Committed statements of the last run's snapshot");
             ui.separator();
             if let Some(document) = self.workbench.documents().get(active) {
                 ui.label(RichText::new(format!("{} ms last run", document.elapsed_ms)).color(theme::dim()));
@@ -2752,34 +3029,73 @@ impl WorkbenchApp {
             &engine_state.variables,
         );
         let pane_title = format!("Editor - {title}");
-        with_pane(ui, rect, &pane_title, |ui, header, body| {
-            ui.scope_builder(header_ui(header), |ui| {
+        // The header's natural width decides how many rows it is given; the strings are built
+        // once here so the estimate and the painted labels cannot disagree.
+        let header_lines = format!("{lines} lines / {bytes} bytes");
+        // A11Y-005: the header states the resolved typography, so a UIA capture proves which
+        // font, size, line height and ligature choice the frame is painted with. At a narrow
+        // pane it is the first label dropped: it is the least important header fact and keeping
+        // it would force a fourth header row at 200% interface scale.
+        let typography_line = (rect.width() >= 420.0)
+            .then(|| typography::Typography::new(&self.settings.editor.typography).summary());
+        let diagnostic_line = diagnostic
+            .as_ref()
+            .map(|diagnostic| format!("[ERR] {}", diagnostic_summary(diagnostic)));
+        let completion_line = self.editors[active].completion_summary();
+        let bracket_line = self.editors[active].bracket_status();
+        let signature_line = self.editors[active].signature_summary();
+        let find_line = self.editors[active].find_summary();
+        let mut header_hint = header_text_width(&title)
+            + header_text_width(&header_lines)
+            + header_text_width(&encoding);
+        if let Some(line) = &typography_line {
+            header_hint += header_text_width(line);
+        }
+        // The editing-state summaries (completion, bracket, signature, find) come and go with
+        // every pass; their widths are deliberately not measured, because a hint that changed
+        // when a status appeared would resize the header and shift the whole pane between two
+        // frames (which also moves a pointer target out from under a click). A fixed allowance
+        // covers all four at once.
+        header_hint += 280.0;
+        if let Some(extra) = diagnostic_line.as_deref() {
+            header_hint += 8.0 + header_text_width(extra);
+        }
+        with_pane(ui, rect, &pane_title, header_hint, |ui, header, body| {
+            header_row(ui, header, |ui| {
                 ui.label(RichText::new(&title).color(theme::accent()).monospace());
-                ui.label(RichText::new(format!("{lines} lines / {bytes} bytes")).color(theme::dim()));
+                ui.label(RichText::new(&header_lines).color(theme::dim()));
                 ui.label(RichText::new(&encoding).monospace().small().color(theme::dim()))
                     .on_hover_text(
                         "The document's encoding and newline style; Save writes them back \
                          unchanged unless the file is edited",
                     );
-                if let Some(diagnostic) = &diagnostic {
+                if let Some(line) = &typography_line {
+                    ui.label(RichText::new(line).monospace().small().color(theme::dim()))
+                        .on_hover_text(
+                            "Editor typography (Ctrl+,): font family, size in points, line height \
+                             and ligature choice",
+                        );
+                }
+                if let Some(line) = &diagnostic_line {
                     ui.separator();
-                    ui.label(
-                        RichText::new(diagnostic_summary(diagnostic))
-                            .monospace()
-                            .color(theme::error()),
-                    )
-                    .on_hover_text(diagnostic.render_fully());
+                    ui.label(RichText::new(line).monospace().color(theme::error()))
+                        .on_hover_text(
+                            diagnostic
+                                .as_ref()
+                                .map(Diagnostic::render_fully)
+                                .unwrap_or_default(),
+                        );
                 }
                 // The popup itself is painted; the header states its selected signature so the
                 // completion also exists in the accessibility tree and in a UIA capture.
-                if let Some(summary) = self.editors[active].completion_summary() {
+                if let Some(summary) = &completion_line {
                     ui.separator();
                     ui.label(RichText::new(summary).monospace().color(theme::accent()));
                 }
                 // EDT-007: the matching-bracket state is also stated in the pane header, so both
                 // the matched pair and the distinct unmatched state are readable (and visible in
                 // a UIA capture) without inspecting painted pixel colours.
-                if let Some(status) = self.editors[active].bracket_status() {
+                if let Some(status) = &bracket_line {
                     ui.separator();
                     let color = if status.starts_with("Unmatched") {
                         theme::error()
@@ -2794,7 +3110,7 @@ impl WorkbenchApp {
                 }
                 // EDT-004: the signature popup is painted over the text; the header states the
                 // same signature and active parameter for accessibility clients and UIA captures.
-                if let Some(status) = self.editors[active].signature_summary() {
+                if let Some(status) = &signature_line {
                     ui.separator();
                     ui.label(RichText::new(status).monospace().color(theme::accent()))
                         .on_hover_text(
@@ -2804,7 +3120,7 @@ impl WorkbenchApp {
                 }
                 // EDT-009: the match count and the toggles are restated in the header so a UIA
                 // capture can assert them; the bar itself paints the same text.
-                if let Some(status) = self.editors[active].find_summary() {
+                if let Some(status) = &find_line {
                     ui.separator();
                     let color = if status.contains("invalid regex") {
                         theme::error()
@@ -2887,6 +3203,7 @@ impl WorkbenchApp {
                                 .hint_text("Find text"),
                         )
                         .on_hover_text("The text or pattern to find");
+                    label_input(ui, &query, "Find text");
                     if query.changed() {
                         find.query_changed();
                     }
@@ -2983,6 +3300,7 @@ impl WorkbenchApp {
                                 .hint_text("Replace with"),
                         )
                         .on_hover_text("The literal replacement text");
+                    label_input(ui, &replacement, "Replacement text");
                     if replacement.has_focus()
                         && ui.input(|input| input.key_pressed(Key::Enter))
                     {
@@ -3040,8 +3358,23 @@ impl WorkbenchApp {
     fn plot_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
         let plot_title = view.plot.as_ref().map(|plot| plot.title.clone());
         let empty = self.plot.is_empty();
-        with_pane(ui, rect, "Plot - engine SVG", |ui, header, body| {
-            ui.scope_builder(header_ui(header), |ui| {
+        let zoom_label = format!("{:.0}%", self.plot.zoom_percent());
+        let mut header_hint = 36.0
+            + 48.0
+            + 78.0
+            + 72.0
+            + 8.0
+            + header_text_width(&zoom_label)
+            + 8.0
+            + header_text_width(plot_title.as_deref().unwrap_or("no engine plot"))
+            + 8.0
+            + 100.0
+            + 105.0;
+        if let Some((status, _)) = &self.plot_export_status {
+            header_hint += header_text_width(status);
+        }
+        with_pane(ui, rect, "Plot - engine SVG", header_hint, |ui, header, body| {
+            header_row(ui, header, |ui| {
                 // PLT-004: Fit restores the whole plot; 100% is the natural-size reset (one SVG
                 // point per logical screen pixel) and is a different view on a pane whose fit
                 // scale is not 1:1. Both are one click, and the wheel/drag handlers in
@@ -3080,7 +3413,7 @@ impl WorkbenchApp {
                     self.plot.zoom_step(plot::WHEEL_STEP);
                 }
                 ui.label(
-                    RichText::new(format!("{:.0}%", self.plot.zoom_percent()))
+                    RichText::new(&zoom_label)
                         .monospace()
                         .color(theme::dim()),
                 )
@@ -3123,6 +3456,7 @@ impl WorkbenchApp {
                 self.plot.ui(ui, body);
                 return;
             }
+            self.plot.title = plot_title.clone();
             let info = format!(
                 "raster {}x{} @ {:.2}x · {:.2} ms raster · {:.2} ms upload",
                 self.plot.raster_px[0],
@@ -3496,8 +3830,9 @@ impl WorkbenchApp {
         let mut workspace_filter_id: Option<Id> = None;
         let mut result_toggle_rects: Vec<(String, Rect)> = Vec::new();
         let pane_focus = self.pane_focus;
-        with_pane(ui, rect, "Workspace", |ui, header, body| {
-            ui.scope_builder(header_ui(header), |ui| {
+        let header_hint = 40.0 + 140.0 + header_text_width(&format!("{variable_count} vars · {function_count} funcs"));
+        with_pane(ui, rect, "Workspace", header_hint, |ui, header, body| {
+            header_row(ui, header, |ui| {
                 let label = ui.label("Filter");
                 let filter_field = ui
                     .add(
@@ -3507,6 +3842,7 @@ impl WorkbenchApp {
                     )
                     .labelled_by(label.id)
                     .on_hover_text("Filter the variables and functions by name (Ctrl+Alt+F)");
+                label_input(ui, &filter_field, "Filter variables and functions");
                 workspace_filter_id = Some(filter_field.id);
                 ui.label(
                     RichText::new(format!("{variable_count} vars · {function_count} funcs"))
@@ -3531,9 +3867,10 @@ impl WorkbenchApp {
                     // SYM-001: the Workspace pane has two views over the same committed
                     // snapshot. The Inspector tab never reads the editor buffer; it renders
                     // only `view.result_inspection`, which came from the last commit.
-                    ui.horizontal(|ui| {
-                        let result_tab = ui.selectable_label(!inspector_open, "Result");
-                        workspace_view_tab_ids[0] = Some(result_tab.id);
+                    // A11Y-004: the view tabs and the revision line wrap instead of running
+                    // under the pane border when the interface scale narrows the pane.
+                    ui.horizontal_wrapped(|ui| {
+                        let result_tab = ui.selectable_label(!inspector_open, "Result");                        workspace_view_tab_ids[0] = Some(result_tab.id);
                         if result_tab.clicked() {
                             inspector_open = false;
                         }
@@ -3638,38 +3975,89 @@ impl WorkbenchApp {
                             });
                             ui.add_space(1.0);
 
-                            let mut shown = 0usize;
-                            for index in ordered_variables(&variable_rows, variable_sort) {
-                                let row = &variable_rows[index];
-                                if !filter.is_empty() && !row.name.contains(filter.as_str()) {
-                                    continue;
-                                }
-                                shown += 1;
-                                ui.horizontal(|ui| {
-                                    table_cell(
-                                        ui,
-                                        widths[0],
-                                        RichText::new(cell_text(&row.name))
-                                            .monospace()
-                                            .color(theme::accent()),
-                                        &row.name,
-                                    );
-                                    table_cell(
-                                        ui,
-                                        widths[1],
-                                        RichText::new(cell_text(&row.kind)).monospace().color(theme::dim()),
-                                        &row.kind,
-                                    );
-                                    // WKS-001: a large display value is cut in the cell; the
-                                    // full value stays available as the hover text.
-                                    table_cell(
-                                        ui,
-                                        widths[2],
-                                        RichText::new(row.display_cell()).monospace().color(theme::text()),
-                                        &row.display,
-                                    );
-                                });
-                            }
+                            let visible_variables: Vec<&crate::workspace_table::VariableRow> =
+                                ordered_variables(&variable_rows, variable_sort)
+                                    .into_iter()
+                                    .map(|index| &variable_rows[index])
+                                    .filter(|row| {
+                                        filter.is_empty()
+                                            || row.name.contains(filter.as_str())
+                                    })
+                                    .collect();
+                            let shown = visible_variables.len();
+                            // A11Y-002: the Variables grid is a `Table` whose rows are `Row`
+                            // nodes named after their cells and whose sort headers are
+                            // `ColumnHeader`s carrying the sort state.
+                            table(
+                                ui,
+                                format!("Variables table · {shown} rows"),
+                                shown,
+                                VariableColumn::ALL.len(),
+                                |ui| {
+                                    ui.horizontal(|ui| {
+                                        for column in VariableColumn::ALL {
+                                            let direction = if variable_sort.is_active(column) {
+                                                variable_sort.direction_label()
+                                            } else {
+                                                "not sorted"
+                                            };
+                                            let response = column_header(
+                                                ui,
+                                                widths[column.index()],
+                                                &variable_sort
+                                                    .header_text(column, column.label()),
+                                                variable_sort.is_active(column),
+                                            );
+                                            variable_header_rects[column.index()] =
+                                                Some(response.rect);
+                                            response.clone().on_hover_text(format!(
+                                                "Sort variables by {} ({direction})",
+                                                column.label().to_lowercase()
+                                            ));
+                                            if response.clicked() {
+                                                variable_sort.clicked(column);
+                                            }
+                                        }
+                                    });
+                                    ui.add_space(1.0);
+                                    for row in &visible_variables {
+                                        let label = format!(
+                                            "{} | {} | {}",
+                                            row.name,
+                                            row.kind,
+                                            row.display_cell()
+                                        );
+                                        table_row(ui, label, |ui| {
+                                            table_cell(
+                                                ui,
+                                                widths[0],
+                                                RichText::new(cell_text(&row.name))
+                                                    .monospace()
+                                                    .color(theme::accent()),
+                                                &row.name,
+                                            );
+                                            table_cell(
+                                                ui,
+                                                widths[1],
+                                                RichText::new(cell_text(&row.kind))
+                                                    .monospace()
+                                                    .color(theme::dim()),
+                                                &row.kind,
+                                            );
+                                            // WKS-001: a large display value is cut in the cell;
+                                            // the full value stays available as the hover text.
+                                            table_cell(
+                                                ui,
+                                                widths[2],
+                                                RichText::new(row.display_cell())
+                                                    .monospace()
+                                                    .color(theme::text()),
+                                                &row.display,
+                                            );
+                                        });
+                                    }
+                                },
+                            );
                             if shown == 0 {
                                 let message = if !has_snapshot {
                                     "No run has published a workspace yet."
@@ -3718,70 +4106,117 @@ impl WorkbenchApp {
                             });
                             ui.add_space(1.0);
 
-                            let mut shown = 0usize;
-                            for index in ordered_functions(&function_rows, function_sort) {
-                                let row = &function_rows[index];
-                                if !filter.is_empty() && !row.name.contains(filter.as_str()) {
-                                    continue;
-                                }
-                                shown += 1;
-                                ui.horizontal(|ui| {
-                                    table_cell(
-                                        ui,
-                                        widths[0],
-                                        RichText::new(cell_text(&row.name))
-                                            .monospace()
-                                            .color(theme::accent()),
-                                        &row.name,
-                                    );
-                                    let parameters = row.parameters_text();
-                                    table_cell(
-                                        ui,
-                                        widths[1],
-                                        RichText::new(cell_text(&parameters))
-                                            .monospace()
-                                            .color(theme::text()),
-                                        &parameters,
-                                    );
-                                    let origin_hover = match &row.plugin {
-                                        Some(plugin) => format!("plugin: {plugin}"),
-                                        None => row.origin_label().to_string(),
-                                    };
-                                    table_cell(
-                                        ui,
-                                        widths[2],
-                                        RichText::new(row.origin_label())
-                                            .monospace()
-                                            .color(origin_color(row.origin)),
-                                        &origin_hover,
-                                    );
-                                });
-                                // WKS-002: the registry's summary, when it publishes one, is a
-                                // second line under the function; it is cut like any other cell
-                                // and the full summary is the hover text.
-                                if let (Some(summary_cell), Some(summary)) =
-                                    (row.summary_cell(), row.summary.as_deref())
-                                {
+                            let visible_functions: Vec<&crate::workspace_table::FunctionRow> =
+                                ordered_functions(&function_rows, function_sort)
+                                    .into_iter()
+                                    .map(|index| &function_rows[index])
+                                    .filter(|row| {
+                                        filter.is_empty()
+                                            || row.name.contains(filter.as_str())
+                                    })
+                                    .collect();
+                            let shown = visible_functions.len();
+                            table(
+                                ui,
+                                format!("Functions table · {shown} rows"),
+                                shown,
+                                FunctionColumn::ALL.len(),
+                                |ui| {
                                     ui.horizontal(|ui| {
-                                        ui.add_space(6.0);
-                                        ui.allocate_ui_with_layout(
-                                            vec2((ui.available_width() - 6.0).max(40.0), 14.0),
-                                            Layout::left_to_right(Align::Center),
-                                            |ui| {
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(summary_cell)
-                                                            .small()
-                                                            .color(theme::dim()),
-                                                    )
-                                                    .truncate(),
-                                                )
-                                                .on_hover_text(summary.to_string());
-                                            },
-                                        );
+                                        for column in FunctionColumn::ALL {
+                                            let direction = if function_sort.is_active(column) {
+                                                function_sort.direction_label()
+                                            } else {
+                                                "not sorted"
+                                            };
+                                            let response = column_header(
+                                                ui,
+                                                widths[column.index()],
+                                                &function_sort
+                                                    .header_text(column, column.label()),
+                                                function_sort.is_active(column),
+                                            );
+                                            function_header_rects[column.index()] =
+                                                Some(response.rect);
+                                            response.clone().on_hover_text(format!(
+                                                "Sort functions by {} ({direction})",
+                                                column.label().to_lowercase()
+                                            ));
+                                            if response.clicked() {
+                                                function_sort.clicked(column);
+                                            }
+                                        }
                                     });
-                                }
-                            }
+                                    ui.add_space(1.0);
+                                    for row in &visible_functions {
+                                        let parameters = row.parameters_text();
+                                        let label = format!(
+                                            "{} | {} | {}",
+                                            row.name,
+                                            parameters,
+                                            row.origin_label()
+                                        );
+                                        table_row(ui, label, |ui| {
+                                            table_cell(
+                                                ui,
+                                                widths[0],
+                                                RichText::new(cell_text(&row.name))
+                                                    .monospace()
+                                                    .color(theme::accent()),
+                                                &row.name,
+                                            );
+                                            table_cell(
+                                                ui,
+                                                widths[1],
+                                                RichText::new(cell_text(&parameters))
+                                                    .monospace()
+                                                    .color(theme::text()),
+                                                &parameters,
+                                            );
+                                            let origin_hover = match &row.plugin {
+                                                Some(plugin) => format!("plugin: {plugin}"),
+                                                None => row.origin_label().to_string(),
+                                            };
+                                            table_cell(
+                                                ui,
+                                                widths[2],
+                                                RichText::new(row.origin_label())
+                                                    .monospace()
+                                                    .color(origin_color(row.origin)),
+                                                &origin_hover,
+                                            );
+                                        });
+                                        // WKS-002: the registry's summary, when it publishes one,
+                                        // is a second line under the function; it is cut like any
+                                        // other cell and the full summary is the hover text.
+                                        if let (Some(summary_cell), Some(summary)) =
+                                            (row.summary_cell(), row.summary.as_deref())
+                                        {
+                                            ui.horizontal(|ui| {
+                                                ui.add_space(6.0);
+                                                ui.allocate_ui_with_layout(
+                                                    vec2(
+                                                        (ui.available_width() - 6.0).max(40.0),
+                                                        14.0,
+                                                    ),
+                                                    Layout::left_to_right(Align::Center),
+                                                    |ui| {
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                RichText::new(summary_cell)
+                                                                    .small()
+                                                                    .color(theme::dim()),
+                                                            )
+                                                            .truncate(),
+                                                        )
+                                                        .on_hover_text(summary.to_string());
+                                                    },
+                                                );
+                                            });
+                                        }
+                                    }
+                                },
+                            );
                             if shown == 0 {
                                 let message = if !has_snapshot {
                                     "No run has published a workspace yet."
@@ -3835,17 +4270,18 @@ impl WorkbenchApp {
         }
         let active = self.workbench.active();
         let legend = log_kind_legend();
-        with_pane(ui, rect, "Logs", |ui, header, body| {
-            ui.scope_builder(header_ui(header), |ui| {
-                let (line, column) = self.editors[active].line_col_1based();
-                ui.label(
-                    RichText::new(format!(
-                        "run log · caret Ln {line}, Col {column} · engine {}",
-                        self.workbench.engine_name()
-                    ))
-                    .color(theme::dim()),
-                )
-                .on_hover_text(format!("Log kinds: {legend}"));
+        let header_line = {
+            let (line, column) = self.editors[active].line_col_1based();
+            format!(
+                "run log · caret Ln {line}, Col {column} · engine {}",
+                self.workbench.engine_name()
+            )
+        };
+        let header_hint = header_text_width(&header_line) + 8.0 + 60.0;
+        with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
+            header_row(ui, header, |ui| {
+                ui.label(RichText::new(&header_line).color(theme::dim()))
+                    .on_hover_text(format!("Log kinds: {legend}"));
             });
             ui.scope_builder(
                 UiBuilder::new()
@@ -3906,6 +4342,7 @@ impl WorkbenchApp {
                         .desired_width(340.0),
                 )
                 .labelled_by(label.id);
+            label_input(ui, &response, "Quick eval expression");
             self.quick_eval_rect = Some(response.rect);
 
             if response.has_focus() {
@@ -4821,10 +5258,121 @@ fn key_pressed_without_modifiers(ui: &Ui, key: Key) -> bool {
     })
 }
 
+/// A11Y-002: names one text field's accessibility node.
+///
+/// A field whose visible label is a separate `Label` node has no name of its own in the raw tree
+/// (the relation is `labelled_by`, which the platform adapter resolves but a raw dump does not).
+/// Setting the label on the field's own node makes the name explicit for a reader and for the
+/// audit.
+fn label_input(ui: &Ui, response: &Response, label: &str) {
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_label(label));
+}
+
+/// A11Y-002: gives a panel's node a role as well as a name (the status strip is a `Status`, the
+/// tab strip a `TabList`).
+fn label_ui_node_as(ui: &Ui, role: egui::Role, label: &str) {
+    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+        node.set_role(role);
+        node.set_label(label);
+    });
+}
+
+/// A11Y-002: one table row as a `Row` node with a name built from its cells.
+///
+/// A table row painted as bare text was the A11Y-002 defect: a screen reader announced each cell
+/// as an unrelated line and never said which record a value belonged to. The accessible name
+/// states the whole row (`name | kind | value`), so one arrow-key stop reads one record, and the
+/// cell `Text` nodes stay inside it.
+fn table_row<R>(ui: &mut Ui, label: String, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.scope_builder(
+        UiBuilder::new()
+            .accessibility_role(egui::Role::Row)
+            .accessibility_label(label),
+        |ui| ui.horizontal(|ui| add(ui)).inner,
+    )
+    .inner
+}
+
+/// A11Y-002: a table container with its row and column counts.
+fn table<R>(
+    ui: &mut Ui,
+    label: String,
+    rows: usize,
+    columns: usize,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    ui.scope_builder(
+        UiBuilder::new()
+            .accessibility_role(egui::Role::Table)
+            .accessibility_label(label),
+        |ui| {
+            ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                node.set_row_count(rows);
+                node.set_column_count(columns);
+            });
+            add(ui)
+        },
+    )
+    .inner
+}
+
+/// A11Y-002: a sortable column header.
+///
+/// The role is `ColumnHeader` (UIA `DataItem`) instead of `Button`, and the selected state carries
+/// the sort direction, so a reader says "Name, column header, sorted ascending" rather than an
+/// unlabelled button.
+fn column_header(ui: &mut Ui, width: f32, label: &str, sorted: bool) -> Response {
+    let response = ui.add_sized(
+        [width, 18.0],
+        egui::Button::new(RichText::new(label).small()).frame(false),
+    );
+    let name = label.to_string();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColumnHeader, true, name.clone()));
+    // `WidgetInfo::selected` fills the *toggled* property, which is the check-box state; a
+    // column header's sort state is its `selected` property in the platform tree.
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_selected(sorted));
+    response
+}
+
+/// A rough natural width for a header label, used only to decide how many header rows a pane
+/// needs. It over-estimates slightly so a wrapped header is never allocated one row too few.
+fn header_text_width(text: &str) -> f32 {
+    text.chars().count() as f32 * 7.0 + 28.0
+}
+
+/// A11Y-004: the header height in points for a pane of `width` whose header wants `hint` points.
+///
+/// At 200% interface scale the window holds fewer points, so a header that fits one row at 100%
+/// needs several at 200%. `horizontal_wrapped` breaks rows at whole widgets, so the row count is
+/// estimated with a 1.35 allowance over the ideal fill; the header grows instead of clipping, and
+/// the body starts below it. Five rows is the cap (the plot header at 200% is the widest).
+fn header_height(width: f32, hint: f32) -> f32 {
+    let available = (width - 16.0).max(80.0);
+    let rows = (1.35 * hint / available).ceil().clamp(1.0, 5.0);
+    // 20 points per painted row (the header text is 16-20 points tall) plus a 4 point pad.
+    4.0 + rows * 20.0
+}
+
 fn header_ui(header: Rect) -> UiBuilder {
+    // A top-down parent is what makes `horizontal_wrapped` start at the header's top edge: in a
+    // left-to-right parent the wrapped row would be centred on its 18 pt initial height inside
+    // the header's full height, which pushes the content down by a row and overflows the body.
     UiBuilder::new()
         .max_rect(header.shrink2(vec2(8.0, 3.0)))
-        .layout(Layout::left_to_right(Align::Center))
+        .layout(Layout::top_down(Align::Min))
+}
+
+/// A11Y-004: the wrapping header row every pane uses.
+///
+/// `horizontal_wrapped` is the one-line change that lets the same controls flow onto a second or
+/// third row when the interface scale leaves the pane narrower, instead of running under the
+/// neighbouring pane's border.
+fn header_row(ui: &mut Ui, header: Rect, add: impl FnOnce(&mut Ui)) {
+    ui.scope_builder(header_ui(header), |ui| {
+        ui.horizontal_wrapped(add);
+    });
 }
 
 /// The kind vocabulary, as `label: marker` pairs, for the pane header hover and the empty pane.
@@ -4863,8 +5411,10 @@ fn with_pane<R>(
     ui: &mut Ui,
     rect: Rect,
     title: &str,
+    header_hint: f32,
     add: impl FnOnce(&mut Ui, Rect, Rect) -> R,
 ) -> R {
+    let header_h = header_height(rect.width(), header_hint);
     ui.scope_builder(
         UiBuilder::new()
             .max_rect(rect)
@@ -4874,7 +5424,7 @@ fn with_pane<R>(
             ui.painter().rect_filled(rect, 4.0, theme::panel_bg());
             ui.painter()
                 .rect_stroke(rect, 4.0, Stroke::new(1.0, theme::border()), StrokeKind::Inside);
-            let header = Rect::from_min_size(rect.min, vec2(rect.width(), 24.0));
+            let header = Rect::from_min_size(rect.min, vec2(rect.width(), header_h));
             ui.painter().rect_filled(header, 4.0, theme::header_bg());
             let body = Rect::from_min_max(
                 pos2(rect.left() + 1.0, header.bottom() + 1.0),
@@ -5501,6 +6051,7 @@ mod tests {
             indent_width: 2,
             use_spaces: false,
             auto_close: false,
+            ..settings::EditorSettings::default()
         };
         settings
             .save(storage.settings_path.as_ref().expect("settings path"))
@@ -5512,6 +6063,7 @@ mod tests {
                 indent_width: 2,
                 use_spaces: false,
                 auto_close: false,
+                ..settings::EditorSettings::default()
             },
             "the settings file is the source of truth"
         );
@@ -9829,4 +10381,928 @@ mod tests {
         assert!(!rendered.contains('\u{FFFD}'), "no replacement tofu");
         let _ = std::fs::remove_dir_all(&plot_dir);
     }
+
+    // ---------------------------------------------------------------------------------------
+    // A11Y-002 / A11Y-004 / A11Y-005 / A11Y-006 / A11Y-012 structural accessibility.
+    // ---------------------------------------------------------------------------------------
+
+    /// A deterministic engine that publishes both workspace tables and a plot, so the
+    /// accessibility audit sees every surface without depending on the real engine's catalogue.
+    struct StructuralEngine;
+
+    impl Evaluator for StructuralEngine {
+        fn eval(&mut self, _src: &str) -> Result<String, String> {
+            Ok("sqrt(2)*pi".to_string())
+        }
+
+        fn variables(&self) -> Vec<(String, String)> {
+            vec![
+                ("expr".to_string(), "3*x^2".to_string()),
+                ("x".to_string(), "symbol(\"x\")".to_string()),
+            ]
+        }
+
+        fn functions(&self) -> Vec<(String, Vec<String>)> {
+            vec![
+                ("my_func".to_string(), vec!["a".to_string()]),
+                ("sqrt".to_string(), vec!["x".to_string()]),
+            ]
+        }
+
+        fn state(&self) -> Option<EngineState> {
+            Some(EngineState {
+                variables: vec![
+                    crate::engine::EngineVariable {
+                        name: "expr".to_string(),
+                        kind: "Symbolic".to_string(),
+                        display: "3*x^2".to_string(),
+                        structured: None,
+                    },
+                    crate::engine::EngineVariable {
+                        name: "x".to_string(),
+                        kind: "Symbolic".to_string(),
+                        display: "symbol(\"x\")".to_string(),
+                        structured: None,
+                    },
+                ],
+                functions: vec![
+                    EngineFunction {
+                        name: "my_func".to_string(),
+                        parameters: vec!["a".to_string()],
+                        is_builtin: false,
+                        plugin: None,
+                        summary: Some("A user function.".to_string()),
+                    },
+                    EngineFunction {
+                        name: "sqrt".to_string(),
+                        parameters: vec!["x".to_string()],
+                        is_builtin: true,
+                        plugin: None,
+                        summary: Some("Principal square root.".to_string()),
+                    },
+                ],
+            })
+        }
+
+        fn last_plot(&self) -> Option<crate::engine::PlotCapture> {
+            Some(crate::engine::PlotCapture {
+                path: "round-43-a11y.svg".to_string(),
+                title: "round 43 a11y plot".to_string(),
+                svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\">\
+                      <rect width=\"800\" height=\"600\" fill=\"#ffffff\"/>\
+                      <text x=\"20\" y=\"40\" fill=\"#000000\">round 43 a11y plot</text></svg>"
+                    .to_string(),
+            })
+        }
+    }
+
+    /// An engine that fails its second statement, so the frame carries a real diagnostic with a
+    /// line and a column (the A11Y-012 error surfaces).
+    struct FailingA11yEngine;
+
+    impl Evaluator for FailingA11yEngine {
+        fn eval(&mut self, src: &str) -> Result<String, String> {
+            if src.contains("sqrt") {
+                Err("unknown function 'sqrt'".to_string())
+            } else {
+                Ok("ok".to_string())
+            }
+        }
+
+        fn last_error(&self) -> Option<crate::engine::EngineError> {
+            Some(crate::engine::EngineError {
+                code: "UnknownFunction".to_string(),
+                category: "UnsupportedOperation".to_string(),
+                suggestions: vec!["sqrt".to_string()],
+                hints: Vec::new(),
+            })
+        }
+    }
+
+    /// The document the failing engine decorates: line 2 is the failed statement
+    /// (`y = sqrt(x)`, brackets at columns 7 and 9) and line 3 carries a `->` pair for the
+    /// ligature rendering. A 1-based caret column 9 is inside the pair.
+    const STRUCTURAL_SOURCE: &str = "x = symbol(\"x\")\ny = sqrt(x)\nz = f(1)->2\n";
+
+    fn structural_app() -> WorkbenchApp {
+        let mut workbench = Workbench::with_factory(Box::new(|| Box::new(StructuralEngine)));
+        workbench.set_source(0, STRUCTURAL_SOURCE.to_string());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        app.settings.theme_follows_system = true;
+        app
+    }
+
+    fn failing_structural_app() -> WorkbenchApp {
+        let mut workbench = Workbench::with_factory(Box::new(|| Box::new(FailingA11yEngine)));
+        workbench.set_source(0, STRUCTURAL_SOURCE.to_string());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        app.settings.theme_follows_system = true;
+        app
+    }
+
+    /// Paints frames until the run reaches a terminal state.
+    fn pump_until_terminal(ctx: &egui::Context, app: &mut WorkbenchApp) {
+        for _ in 0..600 {
+            if matches!(
+                app.view.run_state,
+                RunState::Finished | RunState::Failed | RunState::Cancelled
+            ) {
+                return;
+            }
+            let _ = pump_text(ctx, app, 1);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("the run did not reach a terminal state: {:?}", app.view.run_state);
+    }
+
+    /// Runs the active document and returns the accessibility rows of the frame that follows.
+    fn accessibility_rows(
+        ctx: &egui::Context,
+        app: &mut WorkbenchApp,
+        screen: egui::Vec2,
+    ) -> Vec<a11y::NodeRow> {
+        ctx.enable_accesskit();
+        let output = frame_capturing(ctx, app, screen, Vec::new(), Default::default());
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("the window must publish an accessibility tree");
+        a11y::accesskit_rows(&update)
+    }
+
+    /// A11Y-002: every control answers with a role, a name, a value and a state; the two tables
+    /// expose `Table`/`Row`/`ColumnHeader` nodes instead of bare text rows, the tabs are `Tab`s
+    /// with a selection state, the editor carries its text as its value and the status strip and
+    /// progress are their own roles.
+    #[test]
+    fn a11y_002_every_control_exposes_role_name_value_and_state() {
+        use egui::Role;
+        let mut app = structural_app();
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let _ = press_action(
+            &ctx,
+            &mut app,
+            Action::Workbench(keyboard::WorkbenchCommand::Run),
+        );
+        pump_until_terminal(&ctx, &mut app);
+        let rows = accessibility_rows(&ctx, &mut app, vec2(1600.0, 1000.0));
+        let dump = a11y::dump_table(&rows);
+        assert!(
+            rows.len() > 60,
+            "the audit must see the whole tree, not a fragment: {} rows\n{dump}",
+            rows.len()
+        );
+
+        // No interactive node may be unlabelled or have the wrong (generic) role.
+        for row in rows.iter().filter(|row| row.interactive()) {
+            assert!(
+                !row.name.is_empty(),
+                "an interactive {:?} node has no name at {:?}\n{dump}",
+                row.role,
+                row.bounds
+            );
+            assert_ne!(
+                row.role,
+                Role::GenericContainer,
+                "an interactive node must not be a generic container: {:?}\n{dump}",
+                row.role
+            );
+        }
+
+        // Both workspace tables, each with a row count and named rows.
+        let tables: Vec<&a11y::NodeRow> = rows.iter().filter(|row| row.role == Role::Table).collect();
+        assert_eq!(tables.len(), 2, "variables and functions\n{dump}");
+        for table in &tables {
+            assert!(
+                table.name.contains("table"),
+                "a table must name itself: {}\n{dump}",
+                table.name
+            );
+            let (row_count, column_count) = table
+                .table_size
+                .unwrap_or_else(|| panic!("table {} has no size\n{dump}", table.name));
+            assert!(
+                row_count > 0 && column_count > 0,
+                "table {} reports {row_count} rows x {column_count} columns",
+                table.name
+            );
+        }
+        let data_rows: Vec<&a11y::NodeRow> = rows.iter().filter(|row| row.role == Role::Row).collect();
+        assert!(
+            data_rows.len() >= 4,
+            "both tables' data rows must be Row nodes, got {}\n{dump}",
+            data_rows.len()
+        );
+        for row in &data_rows {
+            assert!(
+                row.name.matches(" | ").count() >= 2 && !row.name.is_empty(),
+                "a table row's name must carry its cells: {:?}",
+                row.name
+            );
+        }
+        let headers: Vec<&a11y::NodeRow> = rows
+            .iter()
+            .filter(|row| row.role == Role::ColumnHeader)
+            .collect();
+        assert!(
+            headers.len() >= 6,
+            "both tables' sort headers must be ColumnHeader nodes, got {}\n{dump}",
+            headers.len()
+        );
+        for header in &headers {
+            assert!(!header.name.is_empty(), "a column header has no name");
+            assert!(
+                header.selected.is_some(),
+                "a column header must expose its sort state: {:?}",
+                header.name
+            );
+        }
+
+        // Document tabs: a Tab role with exactly one selected.
+        let tabs: Vec<&a11y::NodeRow> = rows.iter().filter(|row| row.role == Role::Tab).collect();
+        assert_eq!(
+            tabs.len(),
+            app.workbench.documents().len(),
+            "every document tab is a Tab node\n{dump}"
+        );
+        for tab in &tabs {
+            assert!(!tab.name.is_empty(), "a tab has no name");
+            assert!(tab.selected.is_some(), "a tab must expose its selection state");
+        }
+        assert_eq!(
+            tabs.iter().filter(|tab| tab.selected == Some(true)).count(),
+            1,
+            "exactly one tab is selected"
+        );
+
+        // Editor: role, name, value (the document text) and focusability.
+        let editor = rows
+            .iter()
+            .find(|row| row.role == Role::MultilineTextInput)
+            .unwrap_or_else(|| panic!("no editor node\n{dump}"));
+        assert!(
+            editor.name.starts_with("Script editor,"),
+            "the editor name states the buffer: {}",
+            editor.name
+        );
+        assert_eq!(
+            editor.value.as_deref(),
+            Some(STRUCTURAL_SOURCE),
+            "the editor value is the buffer a reader can read"
+        );
+        assert!(editor.focusable, "the editor is keyboard focusable");
+
+        // Plot: an Image with a name and the engine title as its value.
+        let plot = rows
+            .iter()
+            .find(|row| row.role == Role::Image)
+            .unwrap_or_else(|| panic!("no plot node\n{dump}"));
+        assert!(plot.name.contains("SVG plot canvas"), "plot name: {}", plot.name);
+        assert_eq!(plot.value.as_deref(), Some("round 43 a11y plot"));
+
+        // Status: its own role, named with the run state and the success marker.
+        let status = rows
+            .iter()
+            .find(|row| row.role == Role::Status)
+            .unwrap_or_else(|| panic!("no status node\n{dump}"));
+        assert!(
+            status.name.contains("run Finished") && status.name.contains("[OK]"),
+            "the status name must carry the outcome and its text marker: {}",
+            status.name
+        );
+
+        // Progress: a numeric ProgressIndicator.
+        let progress = rows
+            .iter()
+            .find(|row| row.role == Role::ProgressIndicator)
+            .unwrap_or_else(|| panic!("no progress node\n{dump}"));
+        assert_eq!(
+            progress.name,
+            format!("{}/{}", app.view.committed_steps, app.view.total)
+        );
+        assert_eq!(progress.numeric_value, Some(app.view.total as f64));
+
+        // Splitters: the three pane dividers have a role and a name.
+        let splitters: Vec<&a11y::NodeRow> =
+            rows.iter().filter(|row| row.role == Role::Splitter).collect();
+        assert_eq!(splitters.len(), 3, "three pane splitters\n{dump}");
+        for splitter in &splitters {
+            assert!(
+                !splitter.name.is_empty(),
+                "a splitter must name what it divides"
+            );
+        }
+
+        // Every landmark pane either names itself or contains a named pane. egui wraps each
+        // top-level panel in a structural Pane of its own; the *named* landmark is the region
+        // painted inside it, and a reader navigating by landmarks reaches that one.
+        for pane in rows
+            .iter()
+            .filter(|row| row.role == Role::Pane && row.bounds.is_positive())
+        {
+            let named = !pane.name.is_empty()
+                || rows.iter().any(|child| {
+                    child.role == Role::Pane
+                        && !child.name.is_empty()
+                        && a11y::is_descendant(&rows, child, pane.id)
+                });
+            assert!(
+                named,
+                "a Pane at {:?} has no name and no named pane inside it\n{dump}",
+                pane.bounds
+            );
+        }
+
+        // Every button is named (the audit covers buttons this test did not know about too).
+        for button in rows.iter().filter(|row| row.role == Role::Button) {
+            assert!(
+                !button.name.is_empty(),
+                "a Button at {:?} has no name\n{dump}",
+                button.bounds
+            );
+        }
+
+        // Keep the table as an artifact for the report when the test is run with --nocapture.
+        if let Some(path) = std::env::var_os("LOVELACE_A11Y_DUMP") {
+            let _ = std::fs::write(path, &dump);
+        }
+    }
+
+    /// A11Y-004: at 125%, 150% and 200% interface scale (on top of the OS DPI), no control and
+    /// no text node leaves its pane, measured from the same accessibility bounds the Windows UIA
+    /// adapter publishes.
+    #[test]
+    fn a11y_004_interface_scale_keeps_controls_and_labels_inside_their_panes() {
+        let mut app = structural_app();
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let _ = press_action(
+            &ctx,
+            &mut app,
+            Action::Workbench(keyboard::WorkbenchCommand::Run),
+        );
+        pump_until_terminal(&ctx, &mut app);
+        let physical = vec2(1600.0, 1000.0);
+        let mut summary = String::new();
+        for percent in [125u32, 150, 200] {
+            app.settings.ui_scale_percent = percent;
+            let scale = percent as f32 / 100.0;
+            let screen = physical / scale;
+            // egui applies a new zoom factor at the start of the following pass, so the setting
+            // needs two passes before the layout is measured at it.
+            frame(&ctx, &mut app, Vec::new());
+            frame_sized(&ctx, &mut app, screen, Vec::new());
+            assert!(
+                (ctx.zoom_factor() - scale).abs() < 1e-4,
+                "the setting must set the zoom factor: {} != {scale}",
+                ctx.zoom_factor()
+            );
+            let rows = accessibility_rows(&ctx, &mut app, screen);
+            let window = Rect::from_min_size(pos2(0.0, 0.0), screen).expand(0.5);
+            // The four pane rectangles the frame painted. A `Ui` node's own accesskit bounds are
+            // not filled in until a widget owns it, so containment is measured against the same
+            // rectangles the panes paint into — the pane a control visibly sits in.
+            let layout = app.layout.expect("the frame paints the pane layout");
+            let panes = [
+                ("Editor", layout.editor),
+                ("Plot", layout.plot),
+                ("Workspace", layout.workspace),
+                ("Logs", layout.logs),
+            ];
+            let mut checked = 0usize;
+            for row in &rows {
+                if row.bounds == Rect::NOTHING || !row.bounds.is_positive() {
+                    continue;
+                }
+                // A row inside a scroll area is reported at its layout position; it can be
+                // scrolled out of the window and is clipped by the viewport, not by the layout.
+                let scrollable = a11y::in_scroll_container(&rows, row);
+                if !scrollable {
+                    assert!(
+                        window.contains_rect(row.bounds),
+                        "{percent}%: {:?} '{}' at {:?} leaves the {:.0}x{:.0} window",
+                        row.role,
+                        row.name,
+                        row.bounds,
+                        screen.x,
+                        screen.y
+                    );
+                }
+                // Pane containment is measured on the controls. A scrolled text node in the
+                // logs or workspace reports the layout position it had before the scroll
+                // offset, which is not where the reader sees it; the painted-shape assertion
+                // below covers text clipping instead.
+                if !row.interactive() {
+                    continue;
+                }
+                let Some((pane_name, pane)) = panes
+                    .iter()
+                    .find(|(_, pane)| pane.contains(row.bounds.center()))
+                else {
+                    continue;
+                };
+                // A control may not be cut at the pane's left or right edge. (A row inside the
+                // workspace/logs list can be partly scrolled past the top or bottom edge; that
+                // is ordinary scrolling, and the scroll viewport clips it cleanly. The editor and
+                // plot panes have no scrolling controls, so they require full containment.)
+                assert!(
+                    row.bounds.left() >= pane.left() - 0.5
+                        && row.bounds.right() <= pane.right() + 0.5,
+                    "{percent}%: {:?} '{}' at {:?} is cut at the left/right edge of the {pane_name} pane at {:?}",
+                    row.role,
+                    row.name,
+                    row.bounds,
+                    pane
+                );
+                if *pane_name == "Editor" || *pane_name == "Plot" {
+                    assert!(
+                        pane.expand(0.5).contains_rect(row.bounds),
+                        "{percent}%: {:?} '{}' at {:?} exceeds the {pane_name} pane at {:?}",
+                        row.role,
+                        row.name,
+                        row.bounds,
+                        pane
+                    );
+                }
+                checked += 1;
+            }
+            // "No text is clipped" at the paint layer: every visible text shape must fit inside
+            // the clip rectangle its pane or scroll area paints it through. A shape wider than
+            // its clip would be cut mid-glyph.
+            let painted_output =
+                frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+            let mut text_shapes = 0usize;
+            for clipped in &painted_output.shapes {
+                let mut painted = Painted::default();
+                collect_painted(&clipped.shape, &mut painted);
+                for (text, rect) in painted.texts {
+                    if !rect.intersects(window) || !rect.is_positive() {
+                        continue;
+                    }
+                    text_shapes += 1;
+                    // No text may be cut at the left or right edge: that is a label laid out
+                    // wider than the region that paints it. (Vertical clipping at the top and
+                    // bottom of a scroll viewport is ordinary scrolling, not a layout defect;
+                    // when the clip rectangle *is* a pane, the vertical edges are asserted too.)
+                    let clip = clipped.clip_rect;
+                    assert!(
+                        rect.left() >= clip.left() - 0.5 && rect.right() <= clip.right() + 0.5,
+                        "{percent}%: the text {text:?} at {rect:?} is horizontally clipped by {clip:?}"
+                    );
+                    let pane_clip = panes.iter().any(|(_, pane)| {
+                        (pane.left() - clip.left()).abs() < 1.0
+                            && (pane.right() - clip.right()).abs() < 1.0
+                            && (pane.top() - clip.top()).abs() < 1.0
+                            && (pane.bottom() - clip.bottom()).abs() < 1.0
+                    });
+                    if pane_clip {
+                        assert!(
+                            clip.expand(0.5).contains_rect(rect),
+                            "{percent}%: the text {text:?} at {rect:?} is clipped by its pane {clip:?}"
+                        );
+                    }
+                }
+            }
+            assert!(
+                text_shapes > 20,
+                "{percent}%: only {text_shapes} text shapes were visible"
+            );
+            assert!(
+                checked > 15,
+                "{percent}%: only {checked} controls were checked; the tree is too small"
+            );
+            summary.push_str(&format!(
+                "scale={percent}% window_points={:.0}x{:.0} rows={} checked={checked}\n",
+                screen.x,
+                screen.y,
+                rows.len()
+            ));
+        }
+        eprintln!("A11Y-004 layout:\n{summary}");
+    }
+
+    /// One painted shape's geometry, collected from a frame for the typography assertions.
+    #[derive(Default)]
+    struct Painted {
+        texts: Vec<(String, Rect)>,
+        rects: Vec<(Color32, Rect)>,
+        lines: Vec<(Color32, [egui::Pos2; 2])>,
+    }
+
+    fn collect_painted(shape: &egui::Shape, out: &mut Painted) {
+        match shape {
+            egui::Shape::Text(text) => out.texts.push((
+                text.galley.text().to_string(),
+                Rect::from_min_size(text.pos, text.galley.size()),
+            )),
+            egui::Shape::Rect(rect) => out.rects.push((rect.fill, rect.rect)),
+            egui::Shape::LineSegment { points, stroke } => {
+                out.lines.push((stroke.color, *points));
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_painted(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A11Y-005: at 12, 18 and 24 pt, at three line heights and with ligatures on and off, the
+    /// caret, the bracket cell, the diagnostic underline and the gutter number all stay on the
+    /// text grid the editor measures, and the ligature rendering keeps the buffer's columns.
+    #[test]
+    fn a11y_005_editor_typography_keeps_every_decoration_on_the_text_grid() {
+        use crate::settings::{EditorFont, TypographySettings};
+        let cases = [
+            (12u32, 100u32, false),
+            (12, 200, true),
+            (18, 125, false),
+            (18, 150, true),
+            (24, 100, false),
+            (24, 200, true),
+        ];
+        for (size, line_height, ligatures) in cases {
+            let mut app = failing_structural_app();
+            app.settings.editor.typography = TypographySettings {
+                font: EditorFont::Hack,
+                font_size_pt: size,
+                line_height_percent: line_height,
+                ligatures,
+            };
+            app.apply_editor_settings();
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut app, Vec::new());
+            let _ = press_action(
+                &ctx,
+                &mut app,
+                Action::Workbench(keyboard::WorkbenchCommand::Run),
+            );
+            pump_until_terminal(&ctx, &mut app);
+            assert_eq!(
+                app.view.run_state,
+                RunState::Failed,
+                "{size}pt: the failing engine must produce the diagnostic"
+            );
+            // Caret inside the bracket pair of line 2 (1-based line 2, column 9).
+            app.editors[0].set_caret(1, 8);
+            ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+            let _ = frame_capturing(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new(), Default::default());
+            let output =
+                frame_capturing(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new(), Default::default());
+            let mut painted = Painted::default();
+            for clipped in &output.shapes {
+                collect_painted(&clipped.shape, &mut painted);
+            }
+            let metrics = app.editors[0].metrics;
+            assert_eq!(metrics.font_size, size as f32, "the configured size is painted");
+            assert_eq!(metrics.ligatures, ligatures);
+            assert!(
+                metrics.row_h + 0.01 >= size as f32 * line_height as f32 / 100.0,
+                "{size}pt/{line_height}%: row height {} is below the line height",
+                metrics.row_h
+            );
+            let cell = metrics.char_w;
+            let text_left = metrics.text_left;
+
+            // The caret is a vertical line segment on the caret's column, spanning one row.
+            let caret = painted
+                .lines
+                .iter()
+                .filter(|(_, points)| {
+                    (points[0].x - points[1].x).abs() < 0.01
+                        && (points[0].x - (text_left + 8.0 * cell)).abs() < 0.5
+                })
+                .max_by(|a, b| {
+                    (a.1[1].y - a.1[0].y)
+                        .partial_cmp(&(b.1[1].y - b.1[0].y))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or_else(|| {
+                    panic!("{size}pt/{line_height}%: the focused editor paints a caret")
+                });
+            let expected_x = text_left + 8.0 * cell;
+            assert!(
+                (caret.1[0].x - expected_x).abs() < 0.5,
+                "{size}pt/{line_height}%: caret x {} != text_left + 8 cells {expected_x}",
+                caret.1[0].x
+            );
+            let row_top = caret.1[0].y - 1.0;
+            assert!(
+                ((caret.1[1].y - caret.1[0].y) - (metrics.row_h - 2.0)).abs() < 0.5,
+                "{size}pt/{line_height}%: the caret must span one row ({:?} vs {})",
+                caret.1,
+                metrics.row_h
+            );
+
+            // The gutter number for row 2 starts at the same y as the text row.
+            let gutter_number = painted
+                .texts
+                .iter()
+                .find(|(text, rect)| {
+                    text == "2" && rect.left() < text_left && (rect.top() - row_top).abs() < 0.5
+                })
+                .unwrap_or_else(|| panic!("{size}pt/{line_height}%: no gutter number for row 2"));
+            assert!(
+                (gutter_number.1.top() - row_top).abs() < 0.5,
+                "{size}pt/{line_height}%: gutter number y {} != row top {row_top}",
+                gutter_number.1.top()
+            );
+
+            // The matched bracket cells: a one-cell fill and its underline on the row, at the
+            // cells columns 7 and 9 name. Colour is the theme tests' concern; these geometry
+            // assertions are what the typography row is about.
+            for column in [8usize, 10] {
+                let x = text_left + column as f32 * cell;
+                assert!(
+                    painted.rects.iter().any(|(_, rect)| {
+                        (rect.left() - x).abs() < 0.5
+                            && (rect.width() - cell).abs() < 0.5
+                            && rect.height() >= metrics.row_h - 3.0
+                            && rect.top() >= row_top - 0.5
+                            && rect.bottom() <= row_top + metrics.row_h + 0.5
+                    }),
+                    "{size}pt/{line_height}%: no bracket cell at column {column} (x={x})"
+                );
+                assert!(
+                    painted.rects.iter().any(|(_, rect)| {
+                        (rect.left() - x).abs() < 0.5
+                            && (rect.width() - cell).abs() < 0.5
+                            && rect.height() <= 3.0
+                            && (rect.bottom() - (row_top + metrics.row_h - 1.0)).abs() < 0.5
+                    }),
+                    "{size}pt/{line_height}%: no bracket underline at column {column}"
+                );
+            }
+
+            // The diagnostic underline covers the reported span of the failed line, at the
+            // bottom edge of the same row.
+            let line_two = "y = sqrt(x)";
+            let underline = painted
+                .rects
+                .iter()
+                .find(|(_, rect)| {
+                    (rect.left() - text_left).abs() < 0.5
+                        && (rect.center().y - (row_top + metrics.row_h - 2.0)).abs() < 1.5
+                })
+                .unwrap_or_else(|| panic!("{size}pt/{line_height}%: no diagnostic underline"));
+            assert!(
+                (underline.1.width() - line_two.chars().count() as f32 * cell).abs() < 0.5,
+                "{size}pt/{line_height}%: underline width {} != {} cells",
+                underline.1.width(),
+                line_two.chars().count()
+            );
+            assert!(
+                (underline.1.bottom() - (row_top + metrics.row_h - 1.0)).abs() < 0.5,
+                "{size}pt/{line_height}%: underline bottom {} != row bottom {}",
+                underline.1.bottom(),
+                row_top + metrics.row_h - 1.0
+            );
+            assert!(
+                painted.rects.iter().any(|(_, rect)| {
+                    rect.right() <= text_left
+                        && (8.0..=12.0).contains(&rect.width())
+                        && (rect.center().y - (row_top + metrics.row_h * 0.5)).abs() < 1.0
+                }),
+                "{size}pt/{line_height}%: the gutter error badge must sit on the failed row"
+            );
+
+            // The ligature rendering: same number of characters as the buffer line, so every
+            // column above still points at the same cell.
+            let line_three = "z = f(1)->2";
+            let painted_line = painted
+                .texts
+                .iter()
+                .find(|(text, _)| text.contains("z = f(1)"))
+                .map(|(text, _)| text.clone())
+                .unwrap_or_else(|| panic!("{size}pt/{line_height}%: line 3 is painted"));
+            assert_eq!(
+                painted_line.chars().count(),
+                line_three.chars().count(),
+                "{size}pt/{line_height}%: the painted line must keep the buffer's columns: {painted_line:?}"
+            );
+            if ligatures {
+                assert!(
+                    painted_line.contains('\u{2192}'),
+                    "{size}pt/{line_height}%: ligatures are on, so -> paints as an arrow: {painted_line:?}"
+                );
+                assert!(
+                    !painted_line.contains("->"),
+                    "{size}pt/{line_height}%: the pair is replaced: {painted_line:?}"
+                );
+            } else {
+                assert_eq!(painted_line, line_three);
+            }
+        }
+    }
+
+    /// A11Y-006: an OS application-theme notification repaints the window and preserves the
+    /// document, the caret, the run and the focused control; an explicit override ignores it.
+    #[test]
+    fn a11y_006_an_os_theme_change_preserves_focus_caret_run_and_document() {
+        let mut app = structural_app();
+        app.settings.theme = theme::ThemeId::Dark;
+        app.theme = theme::ThemeId::Dark;
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let _ = press_action(
+            &ctx,
+            &mut app,
+            Action::Workbench(keyboard::WorkbenchCommand::Run),
+        );
+        pump_until_terminal(&ctx, &mut app);
+        app.editors[0].set_caret(2, 4);
+        ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+        frame(&ctx, &mut app, Vec::new());
+
+        let source = app.workbench.documents()[0].source.clone();
+        let caret = app.editors[0].caret();
+        let run_state = app.view.run_state;
+        let focused = ctx.memory(|memory| memory.focused());
+        let tabs = app.workbench.documents().len();
+
+        // The simulated OS notification: one frame whose RawInput carries the system theme.
+        let notify = |app: &mut WorkbenchApp, system: egui::Theme| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 1000.0))),
+                system_theme: Some(system),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| app.ui_root(ui));
+            output.textures_delta.clear();
+        };
+        assert_eq!(
+            app.theme,
+            theme::ThemeId::Dark,
+            "the frame starts on the explicit dark theme"
+        );
+        notify(&mut app, egui::Theme::Light);
+        assert_eq!(
+            app.theme,
+            theme::ThemeId::Light,
+            "following the OS must switch the token set"
+        );
+        assert_eq!(theme::active(), theme::ThemeId::Light);
+        assert_eq!(app.settings.theme, theme::ThemeId::Light, "the follow state persists");
+        // Nothing else may have moved.
+        assert_eq!(app.workbench.documents()[0].source, source, "the document survives");
+        assert_eq!(app.editors[0].caret(), caret, "the caret survives");
+        assert_eq!(app.view.run_state, run_state, "the run state survives");
+        assert_eq!(ctx.memory(|memory| memory.focused()), focused, "the focus survives");
+        assert_eq!(app.workbench.documents().len(), tabs, "the tabs survive");
+        assert_eq!(app.editors.len(), tabs);
+
+        notify(&mut app, egui::Theme::Dark);
+        assert_eq!(app.theme, theme::ThemeId::Dark, "a second OS change is followed back");
+        assert_eq!(app.editors[0].caret(), caret);
+        assert_eq!(app.view.run_state, run_state);
+
+        // An explicit override: the OS notification is ignored.
+        app.settings.theme_follows_system = false;
+        app.settings.theme = theme::ThemeId::Light;
+        app.theme = theme::ThemeId::Light;
+        notify(&mut app, egui::Theme::Dark);
+        assert_eq!(
+            app.theme,
+            theme::ThemeId::Light,
+            "an explicit override must ignore the OS theme"
+        );
+        assert_eq!(app.editors[0].caret(), caret);
+        assert_eq!(app.view.run_state, run_state);
+        assert_eq!(app.workbench.documents()[0].source, source);
+    }
+
+    /// A11Y-012: every error surface carries a text marker and a location, and the error tokens
+    /// are distinguishable in greyscale (luminance contrast, no hue).
+    #[test]
+    fn a11y_012_errors_carry_a_marker_and_a_location_without_colour() {
+        use egui::Role;
+        let mut app = failing_structural_app();
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let _ = press_action(
+            &ctx,
+            &mut app,
+            Action::Workbench(keyboard::WorkbenchCommand::Run),
+        );
+        pump_until_terminal(&ctx, &mut app);
+        assert_eq!(app.view.run_state, RunState::Failed);
+        app.editors[0].set_caret(1, 8);
+        ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+        let output =
+            frame_capturing(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new(), Default::default());
+        let mut painted = Painted::default();
+        for clipped in &output.shapes {
+            collect_painted(&clipped.shape, &mut painted);
+        }
+        let rows = accessibility_rows(&ctx, &mut app, vec2(1600.0, 1000.0));
+        let dump = a11y::dump_table(&rows);
+
+        // Status: text marker + location.
+        let status = rows
+            .iter()
+            .find(|row| row.role == Role::Status)
+            .unwrap_or_else(|| panic!("no status node\n{dump}"));
+        assert!(
+            status.name.contains("[ERR]"),
+            "the status must carry a non-colour marker: {}",
+            status.name
+        );
+        assert!(
+            status.name.contains("error at Ln 2, Col 1"),
+            "the status must carry the error's location: {}",
+            status.name
+        );
+        // Log line: the kind marker plus the rendered diagnostic's line and column.
+        let log_line = rows
+            .iter()
+            .filter(|row| row.role == Role::Label)
+            .map(|row| row.name.clone())
+            .find(|name| name.starts_with("[diagnostic]") && name.contains("line 2, column 1"))
+            .unwrap_or_else(|| panic!("no diagnostic log line\n{dump}"));
+        assert!(
+            log_line.contains("line 2, column 1"),
+            "the log line names the location: {log_line}"
+        );
+        assert!(
+            log_line.contains("[diagnostic]"),
+            "the log line has its kind marker: {log_line}"
+        );
+        // Editor node: the diagnostic is its description, with the location.
+        let editor = rows
+            .iter()
+            .find(|row| row.role == Role::MultilineTextInput)
+            .unwrap_or_else(|| panic!("no editor node\n{dump}"));
+        let description = editor.description.clone().unwrap_or_default();
+        assert!(
+            description.contains("Ln 2, Col 1"),
+            "the editor's description names the diagnostic location: {description}"
+        );
+        // Decoration: the painted gutter badge is a shape (a filled square with a `!`), not a
+        // colour-only underline; its position is the failed row's gutter cell.
+        let metrics = app.editors[0].metrics;
+        assert!(
+            painted.rects.iter().any(|(_, rect)| {
+                rect.right() <= metrics.text_left
+                    && (8.0..=12.0).contains(&rect.width())
+                    && (rect.height() - rect.width()).abs() < 1.0
+            }),
+            "the editor paints a square diagnostic badge in the gutter"
+        );
+        assert!(
+            painted.texts.iter().any(|(text, _)| text == "!"),
+            "the badge carries the exclamation glyph"
+        );
+
+        // Greyscale: the error badges/words remain distinguishable by luminance alone in both
+        // themes. This is the ratio the desaturated capture is checked against.
+        let mut ratios = String::new();
+        for theme_id in [theme::ThemeId::Dark, theme::ThemeId::Light] {
+            let tokens = theme::tokens_for(theme_id);
+            let badge = a11y::luminance_contrast(tokens.diagnostic_marker, tokens.gutter_bg);
+            let word = a11y::luminance_contrast(tokens.error, tokens.panel_bg);
+            assert!(
+                badge >= 3.0,
+                "{theme_id:?}: the gutter badge is {badge:.2}:1 in greyscale (needs 3:1)"
+            );
+            assert!(
+                word >= 4.5,
+                "{theme_id:?}: the error word is {word:.2}:1 in greyscale (needs 4.5:1)"
+            );
+            let luma_marker = a11y::greyscale_luma(tokens.diagnostic_marker);
+            let luma_gutter = a11y::greyscale_luma(tokens.gutter_bg);
+            assert_ne!(
+                luma_marker, luma_gutter,
+                "{theme_id:?}: the desaturated badge must not equal the gutter"
+            );
+            ratios.push_str(&format!(
+                "{theme_id:?}: badge {badge:.2}:1 (luma {luma_marker} on {luma_gutter}), word {word:.2}:1\n"
+            ));
+        }
+        eprintln!("A11Y-012 greyscale luminance:\n{ratios}");
+
+        // The success marker is text too: the same window after a successful run says [OK].
+        let mut good = structural_app();
+        let good_ctx = egui::Context::default();
+        frame(&good_ctx, &mut good, Vec::new());
+        let _ = press_action(
+            &good_ctx,
+            &mut good,
+            Action::Workbench(keyboard::WorkbenchCommand::Run),
+        );
+        pump_until_terminal(&good_ctx, &mut good);
+        let good_rows = accessibility_rows(&good_ctx, &mut good, vec2(1600.0, 1000.0));
+        let good_status = good_rows
+            .iter()
+            .find(|row| row.role == Role::Status)
+            .expect("a status node");
+        assert!(
+            good_status.name.contains("[OK]"),
+            "success must also be identifiable without hue: {}",
+            good_status.name
+        );
+    }
 }
+
+

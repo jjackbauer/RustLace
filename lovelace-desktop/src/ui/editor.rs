@@ -13,7 +13,7 @@
 use std::time::Instant;
 
 use egui::{
-    Align2, Color32, CursorIcon, FontId, Rect, RichText, Sense, Stroke, TextStyle, Ui, pos2, vec2,
+    Align2, Color32, CursorIcon, FontId, Rect, RichText, Sense, Stroke, Ui, pos2, vec2,
 };
 
 use crate::completion::{self, CaretContext, CompletionItem, CompletionKind, CompletionSession};
@@ -26,6 +26,7 @@ use crate::settings::EditorSettings;
 
 use super::syntax;
 use super::theme;
+use super::typography::{self, Typography};
 
 /// Height of one completion row, in pixels.
 const COMPLETION_ROW_H: f32 = 18.0;
@@ -48,6 +49,15 @@ pub struct EditorMetrics {
     pub char_w: f32,
     /// Gutter width in pixels.
     pub gutter_w: f32,
+    /// A11Y-005: the resolved editor font size in points.
+    pub font_size: f32,
+    /// A11Y-005: the resolved line height as a multiple of the font size.
+    pub line_height: f32,
+    /// A11Y-005: true when the ligature face was used.
+    pub ligatures: bool,
+    /// A11Y-005: the left edge of the text cells (the gutter's right edge plus its gap). Every
+    /// horizontal decoration is `text_left + column × char_w`.
+    pub text_left: f32,
     /// Vertical scroll offset in pixels.
     pub scroll_y: f32,
     /// Time the syntax refresh took this pass, in milliseconds (EDT-016 instrumentation).
@@ -1685,14 +1695,20 @@ impl TextEditor {
         // to move the view; otherwise every scroll snaps straight back to the caret's row and a
         // 5 000-line document cannot be scrolled at all.
         let caret_before = (self.caret_row, self.caret_col);
-        let font = FontId::monospace(13.0);
-        let row_h = ui.text_style_height(&TextStyle::Monospace) + 3.0;
-        let char_w = ui
+        // A11Y-005: every metric below comes from the one resolved typography, so changing the
+        // family, size, line height or ligature setting moves the text and every decoration
+        // together. `ensure_installed` is a no-op after the first pass.
+        typography::ensure_installed(ui.ctx(), &self.preferences.typography);
+        let typography = Typography::new(&self.preferences.typography);
+        let font = typography.font_id();
+        let sample = ui
             .painter()
-            .layout_no_wrap("M".to_owned(), font.clone(), theme::text())
-            .size()
-            .x
-            .max(1.0);
+            .layout_no_wrap("M".to_owned(), font.clone(), theme::text());
+        let char_w = sample.size().x.max(1.0);
+        // The configured row height, raised to the font's own glyph height when the setting asks
+        // for a tighter line than the face needs. This is the only value the gutter number, the
+        // diagnostic underline, the bracket cell and the caret use vertically.
+        let row_h = typography.row_height().max(sample.size().y + 1.0);
         let total = self.line_count();
         let digits = total.to_string().len().max(4);
         let gutter_w = 10.0 + digits as f32 * char_w;
@@ -2144,7 +2160,24 @@ impl TextEditor {
             }
             let line = &self.lines[row];
             let display_line = expand_tabs(line, tab_width);
-            let job = syntax::job(&display_line, font.clone(), theme::syntax(), &self.syntax);
+            // A11Y-005: with ligatures on, the painted line substitutes the operator pairs for
+            // their single glyph plus the cells they occupied. The rendering keeps the source
+            // line's character count, so the caret, the gutter, the diagnostic underline and the
+            // bracket cell below still address the same columns.
+            let painted_line = if typography.ligatures {
+                let mut advance = |glyph: char| {
+                    Some(
+                        ui.painter()
+                            .layout_no_wrap(glyph.to_string(), font.clone(), theme::syntax().plain)
+                            .size()
+                            .x,
+                    )
+                };
+                typography::render_line(&display_line, true, char_w, &mut advance)
+            } else {
+                display_line
+            };
+            let job = syntax::job(&painted_line, font.clone(), theme::syntax(), &self.syntax);
             let galley = painter.layout_job(job);
             laid_out += 1;
             painter.galley(pos2(text_left, y), galley, theme::syntax().plain);
@@ -2152,7 +2185,7 @@ impl TextEditor {
                 pos2(rect.left() + gutter_w - 4.0, y),
                 Align2::RIGHT_TOP,
                 (row + 1).to_string(),
-                FontId::monospace(11.0),
+                typography.gutter_font(),
                 theme::gutter_text(),
             );
             if let Some((range, _)) = &decoration {
@@ -2168,15 +2201,22 @@ impl TextEditor {
                         1.0,
                         theme::diagnostic_underline(),
                     );
-                    // A distinct gutter marker on the same line: a solid bar at the gutter edge,
-                    // clear of the right-aligned line number.
-                    painter.rect_filled(
-                        Rect::from_min_max(
-                            pos2(rect.left() + 2.0, y + 2.0),
-                            pos2(rect.left() + 6.0, y + row_h - 2.0),
-                        ),
-                        1.0,
-                        theme::diagnostic_marker(),
+                    // A11Y-012: the gutter marker is an *icon* — a filled badge with an
+                    // exclamation mark — not a colour-only bar. A colour-blind reader sees the
+                    // badge shape and the `!` in the gutter, and the pane header beside the
+                    // editor carries the same error as text with its line and column.
+                    let badge = 10.0_f32.min(row_h - 4.0).max(8.0);
+                    let icon = Rect::from_min_size(
+                        pos2(rect.left() + 2.0, y + (row_h - badge) * 0.5),
+                        vec2(badge, badge),
+                    );
+                    painter.rect_filled(icon, 2.0, theme::diagnostic_marker());
+                    painter.text(
+                        icon.center(),
+                        Align2::CENTER_CENTER,
+                        "!",
+                        FontId::monospace((badge * 0.9).clamp(9.0, 14.0)),
+                        theme::editor_bg(),
                     );
                 }
             }
@@ -2265,6 +2305,25 @@ impl TextEditor {
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::MultilineTextInput, true, label.clone())
         });
+        // A11Y-002: the editor's UIA node carries the document text as its value and, after a
+        // failed run, the diagnostic as its error message — the two properties a screen reader
+        // needs beyond the name. The value is only built when an accessibility client is
+        // attached, so the per-frame cost is zero for a window nobody is reading.
+        if ui.ctx().has_accesskit_node(id) {
+            let source = self.source();
+            let diagnostic = self.diagnostic.as_ref().map(|diagnostic| {
+                format!(
+                    "Ln {}, Col {}: {}",
+                    diagnostic.line, diagnostic.column, diagnostic.message
+                )
+            });
+            ui.ctx().accesskit_node_builder(id, |node| {
+                node.set_value(source);
+                if let Some(message) = diagnostic {
+                    node.set_description(format!("Diagnostic — {message}"));
+                }
+            });
+        }
 
         self.metrics = EditorMetrics {
             first_row,
@@ -2273,6 +2332,10 @@ impl TextEditor {
             row_h,
             char_w,
             gutter_w,
+            font_size: typography.size,
+            line_height: typography.line_height,
+            ligatures: typography.ligatures,
+            text_left,
             scroll_y: self.scroll_y,
             syntax_ms,
             rows_ms,
@@ -3220,11 +3283,8 @@ mod tests {
         let mut editor = TextEditor::from_source("");
         assert_eq!(
             editor.preferences,
-            EditorSettings {
-                indent_width: 4,
-                use_spaces: true,
-                auto_close: true,
-            }
+            EditorSettings::default(),
+            "the shipped default is a four-space indent with auto-close on"
         );
         editor.insert_str("(");
         assert_eq!(editor.source(), "()", "the closing bracket is inserted");
@@ -3263,6 +3323,7 @@ mod tests {
             indent_width: 2,
             use_spaces: true,
             auto_close: true,
+            ..EditorSettings::default()
         };
         spaces.indent();
         assert_eq!(spaces.source(), "  ");
@@ -3274,6 +3335,7 @@ mod tests {
             indent_width: 8,
             use_spaces: false,
             auto_close: true,
+            ..EditorSettings::default()
         };
         tabs.indent();
         assert_eq!(tabs.source(), "\t", "tabs mode writes one literal tab");

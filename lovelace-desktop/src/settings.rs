@@ -32,6 +32,20 @@ pub const MIN_INDENT_WIDTH: usize = 1;
 /// Largest accepted editor indent width, in columns.
 pub const MAX_INDENT_WIDTH: usize = 8;
 
+/// A11Y-004: the smallest interface scale the window offers, in percent of the OS DPI scale.
+pub const MIN_UI_SCALE_PERCENT: u32 = 100;
+/// A11Y-004: the largest interface scale the window offers, in percent of the OS DPI scale.
+pub const MAX_UI_SCALE_PERCENT: u32 = 200;
+
+/// A11Y-005: the smallest editor font the typography setting offers, in points.
+pub const MIN_FONT_SIZE_PT: u32 = 12;
+/// A11Y-005: the largest editor font the typography setting offers, in points.
+pub const MAX_FONT_SIZE_PT: u32 = 24;
+/// A11Y-005: the tightest line height offered, in percent of the font size.
+pub const MIN_LINE_HEIGHT_PERCENT: u32 = 100;
+/// A11Y-005: the loosest line height offered, in percent of the font size.
+pub const MAX_LINE_HEIGHT_PERCENT: u32 = 200;
+
 /// VIS-002: the persisted colour theme.
 ///
 /// This lives in the settings module rather than in the Windows-only `ui` module so the settings
@@ -150,11 +164,129 @@ impl SessionState {
     }
 }
 
-/// EDT-008: the editor behaviour the settings document configures.
+/// A11Y-005: the monospace family the editor paints with.
+///
+/// The variant list is fixed (rather than a free-form family name) because every value must name
+/// a font file the window can load on Windows; [`crate::ui::typography`] resolves each one to a
+/// file under the Windows font directory and falls back to the shipped Hack face when the file is
+/// not installed. `Cascadia` is the one family that ships a ligature face (Cascadia Code) and a
+/// plain one (Cascadia Mono), which is what makes the optional ligature setting observable: the
+/// same family has both a ligature and a non-ligature rendering.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditorFont {
+    /// The font shipped with egui; no ligature face.
+    #[default]
+    Hack,
+    /// Cascadia Code (ligatures) / Cascadia Mono (no ligatures), when installed.
+    Cascadia,
+    /// Consolas, when installed.
+    Consolas,
+    /// Courier New, when installed.
+    CourierNew,
+    /// Lucida Console, when installed.
+    LucidaConsole,
+}
+
+impl EditorFont {
+    /// Every family the settings window offers, in menu order.
+    pub const ALL: [EditorFont; 5] = [
+        EditorFont::Hack,
+        EditorFont::Cascadia,
+        EditorFont::Consolas,
+        EditorFont::CourierNew,
+        EditorFont::LucidaConsole,
+    ];
+
+    /// The string written to the settings document.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EditorFont::Hack => "hack",
+            EditorFont::Cascadia => "cascadia",
+            EditorFont::Consolas => "consolas",
+            EditorFont::CourierNew => "courier-new",
+            EditorFont::LucidaConsole => "lucida-console",
+        }
+    }
+
+    /// Parses a persisted family; unknown text is rejected by the caller, which warns and keeps
+    /// the default.
+    pub fn parse(text: &str) -> Option<EditorFont> {
+        match text {
+            "hack" => Some(EditorFont::Hack),
+            "cascadia" => Some(EditorFont::Cascadia),
+            "consolas" => Some(EditorFont::Consolas),
+            "courier-new" => Some(EditorFont::CourierNew),
+            "lucida-console" => Some(EditorFont::LucidaConsole),
+            _ => None,
+        }
+    }
+
+    /// The name the settings window and the pane header show.
+    pub fn label(self) -> &'static str {
+        match self {
+            EditorFont::Hack => "Hack",
+            EditorFont::Cascadia => "Cascadia",
+            EditorFont::Consolas => "Consolas",
+            EditorFont::CourierNew => "Courier New",
+            EditorFont::LucidaConsole => "Lucida Console",
+        }
+    }
+}
+
+/// A11Y-005: the editor typography the settings document configures.
+///
+/// Sizes are stored as integers so the whole settings document remains `Eq` and its round-trip is
+/// exact. `line_height_percent` is a percentage of the font size, which keeps the row geometry and
+/// every decoration (gutter number, diagnostic underline, bracket cell, caret) derived from the
+/// same two numbers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TypographySettings {
+    /// The monospace family.
+    pub font: EditorFont,
+    /// Font size in points, 12-24.
+    pub font_size_pt: u32,
+    /// Line height as a percentage of the font size, 100-200.
+    pub line_height_percent: u32,
+    /// True: use the family's ligature face (only Cascadia has one in this build).
+    pub ligatures: bool,
+}
+
+impl Default for TypographySettings {
+    fn default() -> TypographySettings {
+        TypographySettings {
+            font: EditorFont::Hack,
+            font_size_pt: 13,
+            line_height_percent: 125,
+            ligatures: false,
+        }
+    }
+}
+
+impl TypographySettings {
+    /// The font size as points.
+    pub fn font_size(&self) -> f32 {
+        self.font_size_pt.clamp(MIN_FONT_SIZE_PT, MAX_FONT_SIZE_PT) as f32
+    }
+
+    /// The line height as a multiple of the font size.
+    pub fn line_height(&self) -> f32 {
+        self.line_height_percent.clamp(MIN_LINE_HEIGHT_PERCENT, MAX_LINE_HEIGHT_PERCENT) as f32
+            / 100.0
+    }
+
+    /// The row height in points: the one number the editor, the gutter, the diagnostic underline,
+    /// the bracket cell and the caret all derive their vertical geometry from.
+    pub fn row_height(&self) -> f32 {
+        (self.font_size() * self.line_height()).max(self.font_size() + 2.0)
+    }
+}
+
+/// A11Y-005: the editor behaviour and typography the settings document configures.
 ///
 /// `indent_width` is both the number of columns one indentation level occupies and the width a
 /// literal tab is painted at. `use_spaces` decides whether Tab and indentation write spaces or a
 /// literal tab. `auto_close` enables bracket and quote auto-closing with skip-over.
+/// `typography` is the A11Y-005 font, size, line height and ligature choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EditorSettings {
     /// Columns per indentation level and the displayed width of a tab.
@@ -163,6 +295,8 @@ pub struct EditorSettings {
     pub use_spaces: bool,
     /// True: typing `(`, `[`, `{`, `"` or `'` also inserts its closing character.
     pub auto_close: bool,
+    /// A11Y-005: the font family, size, line height and ligature choice.
+    pub typography: TypographySettings,
 }
 
 impl Default for EditorSettings {
@@ -171,6 +305,7 @@ impl Default for EditorSettings {
             indent_width: 4,
             use_spaces: true,
             auto_close: true,
+            typography: TypographySettings::default(),
         }
     }
 }
@@ -199,6 +334,12 @@ pub struct Settings {
     pub editor: EditorSettings,
     /// VIS-002: the colour theme the window paints; dark is the shipped default.
     pub theme: ThemePreference,
+    /// A11Y-006: when true the window follows the OS application light/dark theme, and `theme`
+    /// is only the value used until the first OS notification arrives. When false, `theme` is an
+    /// explicit user override and an OS change is ignored.
+    pub theme_follows_system: bool,
+    /// A11Y-004: interface scale in percent, applied on top of the OS DPI scale (100-200).
+    pub ui_scale_percent: u32,
     /// A11Y-014: render mathematical values in Unicode notation (`√(2)×π`) instead of the
     /// engine's ASCII notation (`sqrt(2)*pi`). The default is ASCII, the engine's own default.
     pub unicode_glyphs: bool,
@@ -220,6 +361,8 @@ impl Default for Settings {
             layout: LayoutFractions::default(),
             editor: EditorSettings::default(),
             theme: ThemePreference::default(),
+            theme_follows_system: false,
+            ui_scale_percent: MIN_UI_SCALE_PERCENT,
             unicode_glyphs: false,
             recent_files: Vec::new(),
             active_precision: DEFAULT_PRECISION,
@@ -277,6 +420,23 @@ impl Settings {
                     ),
                     ("use_spaces", Json::Bool(self.editor.use_spaces)),
                     ("auto_close", Json::Bool(self.editor.auto_close)),
+                    // A11Y-005: the editor typography survives a restart.
+                    (
+                        "font",
+                        Json::Str(self.editor.typography.font.as_str().to_string()),
+                    ),
+                    (
+                        "font_size_pt",
+                        Json::Num(self.editor.typography.font_size_pt.to_string()),
+                    ),
+                    (
+                        "line_height_percent",
+                        Json::Num(self.editor.typography.line_height_percent.to_string()),
+                    ),
+                    (
+                        "ligatures",
+                        Json::Bool(self.editor.typography.ligatures),
+                    ),
                 ]),
             ),
             (
@@ -284,6 +444,16 @@ impl Settings {
                 Json::Num(self.active_precision.to_string()),
             ),
             ("theme", Json::Str(self.theme.as_str().to_string())),
+            // A11Y-006: the follow-the-OS choice and an explicit override are different states.
+            (
+                "theme_follows_system",
+                Json::Bool(self.theme_follows_system),
+            ),
+            // A11Y-004: the interface scale survives a restart.
+            (
+                "ui_scale_percent",
+                Json::Num(self.ui_scale_percent.to_string()),
+            ),
             // A11Y-014: the ASCII/Unicode mathematical-notation choice survives a restart.
             ("unicode_glyphs", Json::Bool(self.unicode_glyphs)),
             (
@@ -439,6 +609,45 @@ impl Settings {
                     settings.editor.auto_close,
                     &mut warnings,
                 );
+                // A11Y-005: an absent typography field is the shipped default, not a warning:
+                // settings files written before the setting existed are still valid.
+                if let Some(font) = editor.get("font") {
+                    match font.as_str().and_then(EditorFont::parse) {
+                        Some(parsed) => settings.editor.typography.font = parsed,
+                        None => warnings.push(
+                            "editor.font is not a known monospace family; Hack is used."
+                                .to_string(),
+                        ),
+                    }
+                }
+                if editor.get("font_size_pt").is_some() {
+                    settings.editor.typography.font_size_pt = read_i64(
+                        editor,
+                        "font_size_pt",
+                        settings.editor.typography.font_size_pt as i64,
+                        MIN_FONT_SIZE_PT as i64,
+                        MAX_FONT_SIZE_PT as i64,
+                        &mut warnings,
+                    ) as u32;
+                }
+                if editor.get("line_height_percent").is_some() {
+                    settings.editor.typography.line_height_percent = read_i64(
+                        editor,
+                        "line_height_percent",
+                        settings.editor.typography.line_height_percent as i64,
+                        MIN_LINE_HEIGHT_PERCENT as i64,
+                        MAX_LINE_HEIGHT_PERCENT as i64,
+                        &mut warnings,
+                    ) as u32;
+                }
+                if editor.get("ligatures").is_some() {
+                    settings.editor.typography.ligatures = read_bool(
+                        editor,
+                        "ligatures",
+                        settings.editor.typography.ligatures,
+                        &mut warnings,
+                    );
+                }
             } else {
                 warnings.push("editor is not an object; default editor settings used.".to_string());
             }
@@ -471,6 +680,28 @@ impl Settings {
                         .to_string(),
                 ),
             }
+        }
+        // A11Y-006: an absent field keeps the explicit-override behaviour, so an older file
+        // (and the shipped default) does not start following the OS unexpectedly.
+        if let Some(value) = root.get("theme_follows_system") {
+            match value {
+                Json::Bool(follows) => settings.theme_follows_system = *follows,
+                _ => warnings.push(
+                    "theme_follows_system is not a boolean; the explicit theme override is used."
+                        .to_string(),
+                ),
+            }
+        }
+        // A11Y-004: an absent field is the 100% default, not a warning.
+        if root.get("ui_scale_percent").is_some() {
+            settings.ui_scale_percent = read_i64(
+                &root,
+                "ui_scale_percent",
+                settings.ui_scale_percent as i64,
+                MIN_UI_SCALE_PERCENT as i64,
+                MAX_UI_SCALE_PERCENT as i64,
+                &mut warnings,
+            ) as u32;
         }
         if let Some(recent) = root.get("recent_files") {
             match recent.as_arr() {
@@ -855,17 +1086,14 @@ mod tests {
         let mut settings = Settings::new();
         assert_eq!(
             settings.editor,
-            EditorSettings {
-                indent_width: 4,
-                use_spaces: true,
-                auto_close: true,
-            },
+            EditorSettings::default(),
             "the shipped default is a four-space indent with auto-close on"
         );
         settings.editor = EditorSettings {
             indent_width: 8,
             use_spaces: false,
             auto_close: false,
+            ..EditorSettings::default()
         };
         let again = Settings::from_json(&settings.to_json());
         assert_eq!(again.editor, settings.editor);
@@ -892,6 +1120,7 @@ mod tests {
                 indent_width: MAX_INDENT_WIDTH,
                 use_spaces: true,
                 auto_close: false,
+                ..EditorSettings::default()
             },
             "indent_width is clamped, use_spaces falls back, the valid bool is kept"
         );
@@ -1217,6 +1446,93 @@ mod tests {
                 .any(|warning| warning.contains("unicode_glyphs")),
             "a malformed value is reported: {:?}",
             malformed.warnings
+        );
+    }
+
+    /// A11Y-004/A11Y-005/A11Y-006: the interface scale, editor typography and follow-the-OS
+    /// choice round-trip; an older settings file keeps the shipped defaults without warnings,
+    /// and an out-of-range or malformed value is clamped/reported.
+    #[test]
+    fn the_scale_typography_and_theme_follow_settings_round_trip_and_clamp() {
+        let mut settings = Settings::new();
+        assert_eq!(settings.ui_scale_percent, MIN_UI_SCALE_PERCENT);
+        assert!(!settings.theme_follows_system, "the shipped default is an explicit theme");
+        assert_eq!(settings.editor.typography, TypographySettings::default());
+        assert_eq!(TypographySettings::default().font, EditorFont::Hack);
+        assert_eq!(TypographySettings::default().font_size_pt, 13);
+        assert_eq!(TypographySettings::default().line_height_percent, 125);
+        assert!(!TypographySettings::default().ligatures);
+
+        settings.ui_scale_percent = MAX_UI_SCALE_PERCENT;
+        settings.theme_follows_system = true;
+        settings.editor.typography = TypographySettings {
+            font: EditorFont::Cascadia,
+            font_size_pt: MAX_FONT_SIZE_PT,
+            line_height_percent: 150,
+            ligatures: true,
+        };
+        let again = Settings::from_json(&settings.to_json());
+        assert_eq!(again, settings, "the new fields round-trip exactly");
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+
+        // A settings file written before these settings existed: defaults, no warnings.
+        let older = Settings::from_json(
+            r#"{"schema_version": 1, "editor": {"indent_width": 4, "use_spaces": true, "auto_close": true}}"#,
+        );
+        assert_eq!(older.editor.typography, TypographySettings::default());
+        assert_eq!(older.ui_scale_percent, MIN_UI_SCALE_PERCENT);
+        assert!(!older.theme_follows_system);
+        assert!(
+            !older.warnings.iter().any(|warning| {
+                warning.contains("font")
+                    || warning.contains("line_height")
+                    || warning.contains("ligatures")
+                    || warning.contains("ui_scale")
+                    || warning.contains("theme_follows")
+            }),
+            "an absent key is not a problem: {:?}",
+            older.warnings
+        );
+
+        // Out-of-range numbers are clamped and malformed values fall back with a warning.
+        let clamped = Settings::from_json(
+            r#"{
+                "schema_version": 1,
+                "ui_scale_percent": 900,
+                "theme_follows_system": "yes",
+                "editor": {"font": "comic-sans", "font_size_pt": 99, "line_height_percent": 5, "ligatures": "on"}
+            }"#,
+        );
+        assert_eq!(clamped.ui_scale_percent, MAX_UI_SCALE_PERCENT);
+        assert!(!clamped.theme_follows_system);
+        assert_eq!(clamped.editor.typography.font, EditorFont::Hack);
+        assert_eq!(clamped.editor.typography.font_size_pt, MAX_FONT_SIZE_PT);
+        assert_eq!(
+            clamped.editor.typography.line_height_percent,
+            MIN_LINE_HEIGHT_PERCENT
+        );
+        assert!(!clamped.editor.typography.ligatures);
+        assert!(
+            clamped
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("theme_follows_system")),
+            "{:?}",
+            clamped.warnings
+        );
+        assert!(
+            clamped
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("editor.font")),
+            "{:?}",
+            clamped.warnings
+        );
+
+        let too_small = Settings::from_json(r#"{"schema_version": 1, "ui_scale_percent": 10}"#);
+        assert_eq!(
+            too_small.ui_scale_percent, MIN_UI_SCALE_PERCENT,
+            "below the range is the 100% floor"
         );
     }
 }

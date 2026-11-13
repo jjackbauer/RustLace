@@ -287,6 +287,8 @@ pub struct Plot {
     /// Current SVG source; empty means "nothing to show yet". This is the engine's capture
     /// string, byte-for-byte, and SVG export writes it unchanged.
     pub svg_source: String,
+    /// A11Y-002: the engine's plot title, named in the canvas node's value.
+    pub title: Option<String>,
     /// Parse or rasterisation error, shown inline.
     pub error: Option<String>,
     /// Width of the SVG in points.
@@ -346,6 +348,7 @@ impl Plot {
             options,
             tree: None,
             svg_source: String::new(),
+            title: None,
             error: None,
             svg_w: 640.0,
             svg_h: 400.0,
@@ -623,6 +626,17 @@ impl Plot {
             self.view.percent(fit)
         );
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, label.clone()));
+        // A11Y-002: the plot node carries the engine's plot title as its value and the current
+        // zoom as its state description, so a reader announces which plot it is looking at and
+        // at what magnification.
+        if response.ctx.has_accesskit_node(response.id) {
+            let title = self.title.clone().unwrap_or_default();
+            let zoom = self.view.percent(fit);
+            response.ctx.accesskit_node_builder(response.id, |node| {
+                node.set_value(title.clone());
+                node.set_description(format!("Engine plot · zoom {zoom:.0}%"));
+            });
+        }
 
         self.last_screen = screen;
         self.last_pointer = pointer;
