@@ -2379,9 +2379,33 @@ mod tests {
             vec![(1.0, "1/1".to_string())],
             "the only sub-progress must be the committed fraction, with a statement label"
         );
+        // The premise of the probe - that the kernel is long enough to need sub-progress - is a
+        // property of the requested work, not of the machine: the display precision is what makes
+        // the kernel long and the committed result is what proves the engine really computed at
+        // it. A wall-clock floor here would be a machine-speed lottery: in a release build the
+        // 50 000-digit root takes ~0.2 s on an idle machine, below any floor that would still be
+        // meaningful, while the same test in the debug profile or under parallel test load takes
+        // longer. The elapsed time is measured for the probe line below, not asserted.
+        let finished = events
+            .iter()
+            .find_map(|event| match &event.event {
+                DesktopEvent::Finished { snapshot, .. } => Some(snapshot),
+                _ => None,
+            })
+            .expect("the probe expects a completed kernel");
+        assert_eq!(
+            finished.precision, 50_000,
+            "the kernel must run at the precision that makes it long, not a shorter one"
+        );
+        let committed_digits = finished
+            .result
+            .chars()
+            .filter(|character| character.is_ascii_digit())
+            .count();
         assert!(
-            elapsed > Duration::from_millis(500),
-            "the kernel must really be long enough to need sub-progress; it took {elapsed:?}"
+            committed_digits >= 50_000,
+            "the committed result must carry the 50 000 digits the kernel was asked for, not a \
+             short value; it carried {committed_digits}"
         );
         println!(
             "RUN-005 probe: sqrt(2) at 50000 digits took {:.0} ms with {} event(s) between \

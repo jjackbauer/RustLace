@@ -3763,79 +3763,117 @@ impl WorkbenchApp {
         if self.trace_pending {
             crate::run_trace::mark("status_bar_drawn", format!("status={status:?}"));
         }
-        ui.horizontal_wrapped(|ui| {
-            if let Some(marker) = marker {
-                ui.label(
-                    RichText::new(marker)
-                        .strong()
-                        .color(status_state_color(self.view.run_state)),
-                )
-                .on_hover_text(if diagnostic.is_some() {
-                    "The last run failed; the log names its line and column"
-                } else {
-                    "The last run finished"
-                });
-            }
-            // VIS-002: the run state's semantic colour is a theme token, not a fixed accent:
-            // success is positive, an in-flight run progresses, failure is the error colour and
-            // a stale/cancelled result is a warning.
-            ui.label(
-                RichText::new(&status)
-                    .monospace()
-                    .color(status_state_color(self.view.run_state)),
+        let state = self.view.run_state;
+        let state_color = status_state_color(state);
+        let total = self.view.total.max(1);
+        let committed = self.view.committed_steps.min(total);
+        let last_run_ms = self
+            .workbench
+            .documents()
+            .get(active)
+            .map(|document| document.elapsed_ms);
+        let running = self.workbench.active_is_running();
+        let focus = self.focused_pane.label();
+        // A11Y-004: the strip is exactly one row high at every supported client size. The long
+        // document summary is the only variable-length piece, so it is painted in the shrinking
+        // side and elides to the room that is left; the fixed readouts (progress, last-run time,
+        // focus group) keep their place at the right. `egui::Panel` measures a bottom panel's
+        // height one pass after painting it, so a row that wrapped *down* would let that pass's
+        // controls hang below the client edge: the wrapped row is what this layout removes, not
+        // the facts (the full text is still the `Status` node's name and the label's tooltip).
+        egui::Sides::new()
+            .shrink_left()
+            .truncate()
+            .show(
+                ui,
+                |ui| {
+                    if let Some(marker) = marker {
+                        ui.label(RichText::new(marker).strong().color(state_color))
+                            .on_hover_text(if diagnostic.is_some() {
+                                "The last run failed; the log names its line and column"
+                            } else {
+                                "The last run finished"
+                            });
+                    }
+                    // A11Y-012: a failed run's status names the error's location in text. The
+                    // colour is redundant with the marker and the words. It is placed before the
+                    // summary because it is short and must never be the part that elides.
+                    if let Some(diagnostic) = &diagnostic {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "error at Ln {}, Col {}",
+                                diagnostic.line, diagnostic.column
+                            ))
+                            .monospace()
+                            .color(theme::error()),
+                        );
+                    }
+                    // VIS-002: the run state's semantic colour is a theme token, not a fixed
+                    // accent. This label is last in the shrinking side, so it is the one that
+                    // truncates when the client is narrower than the facts.
+                    let mut visible = status.clone();
+                    if running {
+                        visible.push_str("  |  Cancel is available in the toolbar.");
+                    }
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(visible).monospace().color(state_color),
+                        )
+                        .truncate()
+                        .show_tooltip_when_elided(false),
+                    )
+                    .on_hover_text(&label);
+                },
+                |ui| {
+                    // A11Y-001: the status strip names the focus group, so a keyboard-only user
+                    // (and a UIA capture) can tell which pane F6 is in without reading the
+                    // ring's position. Right-to-left: the first item added is the rightmost.
+                    // A right-to-left Ui lays a galley out right-aligned, which anchors
+                    // `TextShape::pos` at the rect's right edge; a left-aligned galley in a rect
+                    // that is exactly the text's width paints the same picture and keeps the
+                    // shape's origin at its left edge. The painted shapes a11y_004 measures are
+                    // read from that origin, so keep the labels on the convention they measure.
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("focus: {focus}"))
+                                .small()
+                                .color(theme::dim()),
+                        )
+                        .halign(egui::Align::LEFT),
+                    )
+                    .on_hover_text(
+                        "The pane group the keyboard is in (F6 moves it; Ctrl+1..5 jump directly)",
+                    );
+                    if let Some(last_run_ms) = last_run_ms {
+                        ui.separator();
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{last_run_ms} ms last run"))
+                                    .color(theme::dim()),
+                            )
+                            .halign(egui::Align::LEFT),
+                        );
+                    }
+                    // A11Y-002: the committed progress is a real `ProgressIndicator` with a
+                    // numeric value, not text a reader has to parse out of the status string.
+                    // egui fills the node's value with a percentage; the explicit range below
+                    // states the numbers a screen reader can act on (committed statements out of
+                    // the run's total).
+                    ui.separator();
+                    let progress = ui.add(
+                        egui::ProgressBar::new(committed as f32 / total as f32)
+                            .desired_width(76.0)
+                            .text(format!("{committed}/{total}")),
+                    );
+                    ui.ctx().accesskit_node_builder(progress.id, |node| {
+                        node.set_min_numeric_value(0.0);
+                        node.set_max_numeric_value(total as f64);
+                        node.set_numeric_value(committed as f64);
+                    });
+                    progress.on_hover_text("Committed statements of the last run's snapshot");
+                },
             );
-            // A11Y-012: a failed run's status names the error's location in text. The colour is
-            // redundant with the marker and the words.
-            if let Some(diagnostic) = &diagnostic {
-                ui.separator();
-                ui.label(
-                    RichText::new(format!(
-                        "error at Ln {}, Col {}",
-                        diagnostic.line, diagnostic.column
-                    ))
-                    .monospace()
-                    .color(theme::error()),
-                );
-            }
-            // A11Y-002: the committed progress is a real `ProgressIndicator` with a numeric
-            // value, not text a reader has to parse out of the status string. egui fills the
-            // node's value with a percentage; the explicit range below states the numbers a
-            // screen reader can act on (committed statements out of the run's total).
-            ui.separator();
-            let total = self.view.total.max(1);
-            let committed = self.view.committed_steps.min(total);
-            let progress = ui.add(
-                egui::ProgressBar::new(committed as f32 / total as f32)
-                    .desired_width(76.0)
-                    .text(format!("{committed}/{total}")),
-            );
-            ui.ctx()
-                .accesskit_node_builder(progress.id, |node| {
-                    node.set_min_numeric_value(0.0);
-                    node.set_max_numeric_value(total as f64);
-                    node.set_numeric_value(committed as f64);
-                });
-            progress.on_hover_text("Committed statements of the last run's snapshot");
-            ui.separator();
-            if let Some(document) = self.workbench.documents().get(active) {
-                ui.label(RichText::new(format!("{} ms last run", document.elapsed_ms)).color(theme::dim()));
-            }
-            if self.workbench.active_is_running() {
-                ui.separator();
-                ui.label(RichText::new("Cancel is available in the toolbar.").color(theme::warning()));
-            }
-            // A11Y-001: the status strip names the focus group, so a keyboard-only user (and a
-            // UIA capture) can tell which pane F6 is in without reading the ring's position.
-            ui.separator();
-            ui.label(
-                RichText::new(format!("focus: {}", self.focused_pane.label()))
-                    .small()
-                    .color(theme::dim()),
-            )
-            .on_hover_text(
-                "The pane group the keyboard is in (F6 moves it; Ctrl+1..5 jump directly)",
-            );
-        });
     }
 
     /// LAY-011: the one-row status strip used when the compact layout is in force.
@@ -12349,7 +12387,8 @@ mod tests {
 
     /// A11Y-004: at 125%, 150% and 200% interface scale (on top of the OS DPI), no control and
     /// no text node leaves its pane, measured from the same accessibility bounds the Windows UIA
-    /// adapter publishes.
+    /// adapter publishes. The 200% cases cover both the 900x600-point contract minimum and the
+    /// 800x500-point client that a 1600x1000 window reaches by zooming in; neither may overflow.
     #[test]
     fn a11y_004_interface_scale_keeps_controls_and_labels_inside_their_panes() {
         let mut app = structural_app();
@@ -12361,9 +12400,18 @@ mod tests {
             Action::Workbench(keyboard::WorkbenchCommand::Run),
         );
         pump_until_terminal(&ctx, &mut app);
-        let physical = vec2(1600.0, 1000.0);
+        // A11Y-004's contract minimum is a 900x600-point client; at 200% that is an 1800x1200
+        // physical client. The 1600x1000 client is below that minimum at 200% (800x500 points)
+        // and is exactly the state a 1600x1000 window reaches by zooming in, so it stays as the
+        // graceful-degradation case: elided text is allowed there, overflow is not.
+        let cases = [
+            (vec2(1600.0, 1000.0), 125u32),
+            (vec2(1600.0, 1000.0), 150),
+            (vec2(1600.0, 1000.0), 200),
+            (vec2(1800.0, 1200.0), 200),
+        ];
         let mut summary = String::new();
-        for percent in [125u32, 150, 200] {
+        for (physical, percent) in cases {
             app.settings.ui_scale_percent = percent;
             let scale = percent as f32 / 100.0;
             let screen = physical / scale;
@@ -12491,7 +12539,9 @@ mod tests {
                 "{percent}%: only {checked} controls were checked; the tree is too small"
             );
             summary.push_str(&format!(
-                "scale={percent}% window_points={:.0}x{:.0} rows={} checked={checked}\n",
+                "scale={percent}% physical={:.0}x{:.0} window_points={:.0}x{:.0} rows={} checked={checked}\n",
+                physical.x,
+                physical.y,
                 screen.x,
                 screen.y,
                 rows.len()
