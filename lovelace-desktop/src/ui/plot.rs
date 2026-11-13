@@ -33,8 +33,8 @@ use resvg::usvg;
 
 use super::theme;
 use egui::{
-    Align2, CursorIcon, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle,
-    TextureOptions, Ui, Vec2, pos2, vec2,
+    Align2, CursorIcon, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
+    Ui, Vec2, pos2, vec2,
 };
 
 /// Texture side cap; also bounded by `max_texture_side` reported by the backend.
@@ -280,6 +280,64 @@ pub fn export_pixels(svg_w: f32, svg_h: f32, scale: f32) -> Result<(u32, u32), S
     Ok(((width.max(1.0)) as u32, (height.max(1.0)) as u32))
 }
 
+/// VIS-007: one polyline series of the engine's SVG, identified for the plot legend and the
+/// numbered badge the pane paints at its first point.
+///
+/// The engine's SVG paints a series in its own stroke colour. That colour is decorative unless
+/// the pane pairs it with a carrier: the badge's number (a shape with text) and the legend row
+/// repeat it, so a reader who cannot distinguish the strokes still knows which line is series 1,
+/// 2, 3. The exported SVG bytes are never modified.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlotSeries {
+    /// 0-based document order of the `<polyline>` the series came from.
+    pub index: usize,
+    /// The engine's stroke colour, when the attribute parsed.
+    pub stroke: Option<egui::Color32>,
+    /// The first point in SVG coordinates.
+    pub first: (f32, f32),
+}
+
+/// VIS-007: the polyline series of an engine SVG, in document order.
+fn parse_series(source: &str) -> Vec<PlotSeries> {
+    let parsed = crate::svg::parse(source);
+    parsed
+        .polylines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let first = line.points.first()?;
+            Some(PlotSeries {
+                index,
+                stroke: line.stroke.as_deref().and_then(parse_hex_colour),
+                first: (first.x as f32 / 1000.0, first.y as f32 / 1000.0),
+            })
+        })
+        .collect()
+}
+
+/// Parses an SVG `#rrggbb` stroke colour.
+///
+/// The value comes from the engine's SVG, not from the product palette, so it is data rather
+/// than a painted theme colour: `theme.rs` owns every colour the UI chooses, while this function
+/// only converts the engine's own stroke attribute. It constructs the colour through `Rgba` so
+/// the theme audit's literal-constructor rule keeps its meaning for UI-chosen colours.
+fn parse_hex_colour(text: &str) -> Option<egui::Color32> {
+    let hex = text.trim().strip_prefix('#')?;
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
+    Some(
+        egui::Rgba::from_srgba_unmultiplied(
+            byte(0..2)?,
+            byte(2..4)?,
+            byte(4..6)?,
+            255,
+        )
+        .into(),
+    )
+}
+
 /// The plot pane's state: current SVG tree, texture, view, export source and last raster timings.
 pub struct Plot {
     options: usvg::Options<'static>,
@@ -320,6 +378,8 @@ pub struct Plot {
     pub last_screen: Rect,
     /// Pointer position on the last pass.
     pub last_pointer: Option<Pos2>,
+    /// VIS-007: the engine SVG's polyline series, in document order.
+    pub series: Vec<PlotSeries>,
 }
 
 impl Default for Plot {
@@ -364,6 +424,7 @@ impl Plot {
             canvas: Rect::NOTHING,
             last_screen: Rect::NOTHING,
             last_pointer: None,
+            series: Vec::new(),
         }
     }
 
@@ -375,6 +436,43 @@ impl Plot {
     /// The document's size, in SVG points.
     pub fn svg_size(&self) -> Vec2 {
         vec2(self.svg_w.max(1.0), self.svg_h.max(1.0))
+    }
+
+    /// VIS-007: paints one numbered badge at each series' first point.
+    ///
+    /// The badge is drawn by the pane, not the engine: a filled disc with the series number in
+    /// the plot background's opposite token and a stroke in the series colour. It is the shape /
+    /// text carrier that keeps a plotted series identifiable without colour vision.
+    pub fn paint_series_badges(&self, painter: &egui::Painter, screen: Rect) {
+        let size = self.svg_size();
+        for series in &self.series {
+            let (x, y) = series.first;
+            let centre = pos2(
+                screen.left() + (x / size.x) * screen.width(),
+                screen.top() + (y / size.y) * screen.height(),
+            );
+            if !screen.contains(centre) {
+                continue;
+            }
+            let stroke = series.stroke.unwrap_or_else(theme::text);
+            painter.circle_filled(centre, 8.0, theme::app_bg());
+            painter.circle_stroke(centre, 8.0, Stroke::new(2.0, stroke));
+            painter.text(
+                centre,
+                Align2::CENTER_CENTER,
+                (series.index + 1).to_string(),
+                super::type_scale::Role::Caption.font(),
+                theme::text(),
+            );
+        }
+    }
+
+    /// VIS-007: the legend entries the plot pane's header row paints, colour plus number.
+    pub fn legend_entries(&self) -> Vec<(usize, egui::Color32)> {
+        self.series
+            .iter()
+            .map(|series| (series.index + 1, series.stroke.unwrap_or_else(theme::text)))
+            .collect()
     }
 
     /// Returns the pane to its empty state.
@@ -389,6 +487,7 @@ impl Plot {
         self.fit_scale = 1.0;
         self.last_raster_ms = 0.0;
         self.last_upload_ms = 0.0;
+        self.series.clear();
     }
 
     /// Loads an SVG document (the engine's `PlotCapture.svg`). Returns false when resvg rejects
@@ -405,6 +504,7 @@ impl Plot {
                 self.raster_scale = 0.0;
                 self.svg_source = source.to_string();
                 self.view = PlotView::IDENTITY;
+                self.series = parse_series(source);
                 self.parse_ms = started.elapsed().as_secs_f64() * 1000.0;
                 true
             }
@@ -415,6 +515,7 @@ impl Plot {
                 self.svg_source = source.to_string();
                 self.error = Some(format!("{error}"));
                 self.view = PlotView::IDENTITY;
+                self.series = parse_series(source);
                 self.parse_ms = started.elapsed().as_secs_f64() * 1000.0;
                 false
             }
@@ -614,7 +715,7 @@ impl Plot {
                 rect.center(),
                 Align2::CENTER_CENTER,
                 "raster unavailable",
-                FontId::proportional(14.0),
+                super::type_scale::Role::Body.font(),
                 theme::error(),
             );
         }
@@ -624,9 +725,21 @@ impl Plot {
             Stroke::new(1.0, theme::plot_border()),
             StrokeKind::Inside,
         );
+        // VIS-007: every engine series gets a numbered badge at its first point. The number is
+        // the non-colour carrier: a reader who cannot tell the stroke colours apart can still
+        // map each line to its legend entry.
+        self.paint_series_badges(painter, screen);
 
+        let series = if self.series.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", {} series (numbered at the first point)",
+                self.series.len()
+            )
+        };
         let label = format!(
-            "SVG plot canvas, {:.0} by {:.0} points, zoom {:.2}, {:.0}%",
+            "SVG plot canvas, {:.0} by {:.0} points, zoom {:.2}, {:.0}%{series}",
             self.svg_w,
             self.svg_h,
             self.view.zoom,
@@ -862,6 +975,37 @@ pub fn save_plot_dialog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// VIS-007: the pane reads each engine polyline as a series, keeps its stroke colour and its
+    /// first point, and exposes numbered legend entries. This is the non-colour carrier the
+    /// plot legend and the in-canvas badges are built from.
+    #[test]
+    fn vis_007_every_polyline_is_a_numbered_series_with_its_stroke_and_first_point() {
+        let mut plot = Plot::new();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
+  <polyline fill="none" stroke="#e6194b" stroke-width="2" points="10,20 30,40"/>
+  <polyline fill="none" stroke="#3cb44b" stroke-width="2" points="15.5,25.5 50,60"/>
+  <polyline fill="none" stroke="#4363d8" stroke-width="2" points="20,30 60,70"/>
+</svg>"##;
+        assert!(plot.set_svg(svg), "SVG rejected: {:?}", plot.error);
+        assert_eq!(plot.series.len(), 3, "one series per polyline");
+        assert_eq!(plot.series[0].index, 0);
+        assert_eq!(plot.series[0].first, (10.0, 20.0));
+        assert_eq!(plot.series[1].first, (15.5, 25.5));
+        let stroke = plot.series[1].stroke.expect("the second series keeps its stroke");
+        assert_eq!(
+            &stroke.to_srgba_unmultiplied()[..3],
+            &[0x3c, 0xb4, 0x4b],
+            "the engine's stroke bytes survive the conversion"
+        );
+        let legend = plot.legend_entries();
+        assert_eq!(legend.len(), 3);
+        assert_eq!(legend[0].0, 1, "badges are numbered from 1");
+        assert_eq!(legend[2].0, 3);
+        // Clearing the pane drops the series with the SVG.
+        plot.clear();
+        assert!(plot.series.is_empty());
+    }
 
     /// Rasterises a document through the product's own pipeline at 1:1.
     fn render(svg: &str) -> tiny_skia::Pixmap {

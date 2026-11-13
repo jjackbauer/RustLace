@@ -13,7 +13,7 @@
 use std::time::Instant;
 
 use egui::{
-    Align2, Color32, CursorIcon, FontId, Rect, RichText, Sense, Stroke, Ui, pos2, vec2,
+    Align2, Color32, CursorIcon, Rect, RichText, Sense, Stroke, Ui, pos2, vec2,
 };
 
 use crate::completion::{self, CaretContext, CompletionItem, CompletionKind, CompletionSession};
@@ -26,6 +26,7 @@ use crate::settings::EditorSettings;
 
 use super::syntax;
 use super::theme;
+use super::type_scale;
 use super::typography::{self, Typography};
 
 /// Height of one completion row, in pixels.
@@ -2215,7 +2216,7 @@ impl TextEditor {
                         icon.center(),
                         Align2::CENTER_CENTER,
                         "!",
-                        FontId::monospace((badge * 0.9).clamp(9.0, 14.0)),
+                        type_scale::fitted_badge(badge),
                         theme::editor_bg(),
                     );
                 }
@@ -2357,8 +2358,8 @@ impl TextEditor {
             return;
         }
         let selected = self.completion.selected_index();
-        let font = FontId::monospace(12.0);
-        let detail_font = FontId::monospace(11.0);
+        let font = type_scale::Role::Code.font();
+        let detail_font = type_scale::Role::Caption.font();
         let label_char_w = ui
             .painter()
             .layout_no_wrap("M".to_owned(), font.clone(), theme::text())
@@ -2508,8 +2509,8 @@ fn paint_signature(
     scroll_y: f32,
     help: &SignatureHelp,
 ) {
-    let font = FontId::monospace(12.0);
-    let detail_font = FontId::monospace(10.5);
+    let font = type_scale::Role::Code.font();
+    let detail_font = type_scale::Role::Caption.font();
     let label_char_w = ui
         .painter()
         .layout_no_wrap("M".to_owned(), font.clone(), theme::text())

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::{
-    Align, Align2, Color32, CursorIcon, FontId, Id, Key, Layout, Rect, Response, RichText, Sense,
+    Align, Align2, Color32, CursorIcon, Id, Key, Layout, Rect, Response, RichText, Sense,
     Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 
@@ -34,10 +34,14 @@ use crate::workspace_table::{
 };
 
 use super::a11y;
+use super::control;
 use super::editor::{TextEditor, surface_id};
+use super::empty;
 use super::file_dialogs::{self, FileDialogs, NativeFileDialogs};
 use super::plot::{self, Plot, PngBackground};
+use super::semantic;
 use super::theme;
+use super::type_scale;
 use super::typography;
 
 /// Width of a splitter, in pixels.
@@ -778,6 +782,8 @@ pub struct WorkbenchApp {
     shortcuts_open: bool,
     /// A11Y-007: true on the pass that opens the dialog, so its Close button takes focus.
     shortcuts_focus: bool,
+    /// VIS-006: true while the Help > Control states matrix is open.
+    control_matrix_open: bool,
     /// A11Y-001: Ctrl+Alt+F requests the workspace filter on the pass it is painted.
     filter_focus: bool,
     /// A11Y-014: the ASCII/Unicode notation in force this frame, mirrored from the settings.
@@ -1010,6 +1016,7 @@ impl WorkbenchApp {
             workspace_filter_id: None,
             shortcuts_open: false,
             shortcuts_focus: false,
+            control_matrix_open: false,
             filter_focus: false,
             // A11Y-014: `launch` re-reads this from the loaded settings; the constructor's
             // default is the settings default (ASCII, the engine's own notation).
@@ -1656,14 +1663,14 @@ impl WorkbenchApp {
             ui.label(
                 RichText::new("Unsaved changes")
                     .strong()
-                    .size(16.0)
+                    .font(type_scale::Role::Title.font())
                     .color(theme::text()),
             );
             ui.add_space(4.0);
             ui.label(
                 RichText::new(format!("Save changes to {title} before closing?"))
                     .color(theme::text())
-                    .size(14.0),
+                    .font(type_scale::Role::Body.font()),
             );
             if total > 1 {
                 ui.label(
@@ -1692,7 +1699,7 @@ impl WorkbenchApp {
                     UnsavedAnswer::Discard,
                     UnsavedAnswer::Cancel,
                 ] {
-                    let text = RichText::new(choice.label()).size(14.0);
+                    let text = RichText::new(choice.label()).font(type_scale::Role::Body.font());
                     let text = if choice == UnsavedAnswer::Save {
                         text.strong()
                     } else {
@@ -1736,7 +1743,7 @@ impl WorkbenchApp {
             ui.label(
                 RichText::new("Recover unsaved work")
                     .strong()
-                    .size(16.0)
+                    .font(type_scale::Role::Title.font())
                     .color(theme::text()),
             );
             ui.add_space(4.0);
@@ -1746,7 +1753,7 @@ impl WorkbenchApp {
                      it ended:",
                 )
                 .color(theme::text())
-                .size(14.0),
+                .font(type_scale::Role::Body.font()),
             );
             ui.label(
                 RichText::new(
@@ -1778,7 +1785,7 @@ impl WorkbenchApp {
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 for choice in [RecoveryAnswer::Discard, RecoveryAnswer::Recover] {
-                                    let text = RichText::new(choice.label()).size(14.0);
+                                    let text = RichText::new(choice.label()).font(type_scale::Role::Body.font());
                                     let text = if choice == RecoveryAnswer::Recover {
                                         text.strong()
                                     } else {
@@ -1880,7 +1887,7 @@ impl WorkbenchApp {
                 ui.label(
                     RichText::new("Reload from disk?")
                         .strong()
-                        .size(16.0)
+                        .font(type_scale::Role::Title.font())
                         .color(theme::text()),
                 );
                 ui.add_space(4.0);
@@ -1890,7 +1897,7 @@ impl WorkbenchApp {
                          version on disk and discards those changes."
                     ))
                     .color(theme::text())
-                    .size(14.0),
+                    .font(type_scale::Role::Body.font()),
                 );
                 ui.label(
                     RichText::new(report.current_line())
@@ -1904,7 +1911,7 @@ impl WorkbenchApp {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     for choice in [ReloadAnswer::DiscardAndReload, ReloadAnswer::Back] {
-                        let text = RichText::new(choice.label()).size(14.0);
+                        let text = RichText::new(choice.label()).font(type_scale::Role::Body.font());
                         let text = if choice == ReloadAnswer::DiscardAndReload {
                             text.strong()
                         } else {
@@ -1922,7 +1929,7 @@ impl WorkbenchApp {
                 ui.label(
                     RichText::new(report.headline())
                         .strong()
-                        .size(16.0)
+                        .font(type_scale::Role::Title.font())
                         .color(theme::text()),
                 );
                 ui.add_space(4.0);
@@ -1934,12 +1941,12 @@ impl WorkbenchApp {
                 ui.label(
                     RichText::new(report.recorded_line())
                         .color(theme::text())
-                        .size(14.0),
+                        .font(type_scale::Role::Body.font()),
                 );
                 ui.label(
                     RichText::new(report.current_line())
                         .color(theme::warning())
-                        .size(14.0),
+                        .font(type_scale::Role::Body.font()),
                 );
                 ui.add_space(4.0);
                 ui.label(
@@ -1993,7 +2000,7 @@ impl WorkbenchApp {
                             ),
                             _ => true,
                         };
-                        let text = RichText::new(choice.label()).size(14.0);
+                        let text = RichText::new(choice.label()).font(type_scale::Role::Body.font());
                         let text = match choice {
                             ConflictAnswer::KeepMine => text.strong(),
                             ConflictAnswer::Reload => text,
@@ -3015,7 +3022,10 @@ impl WorkbenchApp {
                 }
                 let recent = self.workbench.recent_files().to_vec();
                 if recent.is_empty() {
-                    ui.add_enabled(false, egui::Button::new("Recent"));
+                    let recent = ui.add_enabled(false, egui::Button::new("Recent"));
+                    // VIS-006: no recent file yet; the disabled command shows its dashed/hatched
+                    // not-actionable cue rather than a half-opaque label.
+                    mark_disabled(ui, &recent);
                 } else {
                     ui.menu_button("Recent", |ui| {
                         ui.set_min_width(360.0);
@@ -3103,6 +3113,9 @@ impl WorkbenchApp {
         // A11Y-005: the editor font family is registered before any text is laid out, so the
         // first frame already draws the configured face.
         typography::ensure_installed(ui.ctx(), &self.settings.editor.typography);
+        // VIS-004: the semibold face the strong roles paint with is registered before any galley
+        // is laid out, for the same reason: a named family that is not registered has no glyphs.
+        type_scale::ensure_installed(ui.ctx());
         // A11Y-004: the persisted interface scale is applied as egui's zoom factor on top of the
         // OS DPI scale. The workbench never replaces the OS scale, so honouring the system DPI is
         // the default and the setting only adds accessibility zoom.
@@ -3494,6 +3507,10 @@ impl WorkbenchApp {
         self.editor_settings_window(ui.ctx());
         // A11Y-007: Help > Keyboard Shortcuts, generated from the binding table.
         self.shortcuts_window(ui.ctx());
+        // VIS-006: the control state matrix, a real window over every pane.
+        let mut matrix_open = self.control_matrix_open;
+        control::matrix_window(ui.ctx(), &mut matrix_open);
+        self.control_matrix_open = matrix_open;
         // A11Y-003: the window's one keyboard-focus ring, painted last so it sits above every
         // pane and dialog and around whatever widget really owns the keyboard.
         paint_focus_ring(ui.ctx());
@@ -3539,7 +3556,7 @@ impl WorkbenchApp {
                 RichText::new("Lovelace Desktop")
                     .strong()
                     .color(theme::text())
-                    .size(15.0),
+                    .font(type_scale::Role::Title.font()),
             );
             ui.label(RichText::new(self.workbench.engine_name()).color(theme::dim()));
             ui.separator();
@@ -3606,6 +3623,12 @@ impl WorkbenchApp {
                     .clicked()
                 {
                     self.open_shortcuts();
+                    ui.close();
+                }
+                // VIS-006: the in-window specimen of every control state, so the state table is
+                // reviewable and capturable from the shipped product.
+                if ui.button("Control states (VIS-006)").clicked() {
+                    self.control_matrix_open = true;
                     ui.close();
                 }
                 ui.separator();
@@ -3698,6 +3721,11 @@ impl WorkbenchApp {
         // put the keyboard here, and a focus request that arrived before this pane painted is
         // satisfied now.
         self.run_button_id = Some(run.id);
+        // VIS-006: a disabled Run is not merely translucent; it carries the dashed outline and
+        // hatch that make "not actionable" visible without relying on alpha.
+        if !toolbar.run_enabled {
+            mark_disabled(ui, &run);
+        }
         if self.pane_focus == Some(Pane::Toolbar) {
             self.pane_focus = None;
             run.request_focus();
@@ -3712,6 +3740,9 @@ impl WorkbenchApp {
                     egui::Button::new(RichText::new("Cancel").color(theme::error())),
                 )
                 .on_hover_text("Cancel (Esc): stop the active run at the next statement boundary");
+            if !toolbar.cancel_enabled {
+                mark_disabled(ui, &cancel);
+            }
             if cancel.clicked() {
                 self.workbench.cancel_active();
             }
@@ -3808,6 +3839,10 @@ impl WorkbenchApp {
                     self.open_shortcuts();
                     ui.close();
                 }
+                if ui.button("Control states (VIS-006)").clicked() {
+                    self.control_matrix_open = true;
+                    ui.close();
+                }
                 // LAY-003: the compact layout's visible reset command, beside the shortcuts entry.
                 if ui
                     .button(format!(
@@ -3902,14 +3937,12 @@ impl WorkbenchApp {
         let active = self.workbench.active();
         let (line, column) = self.editors[active].line_col_1based();
         let status = self.workbench.status_text(line, column);
-        // A11Y-012: the run outcome carries a text marker, not only a colour. `[ERR]` and `[OK]`
-        // are readable in greyscale, by a screen reader, and in the UIA name below.
-        let marker = match self.view.run_state {
-            crate::run_state::RunState::Failed => Some("[ERR]"),
-            crate::run_state::RunState::Finished => Some("[OK]"),
-            crate::run_state::RunState::Stale => Some("[STALE]"),
-            _ => None,
-        };
+        // A11Y-012 / VIS-007: the run outcome carries the semantic role's text marker, not only
+        // a colour. `[ERR]` and `[OK]` are readable in greyscale, by a screen reader, and in the
+        // UIA name below; the running states now carry `[RUN]` and a cancelled run
+        // `[CANCELLED]`, so no outcome is distinguished by colour alone.
+        let outcome = semantic::SemanticRole::for_run_state(self.view.run_state);
+        let marker = outcome.map(|role| role.marker());
         let diagnostic = self.view.diagnostic.clone();
         let mut label = match marker {
             Some(marker) => format!("{marker} {status}"),
@@ -3952,12 +3985,16 @@ impl WorkbenchApp {
                 ui,
                 |ui| {
                     if let Some(marker) = marker {
-                        ui.label(RichText::new(marker).strong().color(state_color))
-                            .on_hover_text(if diagnostic.is_some() {
-                                "The last run failed; the log names its line and column"
-                            } else {
-                                "The last run finished"
-                            });
+                        ui.label(
+                            RichText::new(marker)
+                                .font(type_scale::Role::Badge.font())
+                                .color(state_color),
+                        )
+                        .on_hover_text(if diagnostic.is_some() {
+                            "The last run failed; the log names its line and column"
+                        } else {
+                            "The last run's outcome (the marker is text, not only colour)"
+                        });
                     }
                     // A11Y-012: a failed run's status names the error's location in text. The
                     // colour is redundant with the marker and the words. It is placed before the
@@ -4049,12 +4086,8 @@ impl WorkbenchApp {
         let active = self.workbench.active();
         let (line, column) = self.editors[active].line_col_1based();
         let status = self.workbench.status_text(line, column);
-        let marker = match self.view.run_state {
-            crate::run_state::RunState::Failed => Some("[ERR]"),
-            crate::run_state::RunState::Finished => Some("[OK]"),
-            crate::run_state::RunState::Stale => Some("[STALE]"),
-            _ => None,
-        };
+        // VIS-007: the compact strip carries the same semantic marker and colour as the full one.
+        let marker = semantic::SemanticRole::for_run_state(self.view.run_state).map(|role| role.marker());
         let diagnostic = self.view.diagnostic.clone();
         let mut accessible = match marker {
             Some(marker) => format!("{marker} {status}"),
@@ -4331,19 +4364,25 @@ impl WorkbenchApp {
             header_text_width(&header_line) + header_text_width("Logs") + 8.0 + 80.0;
         with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
-                ui.label(RichText::new("Logs").small().strong().color(theme::dim()));
+                ui.label(
+                    RichText::new("Logs")
+                        .font(type_scale::Role::PaneTitle.font())
+                        .color(theme::text()),
+                );
                 ui.add(
                     egui::Label::new(RichText::new(&header_line).color(theme::dim())).truncate(),
                 )
                 .on_hover_text(format!("Log kinds: {legend}"));
-                if ui
+                let compact_clear = ui
                     .add_enabled(
                         !view.logs.is_empty(),
                         egui::Button::new(RichText::new("Clear log").small()),
                     )
-                    .on_hover_text("Empty this document's log; future runs append to it again")
-                    .clicked()
-                {
+                    .on_hover_text("Empty this document's log; future runs append to it again");
+                if view.logs.is_empty() {
+                    mark_disabled(ui, &compact_clear);
+                }
+                if compact_clear.clicked() {
                     self.workbench.clear_log_active();
                 }
             });
@@ -4355,13 +4394,13 @@ impl WorkbenchApp {
                     self.quick_eval_row_compact(ui);
                     let logs = &view.logs;
                     if logs.is_empty() {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new("No log entries yet. Run the document.")
-                                    .color(theme::dim()),
-                            )
-                            .truncate(),
-                        );
+                        // VIS-008: the compact log strip keeps the same empty state (reason and
+                        // next step) and offers Run; a short strip collapses the headline.
+                        let state = empty::logs();
+                        let rect = ui.available_rect_before_wrap();
+                        if empty::paint(ui, rect, &state) == Some(empty::EmptyAction::Run) {
+                            self.workbench.run_active();
+                        }
                         return;
                     }
                     egui::ScrollArea::vertical()
@@ -4369,15 +4408,7 @@ impl WorkbenchApp {
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             for entry in logs {
-                                let color = match entry.kind {
-                                    LogKind::Echo => theme::log_echo(),
-                                    LogKind::Stdout => theme::text(),
-                                    LogKind::Result => theme::accent(),
-                                    LogKind::Diagnostic => theme::error(),
-                                    LogKind::Timing => theme::warning(),
-                                    LogKind::Progress => theme::progress(),
-                                    LogKind::Info => theme::dim(),
-                                };
+                                let color = semantic::SemanticRole::for_log_kind(entry.kind).color();
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(entry.render()).monospace().color(color),
@@ -4505,7 +4536,11 @@ impl WorkbenchApp {
         with_pane(ui, rect, &pane_title, header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 // LAY-002: a visible pane title. The same string is the pane's accessible name.
-                ui.label(RichText::new("Editor").small().strong().color(theme::dim()));
+                ui.label(
+                    RichText::new("Editor")
+                        .font(type_scale::Role::PaneTitle.font())
+                        .color(theme::text()),
+                );
                 ui.label(RichText::new(&title).color(theme::accent()).monospace());
                 ui.label(RichText::new(&header_lines).color(theme::dim()));
                 ui.label(RichText::new(&encoding).monospace().small().color(theme::dim()))
@@ -4579,7 +4614,7 @@ impl WorkbenchApp {
                 // EDT-009: the bar is docked at the top of the editor body, not a floating
                 // window, so it never covers the text it searches. The editor lays out the rest
                 // of the body, and its virtualisation keeps the reduced viewport cheap.
-                let bar = Rect::from_min_size(body.min, vec2(body.width(), 60.0));
+                let bar = Rect::from_min_size(body.min, vec2(body.width(), 86.0));
                 self.find_bar(ui, bar, active);
                 let top = bar.bottom() + 2.0;
                 body = Rect::from_min_max(pos2(body.left(), top), body.max);
@@ -4595,24 +4630,16 @@ impl WorkbenchApp {
                 self.loaded_revisions[active] = self.workbench.documents()[active].revision;
             }
             if self.editors[active].bytes() == 0 {
-                // LAY-002: the editor pane's own empty state. An empty buffer is one blank line
-                // (laid out rows = 1), so the empty condition is the byte count, not the row
-                // count; the message invites the first keystroke without a placeholder document.
-                let label_rect = Rect::from_center_size(
-                    body.center(),
-                    vec2(
-                        body.width().min(420.0),
-                        40.0_f32.min(body.height().max(0.0)),
-                    ),
-                );
-                ui.put(
-                    label_rect,
-                    egui::Label::new(
-                        RichText::new("This document is empty. Type a Lovelace script.")
-                            .color(theme::dim()),
-                    )
-                    .wrap(),
-                );
+                // VIS-008: the editor pane's empty state explains what the editor is for, why it
+                // is empty and what to do next, and offers the first-step command. An empty
+                // buffer is one blank line (laid out rows = 1), so the empty condition is the
+                // byte count, not the row count.
+                let state = empty::editor();
+                let action = empty::paint(ui, body.shrink(8.0), &state);
+                match action {
+                    Some(empty::EmptyAction::FocusEditor) => self.focus_editor(ui.ctx()),
+                    _ => {}
+                }
             }
         });
     }
@@ -4654,7 +4681,7 @@ impl WorkbenchApp {
                         .add(
                             egui::TextEdit::singleline(&mut find.query)
                                 .id_salt("find_query")
-                                .desired_width(190.0)
+                                .desired_width(150.0)
                                 .hint_text("Find text"),
                         )
                         .on_hover_text("The text or pattern to find");
@@ -4702,26 +4729,14 @@ impl WorkbenchApp {
                         regex = !regex;
                     }
                     find.set_option(case, whole, regex);
-                    ui.separator();
-                    match find.error() {
-                        Some(reason) => {
-                            let mut short: String = reason.chars().take(58).collect();
-                            if reason.chars().count() > 58 {
-                                short.push('…');
-                            }
-                            ui.label(
-                                RichText::new(format!("Invalid regex: {short}"))
-                                    .monospace()
-                                    .small()
-                                    .color(theme::error()),
-                            )
-                            .on_hover_text(reason);
-                        }
-                        None => {
-                            let text = find.count_text().unwrap_or_default();
-                            ui.label(RichText::new(text).monospace().small().color(theme::dim()));
-                        }
-                    }
+                });
+                // VIS-004: the count/error and the navigation controls are a second row, so a
+                // wider 11 pt caption or a longer error cannot push Next/Close past the editor's
+                // edge at the minimum window.
+                // The count/error/guidance is on a fixed one-line row: the truncating label
+                // absorbs the width that is left instead of wrapping the navigation row to a
+                // second line (which would move the replace row under a stale pointer target).
+                ui.horizontal(|ui| {
                     let previous_button = ui
                         .button("Previous")
                         .on_hover_text("Previous match, wrapping at the start (Shift+Enter)");
@@ -4742,6 +4757,47 @@ impl WorkbenchApp {
                     self.find_buttons.push(("Close", close_button.rect));
                     if close_button.clicked() {
                         close = true;
+                    }
+                    ui.separator();
+                    let find = &self.editors[active].find;
+                    match find.error() {
+                        Some(reason) => {
+                            let mut short: String = reason.chars().take(58).collect();
+                            if reason.chars().count() > 58 {
+                                short.push('…');
+                            }
+                            ui.label(
+                                RichText::new(format!("Invalid regex: {short}"))
+                                    .monospace()
+                                    .small()
+                                    .color(theme::error()),
+                            )
+                            .on_hover_text(reason);
+                        }
+                        None => {
+                            let text = find.count_text().unwrap_or_default();
+                            if text == "No matches" {
+                                // VIS-008: the search's empty state. The reason names the query
+                                // and the next step names the toggles that might be hiding a
+                                // match, so "No matches" is guidance rather than a dead end.
+                                let state = empty::search(&find.query);
+                                let guidance = format!("{} {}", state.reason, state.next);
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&guidance)
+                                            .monospace()
+                                            .small()
+                                            .color(theme::dim()),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(&guidance);
+                            } else {
+                                ui.label(
+                                    RichText::new(text).monospace().small().color(theme::dim()),
+                                );
+                            }
+                        }
                     }
                 });
                 ui.horizontal(|ui| {
@@ -4841,7 +4897,11 @@ impl WorkbenchApp {
         with_pane(ui, rect, "Graph", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 // LAY-002: a visible pane title; "Graph" is the pane's accessible name too.
-                ui.label(RichText::new("Graph").small().strong().color(theme::dim()));
+                ui.label(
+                    RichText::new("Graph")
+                        .font(type_scale::Role::PaneTitle.font())
+                        .color(theme::text()),
+                );
                 // PLT-004: Fit restores the whole plot; 100% is the natural-size reset (one SVG
                 // point per logical screen pixel) and is a different view on a pane whose fit
                 // scale is not 1:1. Both are one click, and the wheel/drag handlers in
@@ -4902,19 +4962,25 @@ impl WorkbenchApp {
                 }
                 // PLT-006: both exports go through the native save dialog. SVG copies the
                 // engine's captured bytes; PNG opens an in-window options step first.
-                if ui
+                let export_svg = ui
                     .add_enabled(!empty, egui::Button::new("Export SVG..."))
-                    .on_hover_text("Save the engine's original SVG bytes unchanged")
-                    .clicked()
-                {
+                    .on_hover_text("Save the engine's original SVG bytes unchanged");
+                if !empty && export_svg.clicked() {
                     self.export_plot_svg();
                 }
-                if ui
+                // VIS-006: a disabled export is not merely translucent; it carries the dashed
+                // outline and diagonal hatch that say "not actionable" without colour or alpha.
+                if empty {
+                    mark_disabled(ui, &export_svg);
+                }
+                let export_png = ui
                     .add_enabled(!empty, egui::Button::new("Export PNG..."))
-                    .on_hover_text("Rasterise at a chosen scale and background")
-                    .clicked()
-                {
+                    .on_hover_text("Rasterise at a chosen scale and background");
+                if !empty && export_png.clicked() {
                     self.plot_export = Some(PngExport::default());
+                }
+                if empty {
+                    mark_disabled(ui, &export_png);
                 }
                 if !compact {
                     if let Some((status, error)) = &self.plot_export_status {
@@ -4930,7 +4996,12 @@ impl WorkbenchApp {
                 }
             });
             if empty {
-                self.plot.ui(ui, body);
+                // VIS-008: the graph's empty state names what the pane draws, why there is no
+                // plot and the call that produces one; it offers Run itself.
+                let state = empty::plot();
+                if empty::paint(ui, body.shrink(8.0), &state) == Some(empty::EmptyAction::Run) {
+                    self.workbench.run_active();
+                }
                 return;
             }
             self.plot.title = plot_title.clone();
@@ -4948,12 +5019,35 @@ impl WorkbenchApp {
                 self.plot.last_raster_ms,
                 self.plot.last_upload_ms
             );
+            let legend = self.plot.legend_entries();
             ui.scope_builder(
                 UiBuilder::new()
                     .max_rect(Rect::from_min_size(body.min, vec2(body.width(), 18.0)))
                     .layout(Layout::left_to_right(Align::Center)),
                 |ui| {
-                    ui.label(RichText::new(info).small().color(theme::dim()));
+                    // VIS-007: the plot legend pairs every series' stroke colour with its number,
+                    // the same number the canvas badge draws at the series' first point. The
+                    // number labels are real text nodes, so a UIA dump names them.
+                    for (number, color) in &legend {
+                        let (swatch, _) =
+                            ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                        ui.painter().rect_filled(swatch, 1.0, *color);
+                        ui.label(
+                            RichText::new(format!("series {number}"))
+                                .small()
+                                .color(theme::dim()),
+                        );
+                    }
+                    if !legend.is_empty() {
+                        ui.separator();
+                    }
+                    // VIS-004/VIS-005: the diagnostics caption truncates instead of crossing the
+                    // pane border when the pane is narrow (or the interface scale is 200%).
+                    ui.add(
+                        egui::Label::new(RichText::new(&info).small().color(theme::dim()))
+                            .truncate(),
+                    )
+                    .on_hover_text(&info);
                 },
             );
             let canvas = Rect::from_min_max(pos2(body.left(), body.top() + 18.0), body.max);
@@ -5320,7 +5414,11 @@ impl WorkbenchApp {
         with_pane(ui, rect, "Workspace", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 // LAY-002: a visible pane title; the same string is the accessible name.
-                ui.label(RichText::new("Workspace").small().strong().color(theme::dim()));
+                ui.label(
+                    RichText::new("Workspace")
+                        .font(type_scale::Role::PaneTitle.font())
+                        .color(theme::text()),
+                );
                 let label = ui.label("Filter");
                 // LAY-011: the field never asks for more width than the header has left, so the
                 // dense split's narrower Workspace column still paints the whole control.
@@ -5381,13 +5479,16 @@ impl WorkbenchApp {
                         egui::ScrollArea::vertical()
                             .id_salt("workspace_inspector_scroll")
                             .show(ui, |ui| {
-                                paint_inspector(
+                                let inspector_action = paint_inspector(
                                     ui,
                                     view,
                                     result_width,
                                     inspector_expansion,
                                     &mut inspector_toggle_rects,
                                 );
+                                if inspector_action == Some(empty::EmptyAction::Run) {
+                                    self.workbench.run_active();
+                                }
                             });
                     } else {
                         egui::ScrollArea::vertical()
@@ -5398,13 +5499,16 @@ impl WorkbenchApp {
                                 // RES-001: the last committed result's typed tree, built only from
                                 // the engine's structured projection. The display text is a caption;
                                 // it is never parsed for structure.
-                                paint_result_section(
+                                let result_action = paint_result_section(
                                     ui,
                                     view,
                                     result_width,
                                     expansion,
                                     &mut result_toggle_rects,
                                 );
+                                if result_action == Some(empty::EmptyAction::Run) {
+                                    self.workbench.run_active();
+                                }
 
                             ui.add_space(6.0);
                             ui.separator();
@@ -5422,7 +5526,7 @@ impl WorkbenchApp {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     let can_clear =
                                         has_snapshot && !self.workbench.active_is_running();
-                                    if ui
+                                    let clear = ui
                                         .add_enabled(
                                             can_clear,
                                             egui::Button::new(
@@ -5431,9 +5535,13 @@ impl WorkbenchApp {
                                         )
                                         .on_hover_text(
                                             "Remove every variable; function definitions are retained",
-                                        )
-                                        .clicked()
-                                    {
+                                        );
+                                    // VIS-006: a disabled Clear Variables carries the dashed
+                                    // outline and hatch, not only reduced opacity.
+                                    if !can_clear {
+                                        mark_disabled(ui, &clear);
+                                    }
+                                    if clear.clicked() {
                                         self.workbench.clear_variables_active();
                                     }
                                 });
@@ -5552,14 +5660,41 @@ impl WorkbenchApp {
                                 },
                             );
                             if shown == 0 {
-                                let message = if !has_snapshot {
-                                    "No run has published a workspace yet."
+                                // VIS-008: three distinct reasons, three distinct next steps;
+                                // each keeps the pane's purpose, and each offers the command that
+                                // resolves it (Run, or Clear the filter).
+                                let state = if !has_snapshot {
+                                    empty::workspace()
                                 } else if variable_rows.is_empty() {
-                                    "The last run defined no variables."
+                                    empty::EmptyState::new(
+                                        "workspace",
+                                        "No variables committed",
+                                        "The Workspace table lists the variables the last run \
+                                         committed.",
+                                        "The last run published no variables.",
+                                        "Assign one (for example x = 1) and run the document again.",
+                                    )
+                                    .with_action(empty::EmptyAction::Run)
                                 } else {
-                                    "No variables match the filter."
+                                    empty::filtered(
+                                        "workspace",
+                                        "The Workspace table lists the variables the last run \
+                                         committed.",
+                                        "No variable name matches the filter.",
+                                    )
                                 };
-                                ui.label(RichText::new(message).color(theme::dim()));
+                                let available = ui.available_rect_before_wrap();
+                                let rect = Rect::from_min_size(
+                                    available.min,
+                                    vec2(available.width(), available.height().min(96.0)),
+                                );
+                                match empty::paint(ui, rect, &state) {
+                                    Some(empty::EmptyAction::Run) => {
+                                        self.workbench.run_active();
+                                    }
+                                    Some(empty::EmptyAction::ClearFilter) => filter.clear(),
+                                    _ => {}
+                                }
                             }
 
                             ui.add_space(8.0);
@@ -5711,14 +5846,38 @@ impl WorkbenchApp {
                                 },
                             );
                             if shown == 0 {
-                                let message = if !has_snapshot {
-                                    "No run has published a workspace yet."
+                                let state = if !has_snapshot {
+                                    empty::functions()
                                 } else if function_rows.is_empty() {
-                                    "The engine published no functions."
+                                    empty::EmptyState::new(
+                                        "functions",
+                                        "No functions committed",
+                                        "The functions table lists the engine builtins, plugins \
+                                         and your own func definitions.",
+                                        "The last run published no functions.",
+                                        "Define one (for example func f(x) = x) and run again.",
+                                    )
+                                    .with_action(empty::EmptyAction::Run)
                                 } else {
-                                    "No functions match the filter."
+                                    empty::filtered(
+                                        "functions",
+                                        "The functions table lists the engine builtins, plugins \
+                                         and your own func definitions.",
+                                        "No function name matches the filter.",
+                                    )
                                 };
-                                ui.label(RichText::new(message).color(theme::dim()));
+                                let available = ui.available_rect_before_wrap();
+                                let rect = Rect::from_min_size(
+                                    available.min,
+                                    vec2(available.width(), available.height().min(96.0)),
+                                );
+                                match empty::paint(ui, rect, &state) {
+                                    Some(empty::EmptyAction::Run) => {
+                                        self.workbench.run_active();
+                                    }
+                                    Some(empty::EmptyAction::ClearFilter) => filter.clear(),
+                                    _ => {}
+                                }
                             }
                         });
                     }
@@ -5775,17 +5934,24 @@ impl WorkbenchApp {
         with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 // LAY-002: a visible pane title; the same string is the accessible name.
-                ui.label(RichText::new("Logs").small().strong().color(theme::dim()));
+                ui.label(
+                    RichText::new("Logs")
+                        .font(type_scale::Role::PaneTitle.font())
+                        .color(theme::text()),
+                );
                 ui.label(RichText::new(&header_line).color(theme::dim()))
                     .on_hover_text(format!("Log kinds: {legend}"));
                 // LAY-002: the reachable empty state. The boot lines mean the log is never empty
                 // unless the user clears it; this is that command.
                 let can_clear = !view.logs.is_empty();
-                if ui
+                let clear = ui
                     .add_enabled(can_clear, egui::Button::new(RichText::new("Clear log").small()))
-                    .on_hover_text("Empty this document's log; future runs append to it again")
-                    .clicked()
-                {
+                    .on_hover_text("Empty this document's log; future runs append to it again");
+                if !can_clear {
+                    // VIS-006: the disabled clear command carries the same shape cue.
+                    mark_disabled(ui, &clear);
+                }
+                if clear.clicked() {
                     self.workbench.clear_log_active();
                 }
             });
@@ -5799,9 +5965,14 @@ impl WorkbenchApp {
                     self.quick_eval_row(ui);
                     let logs = &view.logs;
                     if logs.is_empty() {
-                        ui.label(RichText::new("No log entries yet. Run the document.").color(theme::dim()));
-                        // The legend names every kind and marker before the first line exists,
-                        // so the vocabulary is discoverable even in an empty pane.
+                        // VIS-008: the empty log explains what the pane shows, why it is empty
+                        // and the command that fills it; the kind legend keeps the vocabulary
+                        // discoverable before the first line exists.
+                        let state = empty::logs();
+                        let rect = ui.available_rect_before_wrap();
+                        if empty::paint(ui, rect, &state) == Some(empty::EmptyAction::Run) {
+                            self.workbench.run_active();
+                        }
                         ui.label(RichText::new(legend.clone()).small().color(theme::dim()));
                         return;
                     }
@@ -5812,15 +5983,7 @@ impl WorkbenchApp {
                             for entry in logs {
                                 // LOG-002: the marker is part of the line's rendered model, so
                                 // the pane paints exactly the string the unit tests pin.
-                                let color = match entry.kind {
-                                    LogKind::Echo => theme::log_echo(),
-                                    LogKind::Stdout => theme::text(),
-                                    LogKind::Result => theme::accent(),
-                                    LogKind::Diagnostic => theme::error(),
-                                    LogKind::Timing => theme::warning(),
-                                    LogKind::Progress => theme::progress(),
-                                    LogKind::Info => theme::dim(),
-                                };
+                                let color = semantic::SemanticRole::for_log_kind(entry.kind).color();
                                 ui.label(RichText::new(entry.render()).monospace().color(color));
                             }
                         });
@@ -5852,9 +6015,8 @@ impl WorkbenchApp {
             header_row(ui, header, |ui| {
                 ui.label(
                     RichText::new("Symbolic Inspector")
-                        .small()
-                        .strong()
-                        .color(theme::accent()),
+                        .font(type_scale::Role::PaneTitle.font())
+                        .color(theme::text()),
                 );
                 ui.label(RichText::new(&state_line).small().color(theme::dim()))
                     .on_hover_text(
@@ -5878,7 +6040,10 @@ impl WorkbenchApp {
                         .min_scrolled_width(0.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            paint_inspector(ui, view, width, expansion, &mut toggles);
+                            let inspector_action = paint_inspector(ui, view, width, expansion, &mut toggles);
+                            if inspector_action == Some(empty::EmptyAction::Run) {
+                                self.workbench.run_active();
+                            }
                         });
                 },
             );
@@ -6001,7 +6166,7 @@ fn paint_inspector(
     width: f32,
     expansion: &mut InspectorExpansion,
     toggles: &mut Vec<(String, Rect)>,
-) {
+) -> Option<empty::EmptyAction> {
     // LAY-011: the caller already reserves the indent and scrollbar; do not floor this back up to
     // a width the narrow pane cannot hold.
     ui.set_max_width(width.max(80.0));
@@ -6014,8 +6179,15 @@ fn paint_inspector(
         .wrap(),
     );
     if !view.has_snapshot {
-        ui.label(RichText::new("No run has published a result yet.").color(theme::dim()));
-        return;
+        // VIS-008: the inspector's empty state names the six sections it can show, why there is
+        // nothing yet and the command that inspects a result; the caller runs a requested action.
+        let state = empty::inspector();
+        let available = ui.available_rect_before_wrap();
+        let rect = Rect::from_min_size(
+            available.min,
+            vec2(available.width(), available.height().min(140.0)),
+        );
+        return empty::paint(ui, rect, &state);
     }
     let Some(payload) = view.result_inspection.as_ref() else {
         ui.label(
@@ -6027,7 +6199,7 @@ fn paint_inspector(
             .small()
             .color(theme::warning()),
         );
-        return;
+        return None;
     };
     // SYM-001: bind the tree's collapse map to this payload. The payload is committed data, so
     // an edit to the buffer cannot clear the map while a new committed result can.
@@ -6041,7 +6213,7 @@ fn paint_inspector(
             .small()
             .color(theme::warning()),
         );
-        return;
+        return None;
     };
 
     let subject = &inspection.subject;
@@ -6225,6 +6397,7 @@ fn paint_inspector(
             paint_inspector_reason(ui, reason);
         }
     }
+    None
 }
 
 /// `1 node` / `5 nodes`, so a one-item section does not read as a count bug.
@@ -6345,19 +6518,27 @@ fn paint_result_section(
     width: f32,
     expansion: &mut ExpansionState,
     toggles: &mut Vec<(String, Rect)>,
-) {
+) -> Option<empty::EmptyAction> {
     // LAY-011: the caller already reserves the indent and scrollbar; do not floor this back up to
     // a width the narrow pane cannot hold.
     ui.set_max_width(width.max(80.0));
+    if !view.has_snapshot {
+        // VIS-008: no committed result yet, with the pane's purpose, the reason and the command
+        // that produces one. The caller runs the returned action.
+        let state = empty::results();
+        let available = ui.available_rect_before_wrap();
+        let rect = Rect::from_min_size(
+            available.min,
+            vec2(available.width(), available.height().min(120.0)),
+        );
+        let action = empty::paint(ui, rect, &state);
+        return action;
+    }
     ui.label(
         RichText::new("RESULT · structured projection")
             .small()
             .color(theme::dim()),
     );
-    if !view.has_snapshot {
-        ui.label(RichText::new("No run has published a result yet.").color(theme::dim()));
-        return;
-    }
     let projection = ResultProjection::new(view.result.clone(), view.result_structured.clone());
     // RES-004: the one place the expansion map is scoped to its result. A repaint of the same
     // committed snapshot returns false and keeps every path; a commit that publishes a different
@@ -6394,6 +6575,7 @@ fn paint_result_section(
             );
         }
     }
+    None
 }
 
 /// Paints one collapsible header row and returns true when its node is open after the click.
@@ -6791,19 +6973,14 @@ fn origin_color(origin: FunctionOrigin) -> Color32 {
     }
 }
 
-/// VIS-002: the semantic colour of the status strip's run-state text.
+/// VIS-002 / VIS-007: the semantic colour of the status strip's run-state text.
 ///
-/// Every branch is a theme token, so the status strip carries the positive/error/warning/progress
-/// semantic roles in both themes instead of one fixed accent colour.
+/// Every branch is the semantic role table's token, so the strip cannot paint a semantic colour
+/// the role table does not also document with a marker and a shape.
 fn status_state_color(state: crate::run_state::RunState) -> Color32 {
-    use crate::run_state::RunState;
-    match state {
-        RunState::Idle => theme::accent(),
-        RunState::Queued | RunState::Running | RunState::Cancelling => theme::progress(),
-        RunState::Finished => theme::positive(),
-        RunState::Failed => theme::error(),
-        RunState::Cancelled | RunState::Stale => theme::warning(),
-    }
+    semantic::SemanticRole::for_run_state(state)
+        .map(|role| role.color())
+        .unwrap_or_else(theme::accent)
 }
 
 /// The stable egui id of the one-line quick-eval field.
@@ -6833,6 +7010,19 @@ fn key_pressed_without_modifiers(ui: &Ui, key: Key) -> bool {
             )
         })
     })
+}
+
+/// VIS-006: paints the disabled cue when the widget's own response resolves to Disabled.
+///
+/// The state is not inferred from the caller's `bool`: [`control::ControlFlags::from_response`]
+/// reads `Response::enabled()` (the flag egui itself uses) and [`control::ControlFlags::resolve`]
+/// chooses the state with the documented precedence. The cue is a dashed outline plus a hatch, so
+/// a disabled control is different in shape, not only in opacity.
+fn mark_disabled(ui: &Ui, response: &Response) {
+    let flags = control::ControlFlags::from_response(response, false, false);
+    if flags.resolve() == control::ControlState::Disabled {
+        control::paint_disabled_cue(ui, response.rect);
+    }
 }
 
 /// A11Y-002: names one text field's accessibility node.
@@ -9243,7 +9433,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                paint_result_section(ui, &view, 420.0, &mut expansion, &mut toggles);
+                let _ = paint_result_section(ui, &view, 420.0, &mut expansion, &mut toggles);
             });
         });
         output.textures_delta.clear();
@@ -9374,7 +9564,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                paint_result_section(ui, view, 420.0, expansion, toggles);
+                let _ = paint_result_section(ui, view, 420.0, expansion, toggles);
             });
         });
         output.textures_delta.clear();
@@ -9953,7 +10143,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                paint_inspector(ui, view, 420.0, expansion, toggles);
+                let _ = paint_inspector(ui, view, 420.0, expansion, toggles);
             });
         });
         output.textures_delta.clear();
@@ -13646,6 +13836,75 @@ mod tests {
     // LAY-001 / LAY-002 / LAY-003 / LAY-004: the five-pane layout, its splitters and persistence.
     // -----------------------------------------------------------------------------------------
 
+    /// VIS-008: the Workspace pane's functions table paints its own empty state when the
+    /// variables section above it leaves the functions section inside the 1600x1000 viewport.
+    /// (At 1280x800 the functions section starts below the scroll viewport, so LAY-002 cannot
+    /// assert it; this test is the wider window the VIS-008 capture uses.)
+    #[test]
+    fn vis_008_the_functions_empty_state_is_visible_at_1600x1000() {
+        let ctx = egui::Context::default();
+        let screen = vec2(1600.0, 1000.0);
+        let mut workbench = Workbench::new();
+        workbench.set_source(0, String::new());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        assert!(app.workbench.clear_log_active() >= 1);
+        let texts = painted_texts(&ctx, &mut app, screen);
+        for empty in [
+            "No variables yet",
+            "No functions yet",
+            "The last run published no functions.",
+            "Run to populate",
+        ] {
+            assert!(
+                texts.iter().any(|text| text == empty),
+                "the workspace pane must paint {empty:?} at 1600x1000; texts: {texts:?}"
+            );
+        }
+    }
+
+    /// VIS-008: the find bar's no-match state names the query and the action that may reveal a
+    /// match, instead of leaving the user with a bare count.
+    #[test]
+    fn vis_008_the_search_empty_state_names_the_query_and_the_next_step() {
+        let mut app = app_with_source("alpha beta", 0, 0);
+        let ctx = egui::Context::default();
+        let screen = vec2(1600.0, 1000.0);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let ctrl = ctrl_modifiers();
+        frame_sized(
+            &ctx,
+            &mut app,
+            screen,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::F, ctrl)],
+        );
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        frame_sized(
+            &ctx,
+            &mut app,
+            screen,
+            vec![egui::Event::Text("zzz".to_string())],
+        );
+        assert_eq!(
+            app.editors[0].find.count_text().as_deref(),
+            Some("No matches"),
+            "the query really has no match"
+        );
+        let texts = painted_texts(&ctx, &mut app, screen);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("No match for")),
+            "the search empty state must name the reason; texts: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("turn off Aa, W or .*")),
+            "the search empty state must name the next step; texts: {texts:?}"
+        );
+    }
+
     /// Every text shape a frame painted, so a test can assert what the window really shows.
     fn painted_texts(
         ctx: &egui::Context,
@@ -13780,16 +14039,35 @@ mod tests {
         // reached through the pane's own Clear log command (the next frame paints it empty).
         assert!(app.workbench.clear_log_active() >= 1);
         let texts = painted_texts(&ctx, &mut app, screen);
+        // VIS-008: every pane states what it is for (headline), why it is empty (reason) and
+        // what to do next (the action's guidance or button). The assertions name one fact of
+        // each of the eight states, not a single reworded sentence.
         for empty in [
-            "This document is empty. Type a Lovelace script.",
-            "No run has published a workspace yet.",
-            "No plot yet. Run a script that calls plot(...).",
-            "No log entries yet. Run the document.",
-            "No run has published a result yet.",
+            "Empty document",
+            "This document has no text yet.",
+            "No plot yet",
+            "No run has produced a plot for this document.",
+            "No result yet",
+            "No run has published a result for this document.",
+            "No variables yet",
+            "No run has published a workspace for this document.",
+            "No log lines yet",
+            "This document's log is empty.",
+            "Nothing to inspect",
+            "No run has published an inspection payload.",
         ] {
             assert!(
                 texts.iter().any(|text| text == empty),
                 "each pane must paint its own empty state; missing {empty:?}\ntexts: {texts:?}"
+            );
+        }
+        // The run-fed panes offer the one command that fills them, and the editor offers the
+        // first keystroke; both labels are painted buttons, so the pointer (and UIA) can reach
+        // them.
+        for action in ["Run to populate", "Start typing"] {
+            assert!(
+                texts.iter().any(|text| text == action),
+                "the empty state must offer {action:?}; texts: {texts:?}"
             );
         }
         // Every pane has a visible title and the same string is its accessible name. The editor's

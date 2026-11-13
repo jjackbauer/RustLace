@@ -84,6 +84,19 @@ fn main() {
     if args.iter().any(|arg| arg == "--contrast-check") {
         std::process::exit(ui::theme::contrast_cli());
     }
+    // VIS-004/VIS-005: the type scale and legibility report. It lays out one sample per role at
+    // 96 DPI, measures the rendered row height, and prints the size, line ratio and WCAG contrast
+    // of every role on the surfaces it paints on; it exits non-zero when a role is below 11 pt,
+    // below a 1.2x line ratio, or below 4.5:1.
+    if args.iter().any(|arg| arg == "--legibility-check") {
+        std::process::exit(ui::type_scale::legibility_cli());
+    }
+    // VIS-004/006/007/008: the design-system tables (type scale, control states, semantic roles
+    // and carriers, empty states), printed from the same constants and constructors the window
+    // paints with.
+    if args.iter().any(|arg| arg == "--visual-audit") {
+        std::process::exit(ui::visual_audit_cli());
+    }
     // A11Y-014: the no-tofu report for the mathematical glyph set the engine emits. It measures
     // every character against the shipped font stack and exits non-zero when one is neither
     // drawable nor documented as a fallback.
@@ -227,6 +240,21 @@ fn usage() -> String {
     text.push_str("  lovelace-desktop --contrast-check   print every theme pair's WCAG ratio\n");
     text.push_str(
         "                                      (fails below 4.5:1 text / 3:1 large or non-text)\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --legibility-check print the type scale's rendered size, line ratio\n",
+    );
+    text.push_str(
+        "                                      and contrast per text role (fails below 11 pt,\n",
+    );
+    text.push_str(
+        "                                      1.15x line ratio or 4.5:1)\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --visual-audit     print the type scale, control state matrix,\n",
+    );
+    text.push_str(
+        "                                      semantic colour roles and empty states\n",
     );
     text.push_str(
         "  lovelace-desktop --glyph-check      print the engine glyph set's font coverage and\n",

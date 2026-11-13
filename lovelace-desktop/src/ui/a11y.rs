@@ -19,7 +19,7 @@
 
 #[cfg(test)]
 use egui::Rect;
-use egui::{Context, FontId, Id, LayerId, Order, Stroke, StrokeKind};
+use egui::{Context, Id, LayerId, Order, Stroke, StrokeKind};
 use lovelace_json::Json;
 
 use crate::glyphs::{self, GlyphMode};
@@ -209,8 +209,8 @@ pub fn localize_view(
 /// system font the platform resolver added, rather than a guess from a glyph table.
 pub fn font_has_glyph(ctx: &Context, c: char) -> bool {
     ctx.fonts_mut(|fonts| {
-        fonts.has_glyph(&FontId::monospace(13.0), c)
-            || fonts.has_glyph(&FontId::proportional(13.0), c)
+        fonts.has_glyph(&super::type_scale::Role::Code.font(), c)
+            || fonts.has_glyph(&super::type_scale::Role::Body.font(), c)
     })
 }
 

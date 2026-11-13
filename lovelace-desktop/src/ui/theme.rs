@@ -377,6 +377,9 @@ pub fn apply(ctx: &egui::Context, theme: ThemeId) {
 pub fn apply_style(style: &mut egui::Style, theme: ThemeId) {
     style.visuals = visuals_for(theme);
     style.spacing.scroll = scroll_style();
+    // VIS-004: every text style egui can resolve comes from the one scale, so a `.small()` is
+    // 11 pt (not egui's 9) and a `.heading()` is the 20 pt title.
+    super::type_scale::install(style);
 }
 
 /// The themed scroll-bar style.

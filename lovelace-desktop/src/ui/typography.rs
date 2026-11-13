@@ -384,10 +384,10 @@ mod tests {
             .collect()
     }
 
-    /// The advance of one character in the shipped monospace face at 13 pt.
+    /// The advance of one character in the shipped monospace face at the code scale step.
     fn shipped_advance(character: char) -> Option<f32> {
         let ctx = fresh_ctx();
-        let font = FontId::monospace(13.0);
+        let font = crate::ui::type_scale::Role::Code.font();
         glyphs(&ctx, &font, &character.to_string())
             .first()
             .map(|(_, advance)| *advance)

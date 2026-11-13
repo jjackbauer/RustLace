@@ -949,7 +949,8 @@ mod tests {
     fn layout_job_sections_are_the_classified_spans_in_order() {
         let ctx = context(&["sqrt"], "");
         let line = "func f(x) = sqrt(1/3)";
-        let job = job(line, FontId::monospace(13.0), dark_palette(), &ctx);
+        let code_font = crate::ui::type_scale::Role::Code.font();
+        let job = job(line, code_font.clone(), dark_palette(), &ctx);
         let spans = classify(line, &ctx);
         assert_eq!(job.sections.len(), spans.len());
         for (section, span) in job.sections.iter().zip(spans.iter()) {
@@ -961,7 +962,7 @@ mod tests {
                 section.byte_range.end.0, span.range.end,
                 "section end must match the classified span"
             );
-            assert_eq!(section.format.font_id, FontId::monospace(13.0));
+            assert_eq!(section.format.font_id, code_font);
             assert_eq!(section.format.color, span.class.color(dark_palette()));
             assert_eq!(
                 &line[section.byte_range.start.0..section.byte_range.end.0],
