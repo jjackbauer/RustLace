@@ -49,7 +49,7 @@ pub fn run() -> i32 {
         "GUI_SELFTEST plot-dir {}",
         crate::engine::default_plot_dir().display()
     );
-    let checks: [(&str, Check); 18] = [
+    let checks: [(&str, Check); 19] = [
         ("two-tabs", check_two_tabs),
         ("arithmetic", check_arithmetic),
         ("print", check_print),
@@ -65,6 +65,7 @@ pub fn run() -> i32 {
         ("run-state-fail", check_run_state_fail),
         ("run-state-stale", check_run_state_stale),
         ("file-bom-crlf", check_file_bom_crlf),
+        ("file-conflict", check_file_conflict),
         ("file-refuse", check_file_refuse),
         ("session-recovery", check_session_recovery),
         ("recovery-corrupt", check_recovery_corrupt),
@@ -1480,6 +1481,93 @@ fn check_file_bom_crlf() -> Result<String, String> {
         "{} opened in tab {index} ({style}); unmodified save byte-identical ({} bytes); dirty marker cleared by save; edited save kept BOM and CRLF; tab closed",
         badge,
         original.len()
+    ))
+}
+
+/// DOC-006: an external edit and an external delete both refuse Save until the user has chosen;
+/// Keep mine writes the buffer deliberately and re-records the snapshot.
+fn check_file_conflict() -> Result<String, String> {
+    let path = file_scratch("conflict.lv")?;
+    std::fs::write(&path, b"a = 1\nb = 2\n")
+        .map_err(|error| format!("file-conflict: cannot write the fixture: {error}"))?;
+    let mut workbench = new_workbench();
+    let index = workbench
+        .open(&path)
+        .map_err(|error| format!("file-conflict: {error}"))?;
+    let recorded = workbench
+        .document(index)
+        .and_then(|document| document.source_snapshot)
+        .ok_or("file-conflict: opening recorded no size/time/hash snapshot")?;
+    workbench.set_source(index, "a = 1\nb = 2\nc = 3\n".to_string());
+
+    let external: &[u8] = b"a = 1\nexternal = 99\n";
+    std::fs::write(&path, external)
+        .map_err(|error| format!("file-conflict: cannot write the external edit: {error}"))?;
+    let refused = match workbench.save(index) {
+        SaveOutcome::Conflict(report) => report,
+        outcome => return Err(format!("file-conflict: Save wrote instead of asking: {outcome:?}")),
+    };
+    if refused.recorded != Some(recorded) {
+        return Err("file-conflict: the prompt did not name the opened version".to_string());
+    }
+    if std::fs::read(&path).map_err(|error| error.to_string())? != external {
+        return Err("file-conflict: a refused Save changed the file".to_string());
+    }
+
+    match workbench.keep_mine(index) {
+        SaveOutcome::Saved { .. } => {}
+        outcome => {
+            return Err(format!(
+                "file-conflict: Keep mine did not write: {outcome:?}"
+            ));
+        }
+    }
+    let written = std::fs::read(&path).map_err(|error| error.to_string())?;
+    if written != b"a = 1\nb = 2\nc = 3\n" {
+        return Err(format!(
+            "file-conflict: Keep mine wrote {:?}",
+            String::from_utf8_lossy(&written)
+        ));
+    }
+    let snapshot = workbench
+        .document(index)
+        .and_then(|document| document.source_snapshot)
+        .ok_or("file-conflict: Keep mine did not re-record a snapshot")?;
+    if crate::document_io::probe(&path).snapshot() != Some(snapshot) {
+        return Err("file-conflict: the re-recorded snapshot does not match the file".to_string());
+    }
+
+    // An external delete is reported the same way, and Save must not recreate the file.
+    std::fs::remove_file(&path)
+        .map_err(|error| format!("file-conflict: cannot delete the file: {error}"))?;
+    match workbench.save(index) {
+        SaveOutcome::Conflict(report) => {
+            if report.current != crate::document_io::DiskState::Missing {
+                return Err(format!(
+                    "file-conflict: the deleted file was reported as {:?}",
+                    report.current
+                ));
+            }
+        }
+        outcome => {
+            return Err(format!(
+                "file-conflict: Save recreated a deleted file: {outcome:?}"
+            ));
+        }
+    }
+    if path.exists() {
+        return Err("file-conflict: Save recreated the deleted file".to_string());
+    }
+    let id = workbench
+        .document(index)
+        .ok_or("file-conflict: the tab vanished")?
+        .id;
+    workbench.close_document(id);
+    Ok(format!(
+        "external edit refused ({} bytes stayed); Keep mine wrote {} bytes and re-recorded {}; external delete reported as missing and not recreated",
+        external.len(),
+        written.len(),
+        snapshot.hash_label()
     ))
 }
 

@@ -26,6 +26,7 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
 use crate::app::{AppState, Command, Effect, LogLevel, PANE_GAP, compute_layout};
+use crate::workbench::FileConflict;
 use crate::settings::{Settings, WindowGeometry, default_config_path};
 use crate::svg::{self, Plot, TextAnchor};
 use crate::win32::ffi::*;
@@ -82,6 +83,9 @@ struct Shell {
     app: AppState,
     plot_data: Option<Plot>,
     settings_path: Option<PathBuf>,
+    /// DOC-006: a refused write waiting for the conflict prompt. The dialog is shown after the
+    /// shell borrow ends, so its message pump cannot re-enter the shell.
+    pending_conflict: Option<FileConflict>,
 }
 
 impl Shell {
@@ -102,6 +106,7 @@ impl Shell {
             app,
             plot_data: None,
             settings_path,
+            pending_conflict: None,
         }
     }
 
@@ -390,6 +395,12 @@ impl Shell {
                     repaint |= !follow_up.is_empty();
                 }
                 Effect::Saved(_) | Effect::Error(_) => repaint = true,
+                Effect::Conflict(report) => {
+                    // DOC-006: the write was refused. The prompt is shown by the caller, outside
+                    // this borrow, once the current command has finished.
+                    self.pending_conflict = Some(report);
+                    repaint = true;
+                }
                 Effect::Repaint => repaint = true,
             }
         }
@@ -637,6 +648,9 @@ unsafe extern "system" fn main_window_proc(
                     with_shell(|shell| shell.on_command(id, code));
                 }
             }
+            // DOC-006: a refused Save / Save As left a conflict in the shell. The prompt is shown
+            // here, outside the borrow, and its answer is applied through the same commands.
+            resolve_conflict(hwnd);
             return 0;
         }
         WM_TIMER => {
@@ -828,11 +842,51 @@ fn active_document_state() -> Option<(String, bool, Option<PathBuf>)> {
     .flatten()
 }
 
+/// DOC-006: shows the conflict prompt for a write the workbench refused and applies the answer.
+///
+/// Yes = Keep mine (overwrite the file with the buffer deliberately), No = Reload (replace the
+/// buffer with the disk text; nothing is written), Cancel = write nothing. The question names the
+/// recorded and current size/time/hash, so the choice is made after the user has seen both states.
+fn resolve_conflict(hwnd: HWND) {
+    loop {
+        let Some(report) = with_shell(|shell| shell.pending_conflict.take()).flatten() else {
+            return;
+        };
+        let answer = message_box(
+            hwnd,
+            &format!(
+                "{}\n\n{}\n\n{}\n\nYes: Keep mine - overwrite the file with this buffer.\n\
+                 No: Reload - replace the buffer with the disk text (nothing is written).\n\
+                 Cancel: write nothing and leave the buffer as it is.",
+                report.headline(),
+                report.recorded_line(),
+                report.current_line()
+            ),
+            "Lovelace Desktop - file changed on disk",
+            MB_YESNOCANCEL | MB_ICONWARNING,
+        );
+        let command = match answer {
+            IDYES => Command::KeepMine,
+            IDNO => Command::ReloadFile,
+            _ => return,
+        };
+        with_shell(|shell| {
+            let effects = shell.app.apply(command);
+            shell.dispatch(effects);
+        });
+    }
+}
+
 /// Saves the active document to a path. Returns true only when it is clean afterwards.
-fn save_active_to(path: PathBuf) -> bool {
+fn save_active_to(hwnd: HWND, path: PathBuf) -> bool {
     with_shell(|shell| {
         let effects = shell.app.apply(Command::SaveAs(path));
         shell.dispatch(effects);
+    });
+    // The conflict question is shown outside the borrow; a Cancel leaves the tab dirty, so the
+    // close flow that called this stays open.
+    resolve_conflict(hwnd);
+    with_shell(|shell| {
         !shell
             .app
             .documents
@@ -874,7 +928,7 @@ fn close_flow(hwnd: HWND) -> bool {
             None => return false,
         },
     };
-    save_active_to(target)
+    save_active_to(hwnd, target)
 }
 
 fn suggested_file_name() -> String {

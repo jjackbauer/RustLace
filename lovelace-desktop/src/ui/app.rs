@@ -25,7 +25,7 @@ use crate::results_tree::{
     ArrayNode, ExpansionState, ResultProjection, StructuredNode, element_path, field_path,
 };
 use crate::settings::{self, MAX_PRECISION, MIN_PRECISION, Settings};
-use crate::workbench::{DocumentView, SaveOutcome, Workbench};
+use crate::workbench::{DocumentView, FileConflict, SaveOutcome, Workbench};
 use crate::workspace_table::{
     FunctionColumn, FunctionTable, VariableColumn, VariableTable, cell_text, ordered_functions,
     ordered_variables,
@@ -272,6 +272,80 @@ impl RecoveryAnswer {
     }
 }
 
+/// What pressing a button in the DOC-006 external-change prompt means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConflictAnswer {
+    /// Discard the buffer and load the file as it stands on disk (confirmed first when dirty).
+    Reload,
+    /// Overwrite the file deliberately, after the user has seen both versions.
+    KeepMine,
+    /// Write nothing and leave the buffer, the caret and the focus exactly as they were.
+    Cancel,
+}
+
+impl ConflictAnswer {
+    /// The button label, which is also the button's accessible name in a UIA capture.
+    fn label(self) -> &'static str {
+        match self {
+            ConflictAnswer::Reload => "Reload",
+            ConflictAnswer::KeepMine => "Keep mine",
+            ConflictAnswer::Cancel => "Cancel",
+        }
+    }
+}
+
+/// The second question a Reload asks when the buffer has unsaved changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReloadAnswer {
+    /// Throw the buffer away and load the disk text.
+    DiscardAndReload,
+    /// Go back to the three-way conflict question.
+    Back,
+}
+
+impl ReloadAnswer {
+    fn label(self) -> &'static str {
+        match self {
+            ReloadAnswer::DiscardAndReload => "Reload and discard",
+            ReloadAnswer::Back => "Back",
+        }
+    }
+}
+
+/// The DOC-006 external-change prompt.
+///
+/// It is opened by a refused Save / Save As, from the tab's conflict marker, or by the close flow's
+/// Save. While it is open no keystroke reaches an editor, so the file cannot be overwritten behind
+/// the question; and the only path that writes is the deliberate **Keep mine** button.
+#[derive(Clone, Debug)]
+struct ConflictPrompt {
+    /// The document the save belongs to, by stable identity.
+    document: DocumentId,
+    /// The path the refused write would have used (the document's own path, or Save As' target).
+    target: PathBuf,
+    /// The recorded and current states the prompt shows.
+    report: FileConflict,
+    /// The widget that had focus when the prompt opened; restored on Cancel.
+    focus_before: Option<Id>,
+    /// True while the dirty-buffer Reload confirmation is on screen.
+    confirm_reload: bool,
+    /// Why the last Keep mine or Reload failed, shown in the prompt itself.
+    error: Option<String>,
+}
+
+/// Field attributes of the open DOC-006 prompt, read by the window tests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConflictSummary {
+    /// The document's stable identity.
+    pub document: DocumentId,
+    /// The path the refused write would have used.
+    pub target: PathBuf,
+    /// True while the Reload confirmation is on screen.
+    pub confirm_reload: bool,
+    /// The headline the prompt shows.
+    pub headline: String,
+}
+
 /// The recovery prompt shown at launch when journaled buffers survived (DOC-005).
 ///
 /// It is answered record by record. While it is open no keystroke reaches an editor and no pane
@@ -313,6 +387,17 @@ pub struct WorkbenchApp {
     recovery_prompt: Option<RecoveryPrompt>,
     /// DOC-005 test seam: the recovery prompt buttons painted in the last pass.
     recovery_buttons: Vec<(usize, RecoveryAnswer, Rect)>,
+    /// DOC-006: the open external-change prompt, if any.
+    conflict: Option<ConflictPrompt>,
+    /// DOC-006 test seam: the conflict prompt buttons painted in the last pass.
+    conflict_buttons: Vec<(ConflictAnswer, Rect)>,
+    /// DOC-006 test seam: the Reload confirmation buttons painted in the last pass.
+    reload_buttons: Vec<(ReloadAnswer, Rect)>,
+    /// DOC-006: when the disk was last re-probed for every located document.
+    last_disk_poll: Instant,
+    /// DOC-006: whether the window had keyboard focus on the previous pass, so regaining it forces
+    /// an immediate re-probe instead of waiting for the poll interval.
+    window_focused: bool,
     /// DOC-004: the session signature last written, so an unchanged session is not rewritten.
     persisted_session: Option<String>,
     /// The last settings write failure, so it is logged once instead of every frame.
@@ -591,6 +676,12 @@ impl WorkbenchApp {
             recovery,
             recovery_prompt: None,
             recovery_buttons: Vec::new(),
+            conflict: None,
+            conflict_buttons: Vec::new(),
+            reload_buttons: Vec::new(),
+            // Zero so the first pass probes every located document once.
+            last_disk_poll: Instant::now(),
+            window_focused: false,
             persisted_session: None,
             settings_error: None,
             view,
@@ -959,20 +1050,23 @@ impl WorkbenchApp {
     /// Ctrl+S / File > Save, or Ctrl+Shift+S / File > Save As.
     ///
     /// `ask_path` forces the Save As dialog; Save asks only when the document has no path yet.
-    /// A cancelled dialog changes nothing at all.
-    fn save_active(&mut self, ask_path: bool) {
+    /// A cancelled dialog changes nothing at all. DOC-006: a write the workbench refuses because
+    /// the target changed on disk opens the conflict prompt instead; nothing is written.
+    fn save_active(&mut self, ask_path: bool, ctx: &egui::Context) {
         let active = self.workbench.active();
-        let _ = self.write_document_through_dialogs(active, ask_path);
+        let _ = self.write_document_through_dialogs(active, ask_path, ctx);
     }
 
     /// Writes one document, asking the native Save As dialog when needed.
     ///
     /// Returns `None` when the user cancelled the dialog (nothing was written and the document is
-    /// unchanged), otherwise the workbench's outcome.
+    /// unchanged) or when the write was refused as a disk conflict (the prompt is now open),
+    /// otherwise the workbench's outcome.
     fn write_document_through_dialogs(
         &mut self,
         index: usize,
         ask_path: bool,
+        ctx: &egui::Context,
     ) -> Option<SaveOutcome> {
         let (has_path, suggested, initial_dir) = {
             let document = self.workbench.document(index)?;
@@ -985,11 +1079,37 @@ impl WorkbenchApp {
                     .and_then(|path| path.parent().map(PathBuf::from)),
             )
         };
-        if !ask_path && has_path {
-            return Some(self.workbench.save(index));
+        let outcome = if !ask_path && has_path {
+            self.workbench.save(index)
+        } else {
+            let path = self.dialogs.save_as(&suggested, initial_dir.as_deref())?;
+            self.workbench.save_as(index, path)
+        };
+        match outcome {
+            SaveOutcome::Conflict(report) => {
+                self.open_conflict(index, report, ctx);
+                None
+            }
+            other => Some(other),
         }
-        let path = self.dialogs.save_as(&suggested, initial_dir.as_deref())?;
-        Some(self.workbench.save_as(index, path))
+    }
+
+    /// DOC-006: opens the prompt for a write the workbench refused.
+    fn open_conflict(&mut self, index: usize, report: FileConflict, ctx: &egui::Context) {
+        let Some(document) = self.workbench.documents().get(index).map(|doc| doc.id) else {
+            return;
+        };
+        let focus_before = ctx.memory(|memory| memory.focused());
+        self.conflict = Some(ConflictPrompt {
+            document,
+            target: report.path.clone(),
+            report,
+            focus_before,
+            confirm_reload: false,
+            error: None,
+        });
+        // The prompt is painted on the next pass; ask for it even when no input event arrived.
+        ctx.request_repaint();
     }
 
     /// Makes `index` the active tab and reconciles the editors immediately, before any pane in
@@ -1006,8 +1126,10 @@ impl WorkbenchApp {
     /// Starts closing `target`, or closes it immediately when nothing in it is dirty.
     fn request_close(&mut self, target: CloseTarget, ctx: &egui::Context) {
         // The DOC-005 recovery prompt is answered before any close: a quit must not race the
-        // question of whether journaled text should be recovered.
-        if self.close.is_some() || self.recovery_prompt.is_some() {
+        // question of whether journaled text should be recovered. A DOC-006 file conflict is
+        // answered first for the same reason: a close must not discard the buffer whose save the
+        // conflict prompt is still deciding.
+        if self.close.is_some() || self.recovery_prompt.is_some() || self.conflict.is_some() {
             return;
         }
         let pending: Vec<DocumentId> = match target {
@@ -1080,7 +1202,7 @@ impl WorkbenchApp {
                     self.advance_close(ctx);
                     return;
                 };
-                match self.write_document_through_dialogs(index, false) {
+                match self.write_document_through_dialogs(index, false, ctx) {
                     Some(SaveOutcome::Saved { .. }) => self.advance_close(ctx),
                     Some(SaveOutcome::Failed(message)) => {
                         // The write failed: keep asking, and say why in the prompt.
@@ -1094,9 +1216,20 @@ impl WorkbenchApp {
                             prompt.error = Some("This document has no path yet.".to_string());
                         }
                     }
+                    Some(SaveOutcome::Conflict(_)) => {
+                        // DOC-006: the file prompt is now the top question. The close prompt
+                        // stays queued underneath it and continues once the conflict is settled;
+                        // answering Cancel there leaves the tab open.
+                        if let Some(prompt) = self.close.as_mut() {
+                            prompt.error = Some(
+                                "The file changed on disk; answer its prompt first.".to_string(),
+                            );
+                        }
+                    }
                     None => {
-                        // The Save As dialog was cancelled. The prompt stays open so the user can
-                        // still choose Discard or Cancel.
+                        // The Save As dialog was cancelled or the write was refused as a
+                        // conflict. The prompt stays open so the user can still choose Discard
+                        // or Cancel.
                     }
                 }
             }
@@ -1130,6 +1263,11 @@ impl WorkbenchApp {
         }
         // DOC-005: the recovery question is answered first; the window stays open until it is.
         if self.recovery_prompt.is_some() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
+        // DOC-006: the file conflict is a save decision; closing now could discard the buffer.
+        if self.conflict.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
@@ -1335,6 +1473,338 @@ impl WorkbenchApp {
         }
     }
 
+    /// DOC-006: re-probes every located document's file and refreshes its tab marker.
+    ///
+    /// The probe runs when the window regains keyboard focus (the moment the user comes back from
+    /// the other program that edited the file) and on a 750 ms poll while it is focused, so the
+    /// conflict is visible in the tab strip before the user reaches for Save.
+    fn poll_disk_changes(&mut self, ctx: &egui::Context) {
+        let focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        let regained = focused && !self.window_focused;
+        self.window_focused = focused;
+        let now = Instant::now();
+        let due = now.duration_since(self.last_disk_poll) >= Duration::from_millis(750);
+        if !(regained || due) {
+            ctx.request_repaint_after(Duration::from_millis(750));
+            return;
+        }
+        self.last_disk_poll = now;
+        if !self.workbench.refresh_disk_status().is_empty() {
+            ctx.request_repaint();
+        }
+        ctx.request_repaint_after(Duration::from_millis(750));
+    }
+
+    /// DOC-006: what the open conflict prompt is asking about, for the window tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn conflict_summary(&self) -> Option<ConflictSummary> {
+        self.conflict.as_ref().map(|prompt| ConflictSummary {
+            document: prompt.document,
+            target: prompt.target.clone(),
+            confirm_reload: prompt.confirm_reload,
+            headline: prompt.report.headline().to_string(),
+        })
+    }
+
+    /// DOC-006: paints the external-change prompt and applies the answer.
+    ///
+    /// Like the other prompts it is a foreground modal and the caller strips every key event, so
+    /// no keystroke can edit the buffer or trigger a save while the question is open. The prompt is
+    /// the only route to Keep mine; Cancel writes nothing and returns the focus that was taken.
+    fn conflict_prompt_ui(&mut self, ctx: &egui::Context, escape: bool) {
+        self.conflict_buttons.clear();
+        self.reload_buttons.clear();
+        let Some(prompt) = self.conflict.clone() else {
+            return;
+        };
+        let Some(index) = self.workbench.document_index(prompt.document) else {
+            // The document disappeared while the prompt was up; nothing can be saved.
+            self.conflict = None;
+            return;
+        };
+        let title = self.workbench.documents()[index].title.clone();
+        let dirty = self.workbench.documents()[index].dirty();
+        let report = prompt.report.clone();
+        let mut answer: Option<ConflictAnswer> = None;
+        let mut reload_answer: Option<ReloadAnswer> = None;
+        let modal = egui::Modal::new(egui::Id::unique("file-conflict-prompt")).show(ctx, |ui| {
+            ui.set_max_width(660.0);
+            if prompt.confirm_reload {
+                ui.label(
+                    RichText::new("Reload from disk?")
+                        .strong()
+                        .size(16.0)
+                        .color(theme::text()),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{title} has unsaved changes. Reloading replaces the buffer with the \
+                         version on disk and discards those changes."
+                    ))
+                    .color(theme::text())
+                    .size(14.0),
+                );
+                ui.label(
+                    RichText::new(report.current_line())
+                        .small()
+                        .color(theme::dim()),
+                );
+                if let Some(error) = &prompt.error {
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(error).small().color(theme::error()));
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    for choice in [ReloadAnswer::DiscardAndReload, ReloadAnswer::Back] {
+                        let text = RichText::new(choice.label()).size(14.0);
+                        let text = if choice == ReloadAnswer::DiscardAndReload {
+                            text.strong()
+                        } else {
+                            text
+                        };
+                        let response =
+                            ui.add(egui::Button::new(text).min_size(vec2(150.0, 26.0)));
+                        if response.clicked() {
+                            reload_answer = Some(choice);
+                        }
+                        self.reload_buttons.push((choice, response.rect));
+                    }
+                });
+            } else {
+                ui.label(
+                    RichText::new(report.headline())
+                        .strong()
+                        .size(16.0)
+                        .color(theme::text()),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(prompt.target.display().to_string())
+                        .monospace()
+                        .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(report.recorded_line())
+                        .color(theme::text())
+                        .size(14.0),
+                );
+                ui.label(
+                    RichText::new(report.current_line())
+                        .color(theme::warning())
+                        .size(14.0),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Your buffer: {} bytes{}. Nothing has been written.",
+                        report.buffer_bytes,
+                        if dirty {
+                            ", with unsaved changes"
+                        } else {
+                            ""
+                        }
+                    ))
+                    .small()
+                    .color(theme::dim()),
+                );
+                if report.other_target {
+                    ui.label(
+                        RichText::new(
+                            "This is a different file from the one this tab read; saving over it \
+                             would replace a file you have not seen.",
+                        )
+                        .small()
+                        .color(theme::dim()),
+                    );
+                }
+                if matches!(report.current, crate::document_io::DiskState::Missing) {
+                    ui.label(
+                        RichText::new(
+                            "Reload is unavailable because the file is gone. Keep mine would \
+                             create it again deliberately; Cancel leaves the tab open.",
+                        )
+                        .small()
+                        .color(theme::dim()),
+                    );
+                }
+                if let Some(error) = &prompt.error {
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(error).small().color(theme::error()));
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    for choice in [
+                        ConflictAnswer::Reload,
+                        ConflictAnswer::KeepMine,
+                        ConflictAnswer::Cancel,
+                    ] {
+                        let enabled = match choice {
+                            ConflictAnswer::Reload => matches!(
+                                report.current,
+                                crate::document_io::DiskState::Present(_)
+                            ),
+                            _ => true,
+                        };
+                        let text = RichText::new(choice.label()).size(14.0);
+                        let text = match choice {
+                            ConflictAnswer::KeepMine => text.strong(),
+                            ConflictAnswer::Reload => text,
+                            ConflictAnswer::Cancel => text,
+                        };
+                        let response = ui.add_enabled(
+                            enabled,
+                            egui::Button::new(text).min_size(vec2(120.0, 26.0)),
+                        );
+                        if response.clicked() {
+                            answer = Some(choice);
+                        }
+                        self.conflict_buttons.push((choice, response.rect));
+                    }
+                });
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Escape cancels and writes nothing.")
+                        .small()
+                        .color(theme::dim()),
+                );
+            }
+        });
+        if prompt.confirm_reload {
+            if let Some(choice) = reload_answer {
+                self.answer_reload(choice, ctx);
+            } else if escape || modal.should_close() {
+                self.answer_reload(ReloadAnswer::Back, ctx);
+            }
+            return;
+        }
+        if answer.is_none() && (escape || modal.should_close()) {
+            answer = Some(ConflictAnswer::Cancel);
+        }
+        if let Some(answer) = answer {
+            self.answer_conflict(answer, ctx);
+        }
+    }
+
+    /// DOC-006: applies one answer to the conflict prompt.
+    fn answer_conflict(&mut self, answer: ConflictAnswer, ctx: &egui::Context) {
+        let Some(prompt) = self.conflict.clone() else {
+            return;
+        };
+        let Some(index) = self.workbench.document_index(prompt.document) else {
+            self.conflict = None;
+            return;
+        };
+        match answer {
+            ConflictAnswer::Cancel => {
+                // Cancel is deliberately the cheapest branch: nothing is written and no editor,
+                // buffer, caret or selection is touched. The focus that was taken is given back.
+                self.conflict = None;
+                self.pending_focus = Some(prompt.focus_before.unwrap_or_else(surface_id));
+                ctx.request_repaint();
+            }
+            ConflictAnswer::Reload => {
+                if !matches!(
+                    prompt.report.current,
+                    crate::document_io::DiskState::Present(_)
+                ) {
+                    if let Some(open) = self.conflict.as_mut() {
+                        open.error = Some(
+                            "The file cannot be reloaded because it is no longer readable."
+                                .to_string(),
+                        );
+                    }
+                    ctx.request_repaint();
+                    return;
+                }
+                if self.workbench.documents()[index].dirty() {
+                    if let Some(open) = self.conflict.as_mut() {
+                        open.confirm_reload = true;
+                        open.error = None;
+                    }
+                } else {
+                    self.perform_reload(&prompt, ctx);
+                }
+                ctx.request_repaint();
+            }
+            ConflictAnswer::KeepMine => {
+                // The user has seen both versions: this is the deliberate overwrite.
+                match self.workbench.keep_mine_to(index, prompt.target.clone()) {
+                    SaveOutcome::Saved { .. } => {
+                        self.conflict = None;
+                        self.finish_conflict_flow(&prompt, ctx);
+                    }
+                    SaveOutcome::Failed(message) => {
+                        if let Some(open) = self.conflict.as_mut() {
+                            open.error = Some(message);
+                        }
+                    }
+                    other => {
+                        let message = format!("Save was refused: {other:?}");
+                        if let Some(open) = self.conflict.as_mut() {
+                            open.error = Some(message);
+                        }
+                    }
+                }
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// DOC-006: answers the dirty-buffer Reload confirmation.
+    fn answer_reload(&mut self, choice: ReloadAnswer, ctx: &egui::Context) {
+        let Some(prompt) = self.conflict.clone() else {
+            return;
+        };
+        match choice {
+            ReloadAnswer::Back => {
+                if let Some(open) = self.conflict.as_mut() {
+                    open.confirm_reload = false;
+                    open.error = None;
+                }
+            }
+            ReloadAnswer::DiscardAndReload => self.perform_reload(&prompt, ctx),
+        }
+        ctx.request_repaint();
+    }
+
+    /// DOC-006: loads the disk version into the tab and closes the prompt on success.
+    fn perform_reload(&mut self, prompt: &ConflictPrompt, ctx: &egui::Context) {
+        let Some(index) = self.workbench.document_index(prompt.document) else {
+            self.conflict = None;
+            return;
+        };
+        match self.workbench.reload(index) {
+            Ok(()) => {
+                self.conflict = None;
+                self.finish_conflict_flow(prompt, ctx);
+            }
+            Err(message) => {
+                if let Some(open) = self.conflict.as_mut() {
+                    open.error = Some(message);
+                    open.confirm_reload = false;
+                }
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    /// DOC-006: after Keep mine or Reload, continues a close flow that was waiting on the save.
+    fn finish_conflict_flow(&mut self, prompt: &ConflictPrompt, ctx: &egui::Context) {
+        // A close prompt's Save was the write that hit the conflict. Keep mine saved it and
+        // Reload made the buffer match disk, so in both cases the tab may now be closed exactly
+        // as the close flow intended. Cancel never reaches this function.
+        if self
+            .close
+            .as_ref()
+            .is_some_and(|close| close.current() == prompt.document)
+        {
+            self.advance_close(ctx);
+        }
+        self.pending_focus = Some(prompt.focus_before.unwrap_or_else(surface_id));
+        ctx.request_repaint();
+    }
+
     /// Sends the active document's name and dirty marker to the native window title.
     fn update_window_title(&mut self, ctx: &egui::Context) {
         let title = format!(
@@ -1386,8 +1856,8 @@ impl WorkbenchApp {
         match command {
             FileCommand::New => self.new_document(),
             FileCommand::Open => self.open_dialog(ctx),
-            FileCommand::Save => self.save_active(false),
-            FileCommand::SaveAs => self.save_active(true),
+            FileCommand::Save => self.save_active(false, ctx),
+            FileCommand::SaveAs => self.save_active(true, ctx),
             FileCommand::CloseTab => {
                 let id = self.workbench.active_document().id;
                 self.request_close(CloseTarget::Tab(id), ctx);
@@ -2075,14 +2545,14 @@ impl WorkbenchApp {
                 "Save",
                 "Save the active document (Ctrl+S); asks for a path when it has none",
             ) {
-                self.save_active(false);
+                self.save_active(false, &ctx);
             }
             if self.file_bar_button(
                 ui,
                 "Save As...",
                 "Save the active document under a new name (Ctrl+Shift+S)",
             ) {
-                self.save_active(true);
+                self.save_active(true, &ctx);
             }
             let recent = self.workbench.recent_files().to_vec();
             ui.add_enabled_ui(!recent.is_empty(), |ui| {
@@ -2256,11 +2726,14 @@ impl WorkbenchApp {
         // DOC-003: the OS close request (title-bar X, Alt+F4) is either refused with a prompt or
         // allowed through. It is handled before anything else so a close can never race a pane.
         self.handle_close_request(&ctx);
+        // DOC-006: external changes are noticed when the window regains focus and on a short
+        // poll, so the tab strip warns before the user tries to save over another program's edit.
+        self.poll_disk_changes(&ctx);
         // While a prompt is open nothing in this frame may consume a keystroke: read the keys the
         // prompt itself uses, then strip every key and text event so no editor can be edited
         // behind the modal. The modal's buttons still receive pointer events, and the prompts are
         // drawn in egui's foreground layer even though they are built before the panes.
-        if self.close.is_some() || self.recovery_prompt.is_some() {
+        if self.close.is_some() || self.recovery_prompt.is_some() || self.conflict.is_some() {
             let (escape, enter) = ctx.input(|input| {
                 (
                     input.key_pressed(Key::Escape),
@@ -2276,9 +2749,12 @@ impl WorkbenchApp {
                 });
             });
             // The recovery prompt is the outermost question (DOC-005): it is asked before a save
-            // can offer to overwrite anything.
+            // can offer to overwrite anything. The conflict prompt (DOC-006) is next: it is the
+            // question the close prompt's Save produced. Only one is painted at a time.
             if self.recovery_prompt.is_some() {
                 self.recovery_prompt_ui(&ctx, escape);
+            } else if self.conflict.is_some() {
+                self.conflict_prompt_ui(&ctx, escape);
             } else {
                 self.close_prompt_ui(&ctx, escape, enter);
             }
@@ -5723,6 +6199,32 @@ mod tests {
             .collect()
     }
 
+    /// DOC-006: the center of the conflict prompt button the test wants to click.
+    fn conflict_button(app: &WorkbenchApp, choice: ConflictAnswer) -> egui::Pos2 {
+        app.conflict_buttons
+            .iter()
+            .find(|(painted, _)| *painted == choice)
+            .map(|(_, rect)| rect.center())
+            .unwrap_or_else(|| panic!("the {choice:?} button was not painted"))
+    }
+
+    /// DOC-006: the buttons the open conflict prompt painted, in their on-screen order.
+    fn conflict_choices(app: &WorkbenchApp) -> Vec<&'static str> {
+        app.conflict_buttons
+            .iter()
+            .map(|(choice, _)| choice.label())
+            .collect()
+    }
+
+    /// DOC-006: the center of the dirty-buffer Reload confirmation button.
+    fn reload_button(app: &WorkbenchApp, choice: ReloadAnswer) -> egui::Pos2 {
+        app.reload_buttons
+            .iter()
+            .find(|(painted, _)| *painted == choice)
+            .map(|(_, rect)| rect.center())
+            .unwrap_or_else(|| panic!("the {choice:?} button was not painted"))
+    }
+
     /// A full pointer click at `pos`: move, press, release (one pass each), the same sequence a
     /// user's mouse produces.
     fn pointer_click(ctx: &egui::Context, app: &mut WorkbenchApp, pos: egui::Pos2) {
@@ -8808,6 +9310,311 @@ mod tests {
             std::fs::read(&path).expect("read back"),
             b"x = 2\n",
             "Save in the prompt writes the edited buffer"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // DOC-006: the external-change conflict prompt.
+    // -----------------------------------------------------------------------------------------
+
+    #[test]
+    fn an_external_edit_refuses_save_and_survives_cancel_unchanged() {
+        let path = fixture("conflict-save", b"a = 1\nb = 2\n");
+        let mut workbench = opened_workbench(&path);
+        let index = workbench.active();
+        workbench.set_source(index, "a = 1\nb = 2\nc = 3\n".to_string());
+        let external = b"a = 1\nexternal = 99\n";
+        std::fs::write(&path, external).expect("external edit");
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        settle(&ctx, &mut app);
+
+        // DOC-006.4: the tab is marked before the user tries to save.
+        assert!(
+            app.workbench.documents()[index]
+                .tab_label()
+                .contains("changed on disk"),
+            "the tab strip warns about the external change: {}",
+            app.workbench.documents()[index].tab_label()
+        );
+
+        app.editors[index].set_caret(2, 5);
+        let caret = app.editors[index].caret();
+        frame(&ctx, &mut app, Vec::new());
+
+        // Ctrl+S is the user's save path. It must ask, not write.
+        frame(&ctx, &mut app, vec![key(Key::S, ctrl_modifiers())]);
+        settle(&ctx, &mut app);
+
+        let summary = app.conflict_summary().expect("Save must open the conflict prompt");
+        assert_eq!(summary.headline, "File changed on disk");
+        assert_eq!(summary.target, path);
+        assert_eq!(
+            conflict_choices(&app),
+            vec!["Reload", "Keep mine", "Cancel"],
+            "the prompt offers exactly the three answers"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            external,
+            "a refused Save writes nothing"
+        );
+        assert_eq!(
+            app.workbench.documents()[index].source,
+            "a = 1\nb = 2\nc = 3\n"
+        );
+        assert!(app.workbench.documents()[index].dirty());
+
+        // Escape is Cancel: the file, the buffer, the caret and the focus are untouched.
+        frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::Escape, egui::Modifiers::default())],
+        );
+        assert!(app.conflict.is_none(), "Cancel dismisses the prompt");
+        assert_eq!(std::fs::read(&path).expect("read back"), external);
+        assert_eq!(
+            app.workbench.documents()[index].source,
+            "a = 1\nb = 2\nc = 3\n"
+        );
+        assert!(app.workbench.documents()[index].dirty());
+        assert_eq!(app.editors[index].caret(), caret, "Cancel keeps the caret");
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, Vec::new());
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(surface_id()),
+            "Cancel gives the focus back to the editor"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn keep_mine_in_the_conflict_prompt_writes_only_after_the_user_saw_it() {
+        let path = fixture("conflict-keep", b"a = 1\nb = 2\n");
+        let mut workbench = opened_workbench(&path);
+        let index = workbench.active();
+        workbench.set_source(index, "a = 1\nb = 2\nc = 3\n".to_string());
+        std::fs::write(&path, b"a = 1\nexternal = 99\n").expect("external edit");
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        settle(&ctx, &mut app);
+
+        frame(&ctx, &mut app, vec![key(Key::S, ctrl_modifiers())]);
+        settle(&ctx, &mut app);
+        assert!(app.conflict.is_some(), "the prompt is open");
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 1\nexternal = 99\n"
+        );
+
+        let keep = conflict_button(&app, ConflictAnswer::KeepMine);
+        pointer_click(&ctx, &mut app, keep);
+
+        assert!(app.conflict.is_none(), "Keep mine resolves the prompt");
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 1\nb = 2\nc = 3\n",
+            "Keep mine writes the buffer deliberately"
+        );
+        let document = &app.workbench.documents()[index];
+        assert!(!document.dirty());
+        assert_eq!(document.disk_status, crate::document_io::DiskStatus::Clean);
+        assert!(
+            !document.tab_label().contains("changed on disk"),
+            "the marker clears once the save re-records the snapshot"
+        );
+        assert_eq!(
+            document.source_snapshot,
+            crate::document_io::probe(&path).snapshot(),
+            "the recorded snapshot is the file Keep mine wrote"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reload_in_the_conflict_prompt_replaces_the_editor_text_and_clears_dirty() {
+        let path = fixture("conflict-reload", b"a = 1\nb = 2\n");
+        let mut workbench = opened_workbench(&path);
+        let index = workbench.active();
+        workbench.set_source(index, "a = 1\nb = 2\nc = 3\n".to_string());
+        std::fs::write(&path, b"a = 1\nexternal = 99\n").expect("external edit");
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        settle(&ctx, &mut app);
+
+        frame(&ctx, &mut app, vec![key(Key::S, ctrl_modifiers())]);
+        settle(&ctx, &mut app);
+        let reload = conflict_button(&app, ConflictAnswer::Reload);
+        pointer_click(&ctx, &mut app, reload);
+        settle(&ctx, &mut app);
+
+        // The buffer is dirty, so Reload first asks whether to discard it.
+        let summary = app.conflict_summary().expect("the confirmation is open");
+        assert!(summary.confirm_reload);
+        assert!(app
+            .reload_buttons
+            .iter()
+            .any(|(choice, _)| *choice == ReloadAnswer::DiscardAndReload));
+
+        let discard = reload_button(&app, ReloadAnswer::DiscardAndReload);
+        pointer_click(&ctx, &mut app, discard);
+        settle(&ctx, &mut app);
+
+        assert!(app.conflict.is_none(), "Reload resolves the prompt");
+        assert_eq!(
+            app.workbench.documents()[index].source,
+            "a = 1\nexternal = 99\n"
+        );
+        assert_eq!(
+            app.editors[index].source(),
+            "a = 1\nexternal = 99\n",
+            "the editor shows the disk text"
+        );
+        assert!(!app.workbench.documents()[index].dirty());
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 1\nexternal = 99\n",
+            "Reload writes nothing"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_of_a_file_deleted_on_disk_reports_it_and_never_recreates_it() {
+        let path = fixture("conflict-deleted", b"a = 1\n");
+        let mut workbench = opened_workbench(&path);
+        let index = workbench.active();
+        workbench.set_source(index, "a = 2\n".to_string());
+        std::fs::remove_file(&path).expect("external delete");
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        settle(&ctx, &mut app);
+
+        frame(&ctx, &mut app, vec![key(Key::S, ctrl_modifiers())]);
+        settle(&ctx, &mut app);
+
+        let summary = app.conflict_summary().expect("Save must report the missing file");
+        assert_eq!(summary.headline, "File missing on disk");
+        assert!(!path.exists(), "Save must not recreate a deleted file");
+        assert_eq!(app.workbench.documents()[index].source, "a = 2\n");
+        // Cancel leaves the tab open and the file still absent.
+        let cancel = conflict_button(&app, ConflictAnswer::Cancel);
+        pointer_click(&ctx, &mut app, cancel);
+        assert!(app.conflict.is_none());
+        assert!(!path.exists(), "Cancel does not recreate a deleted file");
+        assert_eq!(app.workbench.documents()[index].source, "a = 2\n");
+    }
+
+    #[test]
+    fn save_as_onto_an_existing_file_opens_the_conflict_instead_of_overwriting() {
+        let path = fixture("conflict-save-as", b"a = 1\n");
+        let target = fixture("conflict-save-as-target", b"someone else's file\n");
+        let mut workbench = opened_workbench(&path);
+        let index = workbench.active();
+        workbench.set_source(index, "a = 2\n".to_string());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        app.dialogs = Box::new(ScriptedDialogs::saving([Some(target.clone())]));
+        let ctx = egui::Context::default();
+        settle(&ctx, &mut app);
+
+        app.save_active(true, &ctx);
+
+        let summary = app.conflict_summary().expect("Save As must ask first");
+        assert_eq!(summary.headline, "File already exists");
+        assert_eq!(summary.target, target);
+        assert_eq!(
+            std::fs::read(&target).expect("read back"),
+            b"someone else's file\n",
+            "Save As wrote nothing"
+        );
+        assert_eq!(
+            app.workbench.documents()[index].path.as_deref(),
+            Some(path.as_path()),
+            "the tab keeps its own path"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&target);
+    }
+
+    #[test]
+    fn the_close_prompts_save_hits_the_conflict_and_keep_mine_finishes_the_close() {
+        let path = fixture("conflict-close", b"a = 1\n");
+        let mut workbench = opened_workbench(&path);
+        let index = workbench.active();
+        workbench.set_source(index, "a = 2\n".to_string());
+        let tabs = workbench.documents().len();
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        settle(&ctx, &mut app);
+
+        frame(&ctx, &mut app, vec![key(Key::W, ctrl_modifiers())]);
+        settle(&ctx, &mut app);
+        assert!(app.close.is_some(), "the close prompt is open");
+        std::fs::write(&path, b"a = 1\nexternal = 99\n").expect("external edit");
+        let save = prompt_button(&app, UnsavedAnswer::Save);
+        pointer_click(&ctx, &mut app, save);
+        settle(&ctx, &mut app);
+
+        assert!(app.conflict.is_some(), "the prompt's Save checks the disk");
+        assert!(
+            app.close.is_some(),
+            "the close question waits under the conflict"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 1\nexternal = 99\n",
+            "the close prompt's Save wrote nothing"
+        );
+
+        let keep = conflict_button(&app, ConflictAnswer::KeepMine);
+        pointer_click(&ctx, &mut app, keep);
+        settle(&ctx, &mut app);
+
+        assert!(app.conflict.is_none());
+        assert!(app.close.is_none(), "Keep mine finished the close flow");
+        assert_eq!(app.workbench.documents().len(), tabs - 1);
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 2\n",
+            "the tab closed only after the deliberate overwrite"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn regaining_focus_marks_the_tab_before_any_save() {
+        let path = fixture("conflict-focus", b"a = 1\n");
+        let mut workbench = opened_workbench(&path);
+        let index = workbench.active();
+        workbench.set_source(index, "a = 1\nb = 2\n".to_string());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        settle(&ctx, &mut app);
+        assert!(!app.workbench.documents()[index]
+            .tab_label()
+            .contains("changed on disk"));
+
+        // The window was in the background while another program wrote the file; regaining focus
+        // must probe immediately rather than wait for the 750 ms poll.
+        app.window_focused = false;
+        std::fs::write(&path, b"a = 1\nexternal = 99\n").expect("external edit");
+        app.poll_disk_changes(&ctx);
+
+        assert_eq!(
+            app.workbench.documents()[index].disk_status,
+            crate::document_io::DiskStatus::Changed
+        );
+        assert!(app.workbench.documents()[index]
+            .tab_label()
+            .contains("changed on disk"));
+        assert!(
+            app.workbench.documents()[index]
+                .logs
+                .iter()
+                .any(|line| line.text.contains("changed on disk")),
+            "the external change is logged so the user learns before saving"
         );
         let _ = std::fs::remove_file(&path);
     }

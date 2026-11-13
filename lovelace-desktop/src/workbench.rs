@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::completion::{self, CompletionItem};
-use crate::document_io::{self, LoadedFile, NewlineStyle};
+use crate::document_io::{self, DiskState, DiskStatus, FileSnapshot, LoadedFile, NewlineStyle};
 use crate::engine::{self, DEFAULT_PRECISION, EngineState, PlotCapture};
 use crate::execution::{
     DesktopEvent, Diagnostic, DocumentId, EvaluatorFactory, EventSink, ExecutionHost, RunHandle,
@@ -67,8 +67,105 @@ pub enum SaveOutcome {
     /// The document has no path yet, so the window must ask for one and call
     /// [`Workbench::save_as`].
     NeedsPath,
+    /// DOC-006: the target changed on disk (or was deleted, or already exists without a recorded
+    /// version), so nothing was written. The window shows [`FileConflict`] and asks the user to
+    /// Reload / Keep mine / Cancel before any byte reaches the file.
+    Conflict(FileConflict),
     /// The write failed; the message is logged and returned for the caller to surface.
     Failed(String),
+}
+
+/// DOC-006: a refused write, with both states the user needs in order to decide.
+///
+/// The prompt shows `recorded` (the version the buffer was based on) beside `current` (the version
+/// on disk now) and offers Reload, Keep mine and Cancel. `target` is the file the save would have
+/// written: the document's own path for Save, the chosen path for Save As.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileConflict {
+    /// The file the refused save would have written.
+    pub path: PathBuf,
+    /// The version recorded at open or at the last successful save. `None` when this write has no
+    /// baseline of its own: Save As onto an existing file the document never read, for example.
+    pub recorded: Option<FileSnapshot>,
+    /// The file's state now.
+    pub current: DiskState,
+    /// Size of the buffer that was about to be written.
+    pub buffer_bytes: usize,
+    /// True when the buffer has unsaved changes.
+    pub buffer_dirty: bool,
+    /// True when the target is not the document's own file (Save As onto an existing path).
+    pub other_target: bool,
+}
+
+impl FileConflict {
+    /// The one-word reason shown in the prompt's title.
+    pub fn headline(&self) -> &'static str {
+        match &self.current {
+            DiskState::Missing => "File missing on disk",
+            DiskState::Unreadable { .. } => "File unreadable on disk",
+            DiskState::Present(_) if self.other_target => "File already exists",
+            DiskState::Present(_) => "File changed on disk",
+        }
+    }
+
+    /// The recorded side of the comparison, as one line.
+    pub fn recorded_line(&self) -> String {
+        match &self.recorded {
+            Some(snapshot) => format!("When this tab read it: {}", snapshot.summary()),
+            None if self.other_target => {
+                "When this tab read it: nothing; this is a different file".to_string()
+            }
+            None => "When this tab read it: no size/time/hash was recorded".to_string(),
+        }
+    }
+
+    /// The current side of the comparison, as one line.
+    pub fn current_line(&self) -> String {
+        format!("On disk now: {}", self.current.summary())
+    }
+
+    /// A short log sentence naming the difference.
+    pub fn log_line(&self) -> String {
+        let reason = match &self.current {
+            DiskState::Missing => "the file is no longer on disk (deleted or renamed)".to_string(),
+            DiskState::Unreadable { message } => format!("the file cannot be read: {message}"),
+            DiskState::Present(_) if self.other_target => {
+                "the target is a different file that already exists".to_string()
+            }
+            DiskState::Present(_) => match &self.recorded {
+                Some(recorded) => match self.current.snapshot() {
+                    Some(current) => format!(
+                        "it changed on disk (was {} bytes / {}, now {} bytes / {})",
+                        recorded.size,
+                        recorded.hash_label(),
+                        current.size,
+                        current.hash_label()
+                    ),
+                    None => "it changed on disk".to_string(),
+                },
+                None => "its on-disk version was never recorded".to_string(),
+            },
+        };
+        format!("Save withheld: nothing was written because {reason}.")
+    }
+
+    /// True when the three recorded fields still describe the file on disk.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn matches(&self) -> bool {
+        match (&self.recorded, &self.current) {
+            (Some(recorded), DiskState::Present(current)) => recorded == current,
+            _ => false,
+        }
+    }
+}
+
+/// DOC-006: how a write treats the target's current state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteMode {
+    /// Compare the target with the recorded snapshot and refuse on any difference.
+    Checked,
+    /// The user has seen the conflict and chose Keep mine: write deliberately and re-record.
+    Forced,
 }
 
 /// The file name of `path`, or the whole path when it has none.
@@ -86,6 +183,17 @@ fn file_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()
+}
+
+/// DOC-006: moves a 0-based (row, column) caret into a source text, clamping both coordinates.
+///
+/// Reload replaces the buffer with text the caret may not fit; a caret past the end of a row would
+/// make the window's editor index outside its own lines.
+fn clamp_caret(source: &str, caret: (usize, usize)) -> (usize, usize) {
+    let lines: Vec<&str> = source.split('\n').collect();
+    let row = caret.0.min(lines.len().saturating_sub(1));
+    let line = lines[row].strip_suffix('\r').unwrap_or(lines[row]);
+    (row, caret.1.min(line.chars().count()))
 }
 
 /// One document that a launch restore puts back, before it becomes a [`WorkbenchDocument`].
@@ -110,6 +218,8 @@ struct RestoredDocument {
     bom: bool,
     /// The source file's mtime when it was opened, when known.
     source_mtime: Option<SystemTime>,
+    /// DOC-006: the size, modification time and content hash recorded for that file.
+    source_snapshot: Option<FileSnapshot>,
     /// The file's own bytes, for a byte-identical clean save. `None` for a recovered buffer.
     original_bytes: Option<Vec<u8>>,
     /// Caret to restore, as 0-based row and column.
@@ -193,6 +303,11 @@ pub struct WorkbenchDocument {
     /// The recovery record carries it so a recovered buffer still names the version of the file
     /// it was typed against; conflict detection (DOC-006) reads the same value.
     pub source_mtime: Option<SystemTime>,
+    /// DOC-006: the size, modification time and content hash recorded when this tab last read or
+    /// wrote the file. A save whose target no longer matches this snapshot is refused.
+    pub source_snapshot: Option<FileSnapshot>,
+    /// DOC-006: the last external-change check's result, shown as the tab's conflict marker.
+    pub disk_status: DiskStatus,
     /// DOC-005: the caret to journal with the buffer, as 0-based row and column.
     ///
     /// The window copies its editor's caret here every frame; the workbench itself never derives
@@ -328,8 +443,16 @@ impl WorkbenchDocument {
     /// concurrent runs are only observable in one window if each tab says what its own run is
     /// doing. `Idle` adds nothing (the common case stays quiet); every other state appends its
     /// status-strip label, so the words match the active document's `run <state>` text exactly.
+    ///
+    /// DOC-006: an external change is part of that state too. A tab whose file changed or
+    /// disappeared on disk appends the marker *before* the run state, so the user learns about the
+    /// conflict from the tab strip rather than only when a save is refused.
     pub fn tab_label(&self) -> String {
-        let title = self.title_with_marker();
+        let mut title = self.title_with_marker();
+        if let Some(marker) = self.disk_status.marker() {
+            title.push_str(" · ");
+            title.push_str(marker);
+        }
         match self.state() {
             RunState::Idle => title,
             state => format!("{title} · {}", state.label()),
@@ -926,6 +1049,8 @@ impl Workbench {
         doc.newline = loaded.newline;
         doc.bom = loaded.bom;
         doc.source_mtime = file_mtime(path);
+        doc.source_snapshot = document_io::probe(path).snapshot();
+        doc.disk_status = DiskStatus::Clean;
         doc.caret = (0, 0);
         doc.selection = None;
         doc.original_bytes = Some(loaded.bytes);
@@ -987,23 +1112,212 @@ impl Workbench {
     }
 
     /// Writes a document to its own path, or reports that it needs one.
+    ///
+    /// DOC-006: the file on disk is compared with the recorded snapshot first. If it changed, was
+    /// deleted or cannot be read, nothing is written and the caller receives the conflict.
     pub fn save(&mut self, index: usize) -> SaveOutcome {
         let Some(path) = self.docs.get(index).and_then(|doc| doc.path.clone()) else {
             return SaveOutcome::NeedsPath;
         };
-        self.write_document(index, path)
+        self.write_document(index, path, WriteMode::Checked)
     }
 
     /// Writes a document to `path` and adopts it as the document's file.
     ///
     /// DOC-002: Save As updates the path, the tab title and the recent list, and the tab is clean
-    /// afterwards because the bytes on disk are the bytes in the buffer.
+    /// afterwards because the bytes on disk are the bytes in the buffer. DOC-006: an existing
+    /// target that is not this document's own file is refused too, because the document has no
+    /// recorded version of it; the user has to see the prompt and keep the buffer deliberately.
     pub fn save_as(&mut self, index: usize, path: PathBuf) -> SaveOutcome {
-        self.write_document(index, path)
+        self.write_document(index, path, WriteMode::Checked)
     }
 
-    /// The shared write: pick the bytes, write them, adopt the path and clear the dirty marker.
-    fn write_document(&mut self, index: usize, path: PathBuf) -> SaveOutcome {
+    /// DOC-006: the deliberate overwrite behind the conflict prompt's **Keep mine**.
+    ///
+    /// This is not a save path a shortcut can reach: the window calls it only from the prompt
+    /// button, after showing the user the recorded and current state. It writes the buffer and
+    /// re-records the snapshot from the file that now exists.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn keep_mine(&mut self, index: usize) -> SaveOutcome {
+        let Some(path) = self.docs.get(index).and_then(|doc| doc.path.clone()) else {
+            return SaveOutcome::NeedsPath;
+        };
+        self.keep_mine_to(index, path)
+    }
+
+    /// DOC-006: **Keep mine** for the path the prompt was opened for (Save As' target).
+    pub fn keep_mine_to(&mut self, index: usize, path: PathBuf) -> SaveOutcome {
+        self.write_document(index, path, WriteMode::Forced)
+    }
+
+    /// DOC-006: the conflict a checked save of this document would report right now, without
+    /// writing anything.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn conflict(&self, index: usize) -> Option<FileConflict> {
+        let doc = self.docs.get(index)?;
+        let path = doc.path.as_ref()?;
+        self.conflict_for(index, path, &document_io::probe(path))
+    }
+
+    /// DOC-006: the conflict a checked save of this document to `path` would report, without
+    /// writing anything. `current` is the probe already taken by the caller.
+    fn conflict_for(
+        &self,
+        index: usize,
+        path: &Path,
+        current: &DiskState,
+    ) -> Option<FileConflict> {
+        let doc = self.docs.get(index)?;
+        let other_target = doc.path.as_deref() != Some(path);
+        let recorded = if other_target { None } else { doc.source_snapshot };
+        let conflict = match (recorded, current) {
+            // A different path that does not exist yet is a new file, not an overwrite.
+            (None, DiskState::Missing) if other_target => return None,
+            // A path that disappears after the document was written is the deleted-file case: the
+            // save must report it and must never recreate the file on its own.
+            (_, DiskState::Missing) => true,
+            (_, DiskState::Unreadable { .. }) => true,
+            (Some(recorded), DiskState::Present(current)) => *current != recorded,
+            // An existing target this document never read: writing it would be a blind overwrite.
+            (None, DiskState::Present(_)) => true,
+        };
+        if !conflict {
+            return None;
+        }
+        Some(FileConflict {
+            path: path.to_path_buf(),
+            recorded,
+            current: current.clone(),
+            buffer_bytes: doc.source.len(),
+            buffer_dirty: doc.dirty(),
+            other_target,
+        })
+    }
+
+    /// DOC-006: re-reads the document's file and replaces the buffer with it.
+    ///
+    /// This is the conflict prompt's **Reload** and the after-the-fact repair for a tab the tab
+    /// strip marked as changed. Nothing is written: only the buffer, its recorded snapshot and the
+    /// panes change. A file that cannot be decoded or is missing is reported and leaves the tab
+    /// exactly as it was, so a failed reload never costs the user their buffer.
+    pub fn reload(&mut self, index: usize) -> Result<(), String> {
+        let Some(path) = self.docs.get(index).and_then(|doc| doc.path.clone()) else {
+            return Err("This document has no file to reload.".to_string());
+        };
+        let loaded = match document_io::read(&path) {
+            Ok(loaded) => loaded,
+            Err(message) => {
+                self.log(index, LogKind::Diagnostic, message.clone());
+                // The file may have been deleted: the tab must say so.
+                self.docs[index].disk_status = match document_io::probe(&path) {
+                    DiskState::Missing => DiskStatus::Missing,
+                    DiskState::Unreadable { .. } => DiskStatus::Unreadable,
+                    DiskState::Present(_) => DiskStatus::Changed,
+                };
+                return Err(message);
+            }
+        };
+        let bytes = loaded.text.len();
+        let snapshot = document_io::probe(&path).snapshot();
+        if let Some(handle) = self.docs[index].run.take() {
+            let _ = self.host.cancel(&handle);
+        }
+        {
+            let doc = &mut self.docs[index];
+            let was_active = doc.state() != RunState::Idle;
+            doc.source = loaded.text;
+            doc.saved_source = doc.source.clone();
+            doc.newline = loaded.newline;
+            doc.bom = loaded.bom;
+            doc.original_bytes = Some(loaded.bytes);
+            doc.source_mtime = file_mtime(&path);
+            doc.source_snapshot = snapshot;
+            doc.disk_status = DiskStatus::Clean;
+            doc.caret = clamp_caret(&doc.source, doc.caret);
+            doc.selection = None;
+            doc.revision = doc.revision.saturating_add(1);
+            doc.snapshot = None;
+            doc.last_plot = None;
+            doc.pending_logs.clear();
+            doc.current_statement = None;
+            doc.committed = 0;
+            doc.total = 0;
+            doc.elapsed_ms = 0;
+            if was_active {
+                doc.run_state.reset("document reloaded from disk");
+            }
+        }
+        let detail = self.docs[index].encoding_label();
+        self.log(
+            index,
+            LogKind::Info,
+            format!("Reloaded {} ({bytes} bytes, {detail}).", path.display()),
+        );
+        Ok(())
+    }
+
+    /// DOC-006: re-probes every located document and updates its tab indicator.
+    ///
+    /// The window calls this when it regains focus and on a short poll, so a change made by another
+    /// program is visible in the tab strip before the user tries to save. It returns the indices
+    /// whose status changed; each transition is logged once, not once per poll.
+    pub fn refresh_disk_status(&mut self) -> Vec<usize> {
+        let mut changed = Vec::new();
+        for index in 0..self.docs.len() {
+            let Some(path) = self.docs[index].path.clone() else {
+                continue;
+            };
+            let current = document_io::probe(&path);
+            let status = match (&self.docs[index].source_snapshot, &current) {
+                (_, DiskState::Missing) => DiskStatus::Missing,
+                (_, DiskState::Unreadable { .. }) => DiskStatus::Unreadable,
+                (Some(recorded), DiskState::Present(current)) if recorded == current => {
+                    DiskStatus::Clean
+                }
+                (_, DiskState::Present(_)) => DiskStatus::Changed,
+            };
+            if status == self.docs[index].disk_status {
+                continue;
+            }
+            self.docs[index].disk_status = status;
+            let title = self.docs[index].title.clone();
+            match status {
+                DiskStatus::Changed => self.log(
+                    index,
+                    LogKind::Info,
+                    format!(
+                        "{title} changed on disk since this tab read it; Save will ask before \
+                         overwriting it."
+                    ),
+                ),
+                DiskStatus::Missing => self.log(
+                    index,
+                    LogKind::Info,
+                    format!(
+                        "{title} is no longer on disk (deleted or renamed); Save will ask before \
+                         recreating it."
+                    ),
+                ),
+                DiskStatus::Unreadable => self.log(
+                    index,
+                    LogKind::Info,
+                    format!("{title} exists on disk but cannot be read; Save will ask first."),
+                ),
+                DiskStatus::Clean => self.log(
+                    index,
+                    LogKind::Info,
+                    format!("{title} on disk matches the version this tab read again."),
+                ),
+                DiskStatus::NotLocated => {}
+            }
+            changed.push(index);
+        }
+        changed
+    }
+
+    /// The shared write: pick the bytes, check the target, write, adopt the path and record the
+    /// new snapshot.
+    fn write_document(&mut self, index: usize, path: PathBuf, mode: WriteMode) -> SaveOutcome {
         let prepared = match self.docs.get(index) {
             None => Err("No document is open.".to_string()),
             Some(doc) => {
@@ -1022,8 +1336,24 @@ impl Workbench {
             Ok(prepared) => prepared,
             Err(message) => return SaveOutcome::Failed(message),
         };
+        // DOC-006: every checked write compares the target with its recorded snapshot *after* the
+        // bytes are chosen and immediately before the write, so no earlier check can go stale.
+        if mode == WriteMode::Checked {
+            let current = document_io::probe(&path);
+            if let Some(conflict) = self.conflict_for(index, &path, &current) {
+                self.docs[index].disk_status = match &conflict.current {
+                    DiskState::Missing => DiskStatus::Missing,
+                    DiskState::Unreadable { .. } => DiskStatus::Unreadable,
+                    DiskState::Present(_) => DiskStatus::Changed,
+                };
+                self.log(index, LogKind::Info, conflict.log_line());
+                return SaveOutcome::Conflict(conflict);
+            }
+        }
         match document_io::write(&path, &bytes) {
             Ok(written) => {
+                let snapshot = document_io::probe(&path).snapshot();
+                let forced = mode == WriteMode::Forced;
                 {
                     let doc = &mut self.docs[index];
                     doc.path = Some(path.clone());
@@ -1033,13 +1363,25 @@ impl Workbench {
                     doc.newline = NewlineStyle::detect(&doc.source);
                     doc.bom = bom;
                     doc.source_mtime = file_mtime(&path);
+                    // DOC-006: the snapshot is re-recorded from the file as written, so the next
+                    // save compares against what this save actually produced.
+                    doc.source_snapshot = snapshot;
+                    doc.disk_status = DiskStatus::Clean;
                 }
                 let detail = self.docs[index].encoding_label();
                 self.add_recent(&path);
                 self.log(
                     index,
                     LogKind::Info,
-                    format!("Saved {} ({written} bytes, {detail}).", path.display()),
+                    if forced {
+                        format!(
+                            "Saved {} ({written} bytes, {detail}) after the user kept this \
+                             buffer over the disk version.",
+                            path.display()
+                        )
+                    } else {
+                        format!("Saved {} ({written} bytes, {detail}).", path.display())
+                    },
                 );
                 SaveOutcome::Saved {
                     path,
@@ -1210,6 +1552,7 @@ impl Workbench {
                             newline: Some(loaded.newline),
                             bom: loaded.bom,
                             source_mtime: file_mtime(&path),
+                            source_snapshot: document_io::probe(&path).snapshot(),
                             original_bytes: Some(loaded.bytes),
                             caret: (0, 0),
                             selection: None,
@@ -1323,6 +1666,19 @@ impl Workbench {
                 document.caret = record.caret;
                 document.selection = record.selection;
                 document.source_mtime = record.source_mtime;
+                // DOC-006: the restored buffer is based on the file as it stands now, so its
+                // recorded snapshot is the current disk state (where the path still exists).
+                document.source_snapshot = record
+                    .path
+                    .as_deref()
+                    .and_then(|path| document_io::probe(path).snapshot());
+                document.disk_status = if record.path.is_none() {
+                    DiskStatus::NotLocated
+                } else if document.source_snapshot.is_some() {
+                    DiskStatus::Clean
+                } else {
+                    DiskStatus::Missing
+                };
                 document.revision = document.revision.saturating_add(1);
                 document.snapshot = None;
                 document.last_plot = None;
@@ -1377,22 +1733,29 @@ impl Workbench {
     fn restored_from_record(record: &RecoveryRecord, id: DocumentId) -> RestoredDocument {
         // The disk text is the "saved" side of the dirty comparison: a recovered buffer whose
         // text happens to equal the file's is not dirty, one that differs is.
-        let saved_source = record
+        let disk_text = record
             .path
             .as_deref()
             .and_then(|path| document_io::read(path).ok())
-            .map(|loaded| loaded.text)
-            .unwrap_or_default();
+            .map(|loaded| loaded.text);
+        // DOC-006: a recovered buffer is based on the file as it stands at restore time. That
+        // snapshot is what a later save compares against, so recovering does not itself make the
+        // next save look like a conflict, while a change made after the recovery still does.
+        let source_snapshot = record
+            .path
+            .as_deref()
+            .and_then(|path| document_io::probe(path).snapshot());
         RestoredDocument {
             id,
             title: record.title.clone(),
             path: record.path.clone(),
             source: record.source.clone(),
-            saved_source,
+            saved_source: disk_text.unwrap_or_default(),
             // The journal holds the buffer's own line endings, so the style is detected from it.
             newline: None,
             bom: record.bom,
             source_mtime: record.source_mtime,
+            source_snapshot,
             // A recovered buffer was never written from this process, so there are no file bytes
             // to write back verbatim: a save re-encodes the text the user recovered.
             original_bytes: None,
@@ -1404,12 +1767,23 @@ impl Workbench {
     /// Appends one restored document and returns its index.
     fn install_document(&mut self, restored: RestoredDocument) -> usize {
         let mut document = WorkbenchDocument::new(restored.id, &restored.title, &restored.source);
+        document.disk_status = match (&restored.path, &restored.source_snapshot) {
+            // The snapshot was taken from the file at restore time.
+            (Some(_), Some(_)) => DiskStatus::Clean,
+            (Some(path), None) => match document_io::probe(path) {
+                DiskState::Missing => DiskStatus::Missing,
+                DiskState::Unreadable { .. } => DiskStatus::Unreadable,
+                DiskState::Present(_) => DiskStatus::Changed,
+            },
+            (None, _) => DiskStatus::NotLocated,
+        };
         document.path = restored.path;
         document.newline = restored
             .newline
             .unwrap_or_else(|| NewlineStyle::detect(&restored.source));
         document.bom = restored.bom;
         document.source_mtime = restored.source_mtime;
+        document.source_snapshot = restored.source_snapshot;
         document.caret = restored.caret;
         document.selection = restored.selection;
         document.saved_source = restored.saved_source;
@@ -2421,6 +2795,8 @@ impl WorkbenchDocument {
             newline: NewlineStyle::detect(source),
             bom: false,
             source_mtime: None,
+            source_snapshot: None,
+            disk_status: DiskStatus::NotLocated,
             caret: (0, 0),
             selection: None,
             source: source.to_string(),
@@ -4976,6 +5352,328 @@ mod tests {
         assert_eq!(
             recent.first().map(String::as_str),
             Some(path.to_string_lossy().as_ref())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // DOC-006: never overwrite a file that changed on disk.
+    // -----------------------------------------------------------------------------------------
+
+    /// Opens `name` with `bytes` and returns the scratch path and the workbench.
+    fn opened_file(name: &str, bytes: &[u8]) -> (PathBuf, Workbench, usize) {
+        let path = scratch(name);
+        std::fs::write(&path, bytes).expect("fixture");
+        let mut workbench = fake_workbench();
+        let index = workbench.open(&path).expect("open");
+        (path, workbench, index)
+    }
+
+    #[test]
+    fn an_external_modification_is_refused_by_save_and_nothing_on_disk_changes() {
+        let (path, mut workbench, index) = opened_file("conflict-modified", b"a = 1\nb = 2\n");
+        let recorded = workbench.document(index).unwrap().source_snapshot;
+        assert!(recorded.is_some(), "opening records size/time/hash");
+        workbench.set_source(index, "a = 1\nb = 2\nc = 3\n".to_string());
+        let external = b"a = 1\nexternal = 99\n";
+        std::fs::write(&path, external).expect("external edit");
+
+        let outcome = workbench.save(index);
+        let SaveOutcome::Conflict(conflict) = &outcome else {
+            panic!("Save must be refused, not write: {outcome:?}");
+        };
+        assert_eq!(conflict.path, path);
+        assert_eq!(conflict.recorded, recorded, "the prompt names the opened version");
+        assert_ne!(conflict.current.snapshot(), recorded);
+        assert!(conflict.buffer_dirty);
+        assert_eq!(conflict.buffer_bytes, "a = 1\nb = 2\nc = 3\n".len());
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            external,
+            "a refused Save must not change one byte"
+        );
+        assert_eq!(
+            workbench.document(index).unwrap().source,
+            "a = 1\nb = 2\nc = 3\n",
+            "the buffer is untouched"
+        );
+        assert!(workbench.document(index).unwrap().dirty());
+        assert_eq!(
+            workbench.document(index).unwrap().disk_status,
+            DiskStatus::Changed,
+            "the tab is marked from the refused write"
+        );
+        assert!(
+            workbench.document(index).unwrap().tab_label().contains("changed on disk"),
+            "the tab label carries the conflict marker: {}",
+            workbench.document(index).unwrap().tab_label()
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn keep_mine_overwrites_after_the_conflict_and_re_records_the_snapshot() {
+        let (path, mut workbench, index) = opened_file("conflict-keep", b"a = 1\nb = 2\n");
+        let recorded = workbench.document(index).unwrap().source_snapshot.unwrap();
+        workbench.set_source(index, "a = 1\nb = 2\nc = 3\n".to_string());
+        std::fs::write(&path, b"a = 1\nexternal = 99\n").expect("external edit");
+
+        assert!(matches!(workbench.save(index), SaveOutcome::Conflict(_)));
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 1\nexternal = 99\n",
+            "the refusal still wrote nothing"
+        );
+
+        assert_eq!(
+            workbench.keep_mine(index),
+            SaveOutcome::Saved {
+                path: path.clone(),
+                bytes: 18
+            },
+            "Keep mine writes the buffer deliberately"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 1\nb = 2\nc = 3\n"
+        );
+        let document = workbench.document(index).unwrap();
+        let updated = document.source_snapshot.expect("Keep mine re-records");
+        assert_ne!(updated, recorded, "the snapshot follows the new disk version");
+        assert_eq!(
+            document_io::probe(&path).snapshot(),
+            Some(updated),
+            "the recorded snapshot is exactly the file Keep mine wrote"
+        );
+        assert!(!document.dirty());
+        assert_eq!(document.disk_status, DiskStatus::Clean);
+        // The next save compares against the re-recorded snapshot, so it is not a conflict.
+        assert_eq!(
+            workbench.save(index),
+            SaveOutcome::Saved {
+                path: path.clone(),
+                bytes: 18
+            }
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reload_replaces_the_buffer_with_the_disk_text_and_clears_the_dirty_marker() {
+        let (path, mut workbench, index) = opened_file("conflict-reload", b"a = 1\nb = 2\n");
+        workbench.set_source(index, "a = 1\nb = 2\nc = 3\n".to_string());
+        assert!(workbench.document(index).unwrap().dirty());
+        std::fs::write(&path, b"a = 1\nexternal = 99\n").expect("external edit");
+
+        workbench.reload(index).expect("reload the disk version");
+
+        let document = workbench.document(index).unwrap();
+        assert_eq!(document.source, "a = 1\nexternal = 99\n");
+        assert!(!document.dirty(), "the disk text is the new saved text");
+        assert_eq!(document.path.as_deref(), Some(path.as_path()));
+        assert_eq!(
+            document.source_snapshot,
+            document_io::probe(&path).snapshot(),
+            "the reload re-records the snapshot it loaded"
+        );
+        assert_eq!(document.disk_status, DiskStatus::Clean);
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 1\nexternal = 99\n",
+            "reload writes nothing"
+        );
+        assert!(
+            workbench
+                .document(index)
+                .unwrap()
+                .logs
+                .iter()
+                .any(|line| line.text.contains("Reloaded")),
+            "the reload is logged"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_refused_save_leaves_the_buffer_and_the_file_byte_identical() {
+        let (path, mut workbench, index) = opened_file("conflict-cancel", b"a = 1\n");
+        let external = b"external = 7\n";
+        std::fs::write(&path, external).expect("external edit");
+        let buffer = "a = 1\nb = 2\n".to_string();
+        workbench.set_source(index, buffer.clone());
+
+        // Cancel is the window's decision not to call keep_mine or reload: the workbench must
+        // already have written nothing, and the buffer must be exactly what the user typed.
+        assert!(matches!(workbench.save(index), SaveOutcome::Conflict(_)));
+        assert_eq!(std::fs::read(&path).expect("read back"), external);
+        assert_eq!(workbench.document(index).unwrap().source, buffer);
+        assert!(workbench.document(index).unwrap().dirty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_refuses_to_recreate_a_file_that_was_deleted_on_disk() {
+        let (path, mut workbench, index) = opened_file("conflict-deleted", b"a = 1\n");
+        workbench.set_source(index, "a = 2\n".to_string());
+        std::fs::remove_file(&path).expect("external delete");
+
+        let outcome = workbench.save(index);
+        let SaveOutcome::Conflict(conflict) = &outcome else {
+            panic!("Save must report the missing file, not recreate it: {outcome:?}");
+        };
+        assert_eq!(conflict.current, DiskState::Missing);
+        assert_eq!(conflict.headline(), "File missing on disk");
+        assert!(
+            conflict.log_line().contains("no longer on disk"),
+            "the refusal names the missing file: {}",
+            conflict.log_line()
+        );
+        assert!(!path.exists(), "Save must not recreate the deleted file");
+        assert_eq!(workbench.document(index).unwrap().disk_status, DiskStatus::Missing);
+        // Keep mine is the only path that recreates it, and only after the user has seen this.
+        assert!(matches!(
+            workbench.keep_mine(index),
+            SaveOutcome::Saved { .. }
+        ));
+        assert_eq!(std::fs::read(&path).expect("recreated deliberately"), b"a = 2\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_deleted_file_is_reported_when_the_disk_status_is_refreshed() {
+        let (path, mut workbench, index) = opened_file("conflict-missing-poll", b"a = 1\n");
+        std::fs::remove_file(&path).expect("external delete");
+        assert_eq!(workbench.refresh_disk_status(), vec![index]);
+        let document = workbench.document(index).unwrap();
+        assert_eq!(document.disk_status, DiskStatus::Missing);
+        assert!(document.tab_label().contains("missing on disk"));
+        // No second log line for an unchanged state.
+        let warnings = document
+            .logs
+            .iter()
+            .filter(|line| line.text.contains("no longer on disk"))
+            .count();
+        assert_eq!(warnings, 1);
+        assert!(workbench.refresh_disk_status().is_empty());
+    }
+
+    #[test]
+    fn the_recorded_snapshot_survives_save_as_to_a_new_path() {
+        let (path, mut workbench, index) = opened_file("conflict-save-as", b"a = 1\n");
+        workbench.set_source(index, "a = 2\n".to_string());
+        let new_path = scratch("conflict-save-as-new");
+        let _ = std::fs::remove_file(&new_path);
+
+        assert!(matches!(
+            workbench.save_as(index, new_path.clone()),
+            SaveOutcome::Saved { .. }
+        ));
+        let document = workbench.document(index).unwrap();
+        assert_eq!(document.path.as_deref(), Some(new_path.as_path()));
+        assert_eq!(
+            document.source_snapshot,
+            document_io::probe(&new_path).snapshot(),
+            "the snapshot now describes the file Save As wrote"
+        );
+        assert!(!document.dirty());
+        assert_eq!(std::fs::read(&new_path).expect("read back"), b"a = 2\n");
+        assert_eq!(
+            std::fs::read(&path).expect("the abandoned file"),
+            b"a = 1\n",
+            "Save As to a new path never touches the old file"
+        );
+        // The snapshot survived: an external change to the new path refuses the next Save.
+        std::fs::write(&new_path, b"a = 3\n").expect("external edit");
+        assert!(
+            matches!(workbench.save(index), SaveOutcome::Conflict(_)),
+            "the next Save compares against the Save As snapshot"
+        );
+        assert_eq!(std::fs::read(&new_path).expect("read back"), b"a = 3\n");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&new_path);
+    }
+
+    #[test]
+    fn save_as_onto_another_existing_file_is_refused_as_an_unseen_target() {
+        let (path, mut workbench, index) = opened_file("conflict-foreign", b"a = 1\n");
+        let target = scratch("conflict-foreign-target");
+        std::fs::write(&target, b"someone else's file\n").expect("target fixture");
+
+        let outcome = workbench.save_as(index, target.clone());
+        let SaveOutcome::Conflict(conflict) = &outcome else {
+            panic!("Save As must not silently replace an existing file: {outcome:?}");
+        };
+        assert!(conflict.other_target);
+        assert_eq!(conflict.recorded, None);
+        assert_eq!(conflict.headline(), "File already exists");
+        assert_eq!(
+            std::fs::read(&target).expect("read back"),
+            b"someone else's file\n"
+        );
+        assert_eq!(
+            workbench.document(index).unwrap().path.as_deref(),
+            Some(path.as_path()),
+            "a refused Save As does not adopt the target"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&target);
+    }
+
+    #[test]
+    fn a_same_size_same_time_edit_is_caught_by_the_content_hash() {
+        let (path, mut workbench, index) = opened_file("conflict-hash", b"a = 1\n");
+        let recorded = workbench.document(index).unwrap().source_snapshot.unwrap();
+        workbench.set_source(index, "a = 1\nb = 2\n".to_string());
+        // A same-length rewrite, with the old modification time restored: only the hash can tell
+        // that this is a different file.
+        std::fs::write(&path, b"a = 2\n").expect("same-length external edit");
+        if let Some(time) = recorded.modified {
+            let reopened = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .expect("open for set_modified");
+            reopened.set_modified(time).expect("restore the mtime");
+        }
+        let current = document_io::probe(&path).snapshot().unwrap();
+        assert_eq!(current.size, recorded.size);
+        assert_eq!(current.modified, recorded.modified);
+        assert_ne!(current.hash, recorded.hash, "content hash differs");
+        let outcome = workbench.save(index);
+        let SaveOutcome::Conflict(conflict) = &outcome else {
+            panic!("a same-size, same-time edit must still be refused: {outcome:?}");
+        };
+        assert!(!conflict.matches());
+        assert_eq!(std::fs::read(&path).expect("read back"), b"a = 2\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn refreshing_disk_status_marks_a_changed_tab_and_logs_it_once() {
+        let (path, mut workbench, index) = opened_file("conflict-poll", b"a = 1\n");
+        assert!(workbench.refresh_disk_status().is_empty(), "clean at first");
+        std::fs::write(&path, b"a = 2\n").expect("external edit");
+        assert_eq!(workbench.refresh_disk_status(), vec![index]);
+        assert!(
+            workbench.conflict(index).is_some(),
+            "the read-only conflict view also sees the change"
+        );
+        let document = workbench.document(index).unwrap();
+        assert_eq!(document.disk_status, DiskStatus::Changed);
+        assert!(document.tab_label().contains("changed on disk"));
+        assert_eq!(
+            document
+                .logs
+                .iter()
+                .filter(|line| line.text.contains("changed on disk"))
+                .count(),
+            1,
+            "the poll logs the transition once"
+        );
+        assert!(workbench.refresh_disk_status().is_empty(), "no repeat");
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"a = 2\n",
+            "polling never writes"
         );
         let _ = std::fs::remove_file(&path);
     }

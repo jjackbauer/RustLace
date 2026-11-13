@@ -12,8 +12,10 @@
 
 use std::path::PathBuf;
 
+use crate::document_io::{self, DiskState, FileSnapshot};
 use crate::engine::{self, EngineFactory, Evaluator, PlotCapture, RunOutput};
 use crate::settings::{LayoutFractions, MAX_PRECISION, MIN_PRECISION, Settings};
+use crate::workbench::FileConflict;
 
 /// Maximum number of log entries retained; the oldest are evicted first.
 pub const LOG_CAP: usize = 500;
@@ -160,6 +162,9 @@ pub enum Effect {
     RunRequested(RunRequest),
     /// A document was written to this path.
     Saved(PathBuf),
+    /// DOC-006: the write was refused because the file changed on disk. The shell shows the
+    /// conflict (recorded vs current) and offers Keep mine / Reload / Cancel.
+    Conflict(FileConflict),
     /// The command failed; show this message.
     Error(String),
     /// Repaint the panes from the current state.
@@ -177,6 +182,10 @@ pub enum Command {
     Save,
     /// Save the active document to a new path.
     SaveAs(PathBuf),
+    /// DOC-006: the conflict prompt's Keep mine: overwrite deliberately after the prompt.
+    KeepMine,
+    /// DOC-006: the conflict prompt's Reload: replace the buffer with the disk text.
+    ReloadFile,
     /// Close the active document (refused when it has unsaved changes).
     CloseDocument,
     /// Select a tab by index.
@@ -220,6 +229,9 @@ pub struct Document {
     pub funcs: Vec<(String, Vec<String>)>,
     /// The most recent plot produced by this document's engine.
     pub last_plot: Option<PlotCapture>,
+    /// DOC-006: the size, modification time and content hash recorded when this document last
+    /// read or wrote its file. A write whose target no longer matches it is refused.
+    source_snapshot: Option<FileSnapshot>,
     engine: Box<dyn Evaluator>,
     saved_buffer: String,
     undo: Vec<Snapshot>,
@@ -251,6 +263,7 @@ impl Document {
             vars: Vec::new(),
             funcs: Vec::new(),
             last_plot: None,
+            source_snapshot: None,
             engine,
             saved_buffer: String::new(),
             undo: Vec::new(),
@@ -350,6 +363,12 @@ impl Document {
         self.saved_buffer.clear();
         self.saved_buffer.push_str(&self.buffer);
         self.dirty = false;
+    }
+
+    /// DOC-006: the snapshot recorded when this document last read or wrote its file.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn source_snapshot(&self) -> Option<FileSnapshot> {
+        self.source_snapshot
     }
 
     fn record_undo(&mut self) {
@@ -570,6 +589,8 @@ impl AppState {
             Command::Open(path) => self.open(path),
             Command::Save => self.save(),
             Command::SaveAs(path) => self.save_as(path),
+            Command::KeepMine => self.keep_mine(),
+            Command::ReloadFile => self.reload_file(),
             Command::CloseDocument => self.close_document(),
             Command::SelectTab(index) => self.select_tab(index),
             Command::Run => self.request_run(),
@@ -692,6 +713,9 @@ impl AppState {
                 document.buffer = text;
                 document.mark_saved();
                 document.path = Some(path.clone());
+                // DOC-006: opening records the size, modification time and content hash the
+                // buffer was based on, so the first save can prove the file has not changed.
+                document.source_snapshot = document_io::probe(&path).snapshot();
                 self.documents.push(document);
                 self.active = self.documents.len() - 1;
                 self.settings.add_recent(&path.to_string_lossy());
@@ -708,7 +732,7 @@ impl AppState {
 
     fn save(&mut self) -> Vec<Effect> {
         match self.active_doc().and_then(|document| document.path.clone()) {
-            Some(path) => self.write_active(path),
+            Some(path) => self.write_active(path, false),
             None => {
                 let message = "This document has no path yet; use Save As.".to_string();
                 self.push_log(LogLevel::Warn, message.clone());
@@ -718,32 +742,114 @@ impl AppState {
     }
 
     fn save_as(&mut self, path: PathBuf) -> Vec<Effect> {
-        self.write_active(path)
+        self.write_active(path, false)
     }
 
-    fn write_active(&mut self, path: PathBuf) -> Vec<Effect> {
-        let outcome = match self.documents.get_mut(self.active) {
-            None => Err("No document is open.".to_string()),
-            Some(document) => match std::fs::write(&path, document.buffer.as_bytes()) {
-                Ok(()) => {
+    /// DOC-006: the conflict prompt's Keep mine. It is not reachable from a shortcut or a menu:
+    /// the legacy shell calls it only after the user answered the conflict dialog with Yes.
+    fn keep_mine(&mut self) -> Vec<Effect> {
+        match self.active_doc().and_then(|document| document.path.clone()) {
+            Some(path) => self.write_active(path, true),
+            None => {
+                let message = "This document has no path yet; use Save As.".to_string();
+                self.push_log(LogLevel::Warn, message.clone());
+                vec![Effect::Error(message), Effect::Repaint]
+            }
+        }
+    }
+
+    /// DOC-006: the conflict prompt's Reload. The buffer is replaced by the file's text; nothing is
+    /// written, and a file that cannot be read leaves the buffer as it was.
+    fn reload_file(&mut self) -> Vec<Effect> {
+        let Some(path) = self.active_doc().and_then(|document| document.path.clone()) else {
+            let message = "This document has no file to reload.".to_string();
+            self.push_log(LogLevel::Warn, message.clone());
+            return vec![Effect::Error(message), Effect::Repaint];
+        };
+        let loaded = match document_io::read(&path) {
+            Ok(loaded) => loaded,
+            Err(message) => {
+                self.push_log(LogLevel::Error, message.clone());
+                return vec![Effect::Error(message), Effect::Repaint];
+            }
+        };
+        let snapshot = document_io::probe(&path).snapshot();
+        if let Some(document) = self.active_doc_mut() {
+            document.buffer = loaded.text;
+            document.cursor = document.cursor.min(document.buffer.len());
+            document.mark_saved();
+            document.source_snapshot = snapshot;
+            document.revision = document.revision.saturating_add(1);
+        }
+        self.push_log(
+            LogLevel::Info,
+            format!("Reloaded {} from disk; nothing was written.", path.display()),
+        );
+        vec![Effect::Repaint]
+    }
+
+    /// DOC-006: the one write path. `forced` is true only for Keep mine, which the shell can reach
+    /// only from the conflict prompt, so no ordinary Save can bypass the comparison.
+    fn write_active(&mut self, path: PathBuf, forced: bool) -> Vec<Effect> {
+        let recorded = match self.active_doc() {
+            Some(document) if document.path.as_deref() == Some(path.as_path()) => {
+                document.source_snapshot
+            }
+            _ => None,
+        };
+        let other_target = self
+            .active_doc()
+            .and_then(|document| document.path.as_deref())
+            != Some(path.as_path());
+        if !forced {
+            let current = document_io::probe(&path);
+            let conflict = match (recorded, &current) {
+                (None, DiskState::Missing) if other_target => false,
+                (_, DiskState::Missing) | (_, DiskState::Unreadable { .. }) => true,
+                (Some(recorded), DiskState::Present(current)) => *current != recorded,
+                (None, DiskState::Present(_)) => true,
+            };
+            if conflict {
+                let report = FileConflict {
+                    path: path.clone(),
+                    recorded,
+                    current,
+                    buffer_bytes: self.active_doc().map(|document| document.buffer.len()).unwrap_or(0),
+                    buffer_dirty: self.active_doc().map(|document| document.dirty).unwrap_or(false),
+                    other_target,
+                };
+                self.push_log(LogLevel::Warn, report.log_line());
+                return vec![Effect::Conflict(report), Effect::Repaint];
+            }
+        }
+        let written = match self.documents.get_mut(self.active) {
+            None => Ok(()),
+            Some(document) => match document_io::write(&path, document.buffer.as_bytes()) {
+                Ok(_) => {
                     document.path = Some(path.clone());
                     document.mark_saved();
+                    // DOC-006: re-record the snapshot from the file as written, so the next save
+                    // compares against what this save actually produced.
+                    document.source_snapshot = document_io::probe(&path).snapshot();
                     Ok(())
                 }
                 Err(error) => Err(format!("Cannot save {}: {error}", path.display())),
             },
         };
-        match outcome {
-            Ok(()) => {
-                self.settings.add_recent(&path.to_string_lossy());
-                self.push_log(LogLevel::Info, format!("Saved {}", path.display()));
-                vec![Effect::Saved(path), Effect::Repaint]
-            }
-            Err(message) => {
-                self.push_log(LogLevel::Error, message.clone());
-                vec![Effect::Error(message), Effect::Repaint]
-            }
+        if let Err(message) = written {
+            self.push_log(LogLevel::Error, message.clone());
+            return vec![Effect::Error(message), Effect::Repaint];
         }
+        self.settings.add_recent(&path.to_string_lossy());
+        self.push_log(
+            LogLevel::Info,
+            if forced {
+                format!("Saved {} (the user kept the buffer over the disk version).", path.display())
+            } else {
+                format!("Saved {}", path.display())
+            },
+        );
+        vec![Effect::Saved(path), Effect::Repaint]
     }
 
     fn close_document(&mut self) -> Vec<Effect> {
@@ -1193,6 +1299,113 @@ mod tests {
         assert_eq!(app.documents[1].path.as_deref(), Some(path.as_path()));
         assert!(!app.documents[1].dirty);
         assert_eq!(app.active, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_external_edit_refuses_save_and_keep_mine_writes_it_deliberately() {
+        let dir = scratch("conflict");
+        let path = dir.join("external.lv");
+        std::fs::write(&path, b"a = 1\n").expect("fixture");
+        let mut app = app();
+        app.apply(Command::Open(path.clone()));
+        app.apply(Command::InsertText("b = 2\n".to_string()));
+
+        std::fs::write(&path, b"external = 1\n").expect("external edit");
+        let effects = app.apply(Command::Save);
+        let conflict = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Conflict(report) => Some(report.clone()),
+                _ => None,
+            })
+            .expect("Save must report the conflict");
+        assert_eq!(conflict.recorded.expect("the opened snapshot").size, 6);
+        assert!(conflict.current.snapshot().is_some());
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"external = 1\n",
+            "a refused Save writes nothing"
+        );
+        assert!(app.documents[app.active].dirty);
+
+        let effects = app.apply(Command::KeepMine);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Saved(_))),
+            "Keep mine writes after the prompt: {effects:?}"
+        );
+        assert_eq!(std::fs::read(&path).expect("read back"), b"b = 2\na = 1\n");
+        assert!(!app.documents[app.active].dirty);
+        assert!(
+            app.apply(Command::Save)
+                .iter()
+                .any(|effect| matches!(effect, Effect::Saved(_))),
+            "the snapshot was re-recorded, so the next Save is clean"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_deleted_on_disk_is_reported_by_save_and_not_recreated() {
+        let dir = scratch("deleted");
+        let path = dir.join("gone.lv");
+        std::fs::write(&path, b"a = 1\n").expect("fixture");
+        let mut app = app();
+        app.apply(Command::Open(path.clone()));
+        std::fs::remove_file(&path).expect("external delete");
+
+        let effects = app.apply(Command::Save);
+        let conflict = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Conflict(report) => Some(report.clone()),
+                _ => None,
+            })
+            .expect("Save must report the missing file");
+        assert_eq!(
+            conflict.current,
+            crate::document_io::DiskState::Missing
+        );
+        assert!(!path.exists(), "Save must not recreate a deleted file");
+
+        // Reload cannot bring a deleted file back and leaves the buffer untouched.
+        let effects = app.apply(Command::ReloadFile);
+        assert!(effects.iter().any(|effect| matches!(effect, Effect::Error(_))));
+        assert_eq!(app.documents[app.active].buffer, "a = 1\n");
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reload_replaces_the_buffer_with_the_disk_text_and_clears_dirty() {
+        let dir = scratch("reload");
+        let path = dir.join("reload.lv");
+        std::fs::write(&path, b"a = 1\n").expect("fixture");
+        let mut app = app();
+        app.apply(Command::Open(path.clone()));
+        app.apply(Command::InsertText("b = 2\n".to_string()));
+        let index = app.active;
+        assert!(app.documents[index].dirty);
+
+        std::fs::write(&path, b"external = 1\n").expect("external edit");
+        let effects = app.apply(Command::ReloadFile);
+        assert!(effects.contains(&Effect::Repaint));
+        assert_eq!(app.documents[index].buffer, "external = 1\n");
+        assert!(
+            !app.documents[index].dirty,
+            "the disk text is the new saved text"
+        );
+        assert_eq!(
+            app.documents[index].source_snapshot(),
+            document_io::probe(&path).snapshot()
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            b"external = 1\n",
+            "Reload writes nothing"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

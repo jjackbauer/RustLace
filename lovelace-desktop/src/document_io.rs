@@ -12,9 +12,210 @@
 //! BOM, and it does not re-encode a file that reads as valid UTF-8.
 
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The UTF-8 byte-order mark, as it appears at the start of a file.
 pub const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
+// ---------------------------------------------------------------------------------------------
+// DOC-006: the file's recorded state and the disk's current state.
+//
+// A document remembers the size, modification time and content hash of the file it was opened
+// from and of every file it has successfully written. Before any write the same three values are
+// read from disk again; a difference of any one of them withholds the write. The hash is what
+// catches an edit that kept the size and the timestamp (a same-length rewrite restored to its old
+// mtime), which a size/mtime comparison alone would miss.
+// ---------------------------------------------------------------------------------------------
+
+/// The FNV-1a 64-bit offset basis.
+const HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+/// The FNV-1a 64-bit prime.
+const HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// A stable content hash of a file's bytes (FNV-1a, 64 bits).
+///
+/// It is deliberately not `DefaultHasher`: the value is written into evidence and compared
+/// between runs, so it must not depend on the standard library's choice of algorithm.
+pub fn content_hash(bytes: &[u8]) -> u64 {
+    let mut hash = HASH_OFFSET;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(HASH_PRIME);
+    }
+    hash
+}
+
+/// Everything DOC-006 records about one version of a file: its size, its modification time and a
+/// content hash. Equality of two snapshots is what "the file has not changed" means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileSnapshot {
+    /// Length in bytes of the content that was hashed.
+    pub size: u64,
+    /// The file's modification time, when the platform reports one.
+    pub modified: Option<SystemTime>,
+    /// [`content_hash`] of the content.
+    pub hash: u64,
+}
+
+impl FileSnapshot {
+    /// A snapshot of `bytes` whose modification time is `modified`.
+    pub fn of_bytes(bytes: &[u8], modified: Option<SystemTime>) -> FileSnapshot {
+        FileSnapshot {
+            size: bytes.len() as u64,
+            modified,
+            hash: content_hash(bytes),
+        }
+    }
+
+    /// The hash as eight hexadecimal bytes, for the log and the conflict prompt.
+    pub fn hash_label(&self) -> String {
+        format!("{:016x}", self.hash)
+    }
+
+    /// The modification time as `YYYY-MM-DD HH:MM:SS UTC`, or a word when it is unknown.
+    pub fn time_label(&self) -> String {
+        match self.modified {
+            Some(time) => format_system_time(time),
+            None => "unknown time".to_string(),
+        }
+    }
+
+    /// One line naming all three recorded values, used by the conflict prompt and its tests.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} bytes · {} · content {}",
+            self.size,
+            self.time_label(),
+            self.hash_label()
+        )
+    }
+}
+
+/// The state of a path on disk at the moment it was probed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiskState {
+    /// Nothing exists at the path (deleted or renamed away).
+    Missing,
+    /// The file exists and could be read.
+    Present(FileSnapshot),
+    /// The path exists but could not be read; the message says why.
+    Unreadable {
+        /// The operating system's message.
+        message: String,
+    },
+}
+
+impl DiskState {
+    /// The snapshot, when the file was readable.
+    pub fn snapshot(&self) -> Option<FileSnapshot> {
+        match self {
+            DiskState::Present(snapshot) => Some(*snapshot),
+            _ => None,
+        }
+    }
+
+    /// One line describing the current state for the conflict prompt.
+    pub fn summary(&self) -> String {
+        match self {
+            DiskState::Missing => "deleted or renamed: the file is no longer there".to_string(),
+            DiskState::Present(snapshot) => snapshot.summary(),
+            DiskState::Unreadable { message } => format!("could not be read: {message}"),
+        }
+    }
+}
+
+/// The cached external-change indicator a tab shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskStatus {
+    /// The document has no path yet.
+    NotLocated,
+    /// The path matches the recorded snapshot.
+    Clean,
+    /// The path exists but its size, time or content differ from the recorded snapshot.
+    Changed,
+    /// The path no longer exists.
+    Missing,
+    /// The path exists but could not be read.
+    Unreadable,
+}
+
+impl DiskStatus {
+    /// The tab indicator text, or `None` when there is nothing to say.
+    pub fn marker(self) -> Option<&'static str> {
+        match self {
+            DiskStatus::NotLocated | DiskStatus::Clean => None,
+            DiskStatus::Changed => Some("changed on disk"),
+            DiskStatus::Missing => Some("missing on disk"),
+            DiskStatus::Unreadable => Some("unreadable on disk"),
+        }
+    }
+}
+
+/// Reads `path` and returns its current size, modification time and content hash.
+///
+/// A path that does not exist is [`DiskState::Missing`], not an error: a document whose file was
+/// deleted must be reported as missing rather than treated as a fresh file that a save may create.
+pub fn probe(path: &Path) -> DiskState {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return DiskState::Missing,
+        Err(error) => {
+            return DiskState::Unreadable {
+                message: error.to_string(),
+            };
+        }
+    };
+    let modified = metadata.modified().ok();
+    match std::fs::read(path) {
+        // The size is taken from the bytes that were hashed, so the two cannot disagree even if
+        // the file is being rewritten while it is read.
+        Ok(bytes) => DiskState::Present(FileSnapshot::of_bytes(&bytes, modified)),
+        Err(error) => DiskState::Unreadable {
+            message: error.to_string(),
+        },
+    }
+}
+
+/// Formats a system time as `YYYY-MM-DD HH:MM:SS UTC`.
+///
+/// Dates before 1970 are named rather than formatted; no document in this product can have one.
+pub fn format_system_time(time: SystemTime) -> String {
+    let Ok(duration) = time.duration_since(UNIX_EPOCH) else {
+        return "before 1970".to_string();
+    };
+    let seconds = duration.as_secs();
+    let days = (seconds / 86_400) as i64;
+    let second_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        second_of_day / 3_600,
+        (second_of_day % 3_600) / 60,
+        second_of_day % 60
+    )
+}
+
+/// Converts days since 1970-01-01 to a proleptic Gregorian (year, month, day).
+///
+/// This is Howard Hinnant's civil-from-days algorithm, used so the window can show the file's
+/// modification time without pulling in a date/time dependency.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = (z - era * 146_097) as u64; // [0, 146096]
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era as i64 + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_prime + 2) / 5 + 1) as u32;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
 
 /// One line ending, the separator new text is written with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -376,6 +577,70 @@ mod tests {
             Ok(bytes.len())
         );
         assert_eq!(std::fs::read(&path).expect("read back"), bytes);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_content_hash_is_stable_and_changes_with_every_edit() {
+        // FNV-1a 64 of the empty input is the offset basis, and of "a" is the named value; the
+        // constants are fixed so a hash printed in evidence can be checked by hand.
+        assert_eq!(content_hash(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(content_hash(b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_ne!(content_hash(b"a = 1\nb = 2\n"), content_hash(b"a = 1\nb = 3\n"));
+        // A same-length edit is exactly the case a size-only check would miss.
+        assert_eq!(b"a = 1\nb = 2\n".len(), b"a = 1\nb = 3\n".len());
+    }
+
+    #[test]
+    fn a_snapshot_records_size_time_and_hash_and_summarises_all_three() {
+        let bytes = b"a = 1\n";
+        let modified = Some(UNIX_EPOCH + std::time::Duration::from_secs(1_763_000_000));
+        let snapshot = FileSnapshot::of_bytes(bytes, modified);
+        assert_eq!(snapshot.size, bytes.len() as u64);
+        assert_eq!(snapshot.modified, modified);
+        assert_eq!(snapshot.hash, content_hash(bytes));
+        let summary = snapshot.summary();
+        assert!(summary.contains("6 bytes"), "{summary}");
+        assert!(summary.contains(&snapshot.hash_label()), "{summary}");
+        assert!(summary.contains("02:13:20 UTC"), "{summary}: {summary}");
+    }
+
+    #[test]
+    fn a_system_time_is_formatted_as_a_utc_timestamp() {
+        let epoch = format_system_time(UNIX_EPOCH);
+        assert_eq!(epoch, "1970-01-01 00:00:00 UTC");
+        let leap = format_system_time(UNIX_EPOCH + std::time::Duration::from_secs(951_782_400));
+        assert_eq!(leap, "2000-02-29 00:00:00 UTC");
+        let before = format_system_time(UNIX_EPOCH - std::time::Duration::from_secs(1));
+        assert_eq!(before, "before 1970");
+    }
+
+    #[test]
+    fn probing_a_file_records_its_state_and_a_missing_path_is_missing() {
+        let path = scratch("probe");
+        std::fs::write(&path, b"a = 1\n").expect("write the fixture");
+        let first = probe(&path);
+        let snapshot = first.snapshot().expect("the file is readable");
+        assert_eq!(snapshot.size, 6);
+        assert_eq!(snapshot.hash, content_hash(b"a = 1\n"));
+        assert_eq!(probe(&path), first, "probing twice is equal until it changes");
+
+        std::fs::write(&path, b"a = 2\n").expect("rewrite the fixture");
+        let second = probe(&path);
+        assert_ne!(first, second, "a same-length edit changes the hash");
+        std::fs::remove_file(&path).expect("remove the fixture");
+        assert_eq!(probe(&path), DiskState::Missing);
+    }
+
+    #[test]
+    fn a_probe_that_matches_the_recorded_snapshot_is_clean_and_any_difference_is_changed() {
+        let path = scratch("status");
+        std::fs::write(&path, b"b = 2\n").expect("write the fixture");
+        let recorded = probe(&path).snapshot().expect("readable");
+        let current = probe(&path);
+        assert_eq!(current.snapshot(), Some(recorded));
+        std::fs::write(&path, b"b = 3\n").expect("rewrite the fixture");
+        assert_ne!(probe(&path).snapshot(), Some(recorded));
         let _ = std::fs::remove_file(&path);
     }
 
