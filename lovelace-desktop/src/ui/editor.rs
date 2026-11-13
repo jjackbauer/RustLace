@@ -21,6 +21,7 @@ use crate::diagnostic_map::{self, DiagnosticRange};
 use crate::document_io::NewlineStyle;
 use crate::execution::Diagnostic;
 use crate::history::{self, Caret, EditKind, History, HistoryCommand, Snapshot};
+use crate::settings::EditorSettings;
 
 use super::syntax;
 
@@ -36,6 +37,14 @@ pub const GUTTER_TEXT: Color32 = Color32::from_rgb(0x5c, 0x6b, 0x7d);
 pub const CARET: Color32 = Color32::from_rgb(0xf0, 0xf4, 0xf8);
 /// Selection highlight, painted behind the selected text.
 pub const SELECTION: Color32 = Color32::from_rgb(0x28, 0x4a, 0x5c);
+/// EDT-007: the cell background of a matched bracket pair.
+pub const BRACKET_MATCH_BG: Color32 = Color32::from_rgb(0x1d, 0x4f, 0x4a);
+/// EDT-007: the matched pair's underline / box colour.
+pub const BRACKET_MATCH: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
+/// EDT-007: the cell background of a bracket with no mate.
+pub const BRACKET_UNMATCHED_BG: Color32 = Color32::from_rgb(0x5a, 0x25, 0x25);
+/// EDT-007: the unmatched bracket's underline / box colour, distinct from the matched teal.
+pub const BRACKET_UNMATCHED: Color32 = Color32::from_rgb(0xff, 0x7b, 0x72);
 /// Diagnostic underline colour.
 pub const DIAGNOSTIC_UNDERLINE: Color32 = Color32::from_rgb(0xff, 0x7b, 0x72);
 /// Diagnostic gutter-marker colour; a little deeper than the underline so it reads as a marker.
@@ -76,6 +85,40 @@ pub struct EditorMetrics {
     pub gutter_w: f32,
     /// Vertical scroll offset in pixels.
     pub scroll_y: f32,
+}
+
+/// EDT-007: the bracket next to the caret and, when one exists, its mate.
+///
+/// `bracket` is the bracket on the caret's side: the character at the caret when it is a bracket,
+/// otherwise the character immediately before the caret. `mate` is `None` exactly when the
+/// bracket has no matching partner in the buffer, which is the editor's distinct "unmatched"
+/// state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BracketMatch {
+    /// The bracket character the caret is adjacent to.
+    pub bracket: char,
+    /// The bracket's buffer position, 0-based row and char column.
+    pub at: (usize, usize),
+    /// The matching bracket's position, or `None` when it is unmatched.
+    pub mate: Option<(usize, usize)>,
+}
+
+/// EDT-010: one identifier occurrence the in-file symbol finder can jump to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolHit {
+    /// The identifier text (the first occurrence of each name is kept).
+    pub name: String,
+    /// 0-based row of the identifier.
+    pub row: usize,
+    /// 0-based char column of the identifier's first character.
+    pub col: usize,
+}
+
+impl BracketMatch {
+    /// True when the bracket has a mate and therefore paints in the matched colour.
+    pub fn is_matched(&self) -> bool {
+        self.mate.is_some()
+    }
 }
 
 /// One editable buffer with its own caret and scroll position.
@@ -119,6 +162,8 @@ pub struct TextEditor {
     /// `None` means no selection. When this equals the caret position the selection is empty and
     /// [`TextEditor::selection_range`] reports none.
     pub selection: Option<(usize, usize)>,
+    /// EDT-008: indentation and auto-close behaviour copied from the persisted settings.
+    pub preferences: EditorSettings,
     /// The builtins and symbols the current paint pass classifies. Refreshed from the live
     /// engine snapshot and the document's `symbol("...")` calls, so the highlighter holds no
     /// second builtin or symbol list.
@@ -171,6 +216,7 @@ impl TextEditor {
             completion: CompletionSession::default(),
             history: History::new(),
             selection: None,
+            preferences: EditorSettings::default(),
             syntax: syntax::SyntaxContext::new(),
             syntax_edits: u64::MAX,
             syntax_builtins: Vec::new(),
@@ -289,6 +335,322 @@ impl TextEditor {
             row: self.caret_row,
             col: self.caret_col,
         }
+    }
+
+    /// The character at a 0-based buffer position, when the position is inside the buffer.
+    fn char_at(&self, row: usize, col: usize) -> Option<char> {
+        self.lines.get(row)?.chars().nth(col)
+    }
+
+    /// The bracket the caret is adjacent to: the character at the caret, else the one before it.
+    ///
+    /// Both sides are checked so a caret immediately before `)` and a caret immediately after
+    /// `(` both name that bracket. A non-bracket character on both sides yields `None`.
+    fn bracket_at_caret(&self) -> Option<(usize, usize, char)> {
+        let at = self.char_at(self.caret_row, self.caret_col).filter(|ch| is_bracket(*ch));
+        if let Some(ch) = at {
+            return Some((self.caret_row, self.caret_col, ch));
+        }
+        if self.caret_col > 0 {
+            if let Some(ch) = self
+                .char_at(self.caret_row, self.caret_col - 1)
+                .filter(|ch| is_bracket(*ch))
+            {
+                return Some((self.caret_row, self.caret_col - 1, ch));
+            }
+        }
+        None
+    }
+
+    /// EDT-007: the bracket adjacent to the caret and its mate, if any.
+    ///
+    /// Opening brackets scan forward and closing brackets scan backward, counting only brackets
+    /// of the same kind, so nested pairs of the same kind are skipped and a missing partner is
+    /// reported instead of pairing with the first bracket of another kind. The scan ignores
+    /// brackets inside string literals.
+    pub fn bracket_match(&self) -> Option<BracketMatch> {
+        let (row, col, bracket) = self.bracket_at_caret()?;
+        let mate = self.find_mate(row, col, bracket);
+        Some(BracketMatch {
+            bracket,
+            at: (row, col),
+            mate,
+        })
+    }
+
+    /// Finds the mate of the bracket at `(row, col)`, or `None` when the buffer has none.
+    fn find_mate(&self, row: usize, col: usize, bracket: char) -> Option<(usize, usize)> {
+        let close = closing_bracket(bracket);
+        if let Some(close) = close {
+            let mut depth = 0usize;
+            for line_index in row..self.line_count() {
+                let line = &self.lines[line_index];
+                let start = if line_index == row { col } else { 0 };
+                let mut in_string = false;
+                let mut escaped = false;
+                for (char_col, ch) in line.chars().enumerate().skip(start) {
+                    if in_string {
+                        if escaped {
+                            escaped = false;
+                        } else if ch == '\\' {
+                            escaped = true;
+                        } else if ch == '"' {
+                            in_string = false;
+                        }
+                        continue;
+                    }
+                    if ch == '"' {
+                        in_string = true;
+                    } else if ch == bracket {
+                        depth += 1;
+                    } else if ch == close {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            return Some((line_index, char_col));
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+        let open = opening_bracket(bracket)?;
+        let mut depth = 0usize;
+        for line_index in (0..=row).rev() {
+            let line = &self.lines[line_index];
+            let end = if line_index == row {
+                col + 1
+            } else {
+                line.chars().count()
+            };
+            let chars: Vec<char> = line.chars().take(end).collect();
+            let mut in_string = false;
+            let mut escaped = false;
+            for char_col in (0..chars.len()).rev() {
+                let ch = chars[char_col];
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_string = false;
+                    }
+                    continue;
+                }
+                if ch == '"' {
+                    // Opening a string we are now scanning backwards through; the quote parity
+                    // is approximate, but a bracket inside a string never matches outside it.
+                    in_string = true;
+                } else if ch == bracket {
+                    depth += 1;
+                } else if ch == open {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some((line_index, char_col));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// EDT-010: moves the caret to the mate of the bracket adjacent to it.
+    ///
+    /// Returns false when the caret is not adjacent to a bracket or the bracket is unmatched;
+    /// the caret and selection are untouched in that case.
+    pub fn jump_to_matching_bracket(&mut self) -> bool {
+        let Some(matched) = self.bracket_match() else {
+            return false;
+        };
+        let Some((row, col)) = matched.mate else {
+            return false;
+        };
+        self.caret_row = row;
+        self.caret_col = col.min(self.line_chars(row));
+        self.selection = None;
+        self.history.break_burst();
+        true
+    }
+
+    /// EDT-007: the one-line bracket state the pane header publishes (and a capture records).
+    ///
+    /// A matched pair names both positions and the two bracket characters; an unmatched bracket
+    /// says so explicitly, which is the distinct state the row requires.
+    pub fn bracket_status(&self) -> Option<String> {
+        let matched = self.bracket_match()?;
+        match matched.mate {
+            Some((row, col)) => Some(format!(
+                "Bracket {} at {}:{} matched by {} at {}:{}",
+                matched.bracket,
+                matched.at.0 + 1,
+                matched.at.1 + 1,
+                matching_partner(matched.bracket),
+                row + 1,
+                col + 1
+            )),
+            None => Some(format!(
+                "Unmatched {} at {}:{}",
+                matched.bracket,
+                matched.at.0 + 1,
+                matched.at.1 + 1
+            )),
+        }
+    }
+
+    /// EDT-010: moves the caret to a 1-based line, or 1-based line and column.
+    ///
+    /// Accepts `"12"`, `"12:4"` and surrounding whitespace. The line must exist; a column past
+    /// the line's end is clamped to the end of that line. Returns the reached 1-based caret
+    /// position on success and a user-readable reason on failure.
+    pub fn go_to_line(&mut self, spec: &str) -> Result<(usize, usize), String> {
+        let text = spec.trim();
+        if text.is_empty() {
+            return Err("Go to line needs a line number.".to_string());
+        }
+        let (line_text, column_text) = match text.split_once(':') {
+            Some((line, column)) => (line.trim(), column.trim()),
+            None => (text, ""),
+        };
+        let line: usize = line_text
+            .parse()
+            .map_err(|_| format!("'{line_text}' is not a line number."))?;
+        if line == 0 || line > self.line_count() {
+            return Err(format!(
+                "Line {line} is outside 1..={}.",
+                self.line_count()
+            ));
+        }
+        let row = line - 1;
+        let col = if column_text.is_empty() {
+            0
+        } else {
+            let column: usize = column_text
+                .parse()
+                .map_err(|_| format!("'{column_text}' is not a column number."))?;
+            if column == 0 {
+                return Err("Column numbers are 1-based.".to_string());
+            }
+            (column - 1).min(self.line_chars(row))
+        };
+        self.caret_row = row;
+        self.caret_col = col;
+        self.selection = None;
+        self.history.break_burst();
+        Ok(self.line_col_1based())
+    }
+
+    /// EDT-010: every identifier in the document, first occurrence per name, keywords excluded.
+    ///
+    /// Identifiers inside plain and interpolated string literals are text, not symbols, and are
+    /// skipped. The document order is preserved, so the finder lists symbols top to bottom.
+    pub fn document_symbols(&self) -> Vec<SymbolHit> {
+        let mut hits: Vec<SymbolHit> = Vec::new();
+        for (row, line) in self.lines.iter().enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let mut col = 0usize;
+            let mut in_string = false;
+            let mut escaped = false;
+            while col < chars.len() {
+                let ch = chars[col];
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_string = false;
+                    }
+                    col += 1;
+                    continue;
+                }
+                if ch == '"' {
+                    in_string = true;
+                    col += 1;
+                    continue;
+                }
+                if is_ident_start(ch) {
+                    let start = col;
+                    col += 1;
+                    while col < chars.len() && is_ident_continue(chars[col]) {
+                        col += 1;
+                    }
+                    let name: String = chars[start..col].iter().collect();
+                    let keyword = crate::language::KEYWORDS.contains(&name.as_str());
+                    if !keyword && !hits.iter().any(|hit| hit.name == name) {
+                        hits.push(SymbolHit {
+                            name,
+                            row,
+                            col: start,
+                        });
+                    }
+                    continue;
+                }
+                col += 1;
+            }
+        }
+        hits
+    }
+
+    /// EDT-010: filters [`TextEditor::document_symbols`] by a case-insensitive substring.
+    ///
+    /// An empty query returns every identifier, which is the list the prompt shows when it opens.
+    pub fn find_symbols(&self, query: &str) -> Vec<SymbolHit> {
+        let needle = query.trim().to_ascii_lowercase();
+        self.document_symbols()
+            .into_iter()
+            .filter(|hit| hit.name.to_ascii_lowercase().contains(&needle))
+            .collect()
+    }
+
+    /// EDT-010: moves the caret to a symbol occurrence. Returns false for a stale position.
+    pub fn jump_to_symbol(&mut self, hit: &SymbolHit) -> bool {
+        if hit.row >= self.line_count() {
+            return false;
+        }
+        self.caret_row = hit.row;
+        self.caret_col = hit.col.min(self.line_chars(hit.row));
+        self.selection = None;
+        self.history.break_burst();
+        true
+    }
+
+    /// The display column of a char column, expanding a tab to the configured indent width.
+    ///
+    /// The caret is stored in chars (one cell per char); tabs are painted `indent_width` cells
+    /// wide, so every screen coordinate (caret, selection, diagnostic underline, bracket box)
+    /// goes through this conversion.
+    pub fn display_column(&self, row: usize, col: usize) -> usize {
+        let width = self.preferences.indent_width.max(1);
+        self.lines
+            .get(row)
+            .map(|line| {
+                line.chars()
+                    .take(col)
+                    .map(|ch| if ch == '\t' { width } else { 1 })
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    /// The char column under a display column, the inverse of [`TextEditor::display_column`].
+    fn char_column_at(&self, row: usize, display_col: usize) -> usize {
+        let Some(line) = self.lines.get(row) else {
+            return 0;
+        };
+        let width = self.preferences.indent_width.max(1);
+        let mut column = 0usize;
+        for (index, ch) in line.chars().enumerate() {
+            let cells = if ch == '\t' { width } else { 1 };
+            if display_col < column + cells {
+                return if display_col - column < cells / 2 {
+                    index
+                } else {
+                    index + 1
+                };
+            }
+            column += cells;
+        }
+        line.chars().count()
     }
 
     /// The current editor state, which is exactly what one undo step stores.
@@ -471,23 +833,79 @@ impl TextEditor {
     /// Inserts typed text at the caret, splitting on newlines.
     ///
     /// Consecutive typed insertions coalesce into one undo step until a pause or a non-typing
-    /// action. A non-empty selection is replaced as part of the same step.
+    /// action. A non-empty selection is replaced as part of the same step. With auto-close on
+    /// (EDT-008), a typed opening bracket or quote also inserts its closing character and leaves
+    /// the caret between them, and typing the closing character that is already at the caret
+    /// steps over it instead of inserting a duplicate.
     pub fn insert_str(&mut self, text: &str) {
-        self.insert_text(text, EditKind::Typing);
-    }
-
-    /// Inserts `text` as one undoable edit of `kind`.
-    fn insert_text(&mut self, text: &str, kind: EditKind) {
-        self.insert_text_at(text, kind, Instant::now());
-    }
-
-    /// [`TextEditor::insert_text`] with an explicit clock, for deterministic burst tests.
-    fn insert_text_at(&mut self, text: &str, kind: EditKind, now: Instant) {
         if text.is_empty() && self.ordered_selection().is_none() {
             return;
         }
-        self.begin_edit_at(kind, now);
+        let replaced_selection = self.ordered_selection().is_some();
+        self.begin_edit(EditKind::Typing);
         self.delete_selection();
+        if self.preferences.auto_close && !replaced_selection && !text.contains('\n') {
+            for ch in text.chars() {
+                self.type_character(ch);
+            }
+        } else {
+            self.insert_raw(text);
+        }
+        self.edits += 1;
+    }
+
+    /// Inserts one typed character, applying auto-close and skip-over when configured.
+    fn type_character(&mut self, ch: char) {
+        if is_bracket(ch) || ch == '"' || ch == '\'' {
+            if self.char_at(self.caret_row, self.caret_col) == Some(ch) && is_closing(ch) {
+                // The configured pair is already there: step over it rather than duplicate it.
+                self.caret_col += 1;
+                return;
+            }
+        }
+        self.insert_char_raw(ch);
+        if let Some(close) = closing_bracket(ch).or_else(|| quote_pair(ch)) {
+            if self.should_auto_close(ch) {
+                self.insert_char_raw(close);
+                // Leave the caret between the pair, where the next typed character belongs.
+                self.caret_col -= 1;
+            }
+        }
+    }
+
+    /// True when typing `ch` should also insert its closing partner.
+    ///
+    /// Brackets always pair. A quote does not pair after an identifier character (the `'` in a
+    /// word is text, not an opening quote) nor when the character at the caret is an identifier
+    /// character (the quote would split a word rather than open a literal).
+    fn should_auto_close(&self, ch: char) -> bool {
+        if is_bracket(ch) {
+            return true;
+        }
+        if ch != '"' && ch != '\'' {
+            return false;
+        }
+        let before = if self.caret_col >= 2 {
+            self.char_at(self.caret_row, self.caret_col - 2)
+        } else {
+            None
+        };
+        let after = self.char_at(self.caret_row, self.caret_col);
+        let identifier = |character: char| is_ident_continue(character);
+        !before.map(identifier).unwrap_or(false) && !after.map(identifier).unwrap_or(false)
+    }
+
+    /// Inserts one character at the caret without history or edit-counter work.
+    fn insert_char_raw(&mut self, ch: char) {
+        let col = self.caret_col;
+        let line = &mut self.lines[self.caret_row];
+        let byte = byte_index(line, col);
+        line.insert(byte, ch);
+        self.caret_col += 1;
+    }
+
+    /// Inserts `text` verbatim, splitting on newlines, without auto-close.
+    fn insert_raw(&mut self, text: &str) {
         for (index, part) in text.split('\n').enumerate() {
             if index > 0 {
                 self.split_line_at_caret();
@@ -501,6 +919,21 @@ impl TextEditor {
             line.insert_str(byte, part);
             self.caret_col += part.chars().count();
         }
+    }
+
+    /// Inserts `text` as one undoable edit of `kind`, without auto-close.
+    fn insert_text(&mut self, text: &str, kind: EditKind) {
+        self.insert_text_at(text, kind, Instant::now());
+    }
+
+    /// [`TextEditor::insert_text`] with an explicit clock, for deterministic burst tests.
+    fn insert_text_at(&mut self, text: &str, kind: EditKind, now: Instant) {
+        if text.is_empty() && self.ordered_selection().is_none() {
+            return;
+        }
+        self.begin_edit_at(kind, now);
+        self.delete_selection();
+        self.insert_raw(text);
         self.edits += 1;
     }
 
@@ -516,11 +949,119 @@ impl TextEditor {
         self.caret_col = 0;
     }
 
-    /// Splits the current line at the caret as its own undoable edit.
+    /// EDT-008: smart Enter - keep the current indentation and add one level after `{`.
+    ///
+    /// The new line starts with the current line's leading whitespace; when the text before the
+    /// caret (ignoring trailing spaces) ends with an opening brace, one configured indentation
+    /// level is appended. The caret lands after that prefix, so typing continues at the right
+    /// depth without any pointer input.
     pub fn newline(&mut self) {
         self.begin_edit(EditKind::Atomic);
         self.delete_selection();
+        let indent: String = self.lines[self.caret_row]
+            .chars()
+            .take_while(|ch| *ch == ' ' || *ch == '\t')
+            .collect();
+        let before: String = self.lines[self.caret_row]
+            .chars()
+            .take(self.caret_col)
+            .collect();
+        let extra = if before.trim_end().ends_with('{') {
+            self.preferences.indent_unit()
+        } else {
+            String::new()
+        };
+        let prefix: String = format!("{indent}{extra}");
         self.split_line_at_caret();
+        if !prefix.is_empty() {
+            self.lines[self.caret_row].insert_str(0, &prefix);
+            self.caret_col = prefix.chars().count();
+        }
+        self.edits += 1;
+    }
+
+    /// EDT-008: the rows a selection (or the caret when there is none) acts on.
+    fn edit_rows(&self) -> (usize, usize, bool) {
+        match self.selection_range() {
+            Some(((start_row, _), (end_row, _))) => (start_row, end_row, true),
+            None => (self.caret_row, self.caret_row, false),
+        }
+    }
+
+    /// EDT-008: the Tab key's action, shared by the editor's own event loop and the window.
+    ///
+    /// An open completion popup owns Tab (it accepts the highlighted entry). Otherwise Tab
+    /// indents the selection (or inserts a level at the caret) and Shift+Tab outdents it.
+    pub fn handle_tab(&mut self, shift: bool) {
+        if self.completion.is_open() {
+            self.accept_completion();
+        } else if shift {
+            self.outdent();
+        } else {
+            self.indent();
+        }
+    }
+
+    /// EDT-008: Tab - indent every selected line, or insert one level at the caret.
+    ///
+    /// With a non-empty selection every line it touches gets one indentation unit prepended and
+    /// the selection endpoints move with the text they covered, so the same words stay selected.
+    /// With no selection this is an ordinary insertion at the caret.
+    pub fn indent(&mut self) {
+        let (first, last, has_selection) = self.edit_rows();
+        if !has_selection {
+            let unit = self.preferences.indent_unit();
+            self.insert_text(&unit, EditKind::Atomic);
+            return;
+        }
+        let unit = self.preferences.indent_unit();
+        let width = unit.chars().count();
+        self.begin_edit(EditKind::Atomic);
+        for row in first..=last {
+            self.lines[row].insert_str(0, &unit);
+        }
+        if let Some((anchor_row, anchor_col)) = self.selection {
+            if (first..=last).contains(&anchor_row) {
+                self.selection = Some((anchor_row, anchor_col + width));
+            }
+        }
+        if (first..=last).contains(&self.caret_row) {
+            self.caret_col += width;
+        }
+        self.edits += 1;
+    }
+
+    /// EDT-008: Shift+Tab - outdent every selected line, or the caret's line when none is
+    /// selected. At most one indentation level (one tab, or up to `indent_width` spaces) goes.
+    pub fn outdent(&mut self) {
+        let (first, last, _has_selection) = self.edit_rows();
+        let removals: Vec<usize> = (first..=last)
+            .map(|row| outdent_amount(&self.lines[row], self.preferences.indent_width.max(1)))
+            .collect();
+        if removals.iter().all(|removed| *removed == 0) {
+            self.history.break_burst();
+            return;
+        }
+        self.begin_edit(EditKind::Atomic);
+        for (offset, row) in (first..=last).enumerate() {
+            let removed = removals[offset];
+            if removed == 0 {
+                continue;
+            }
+            let byte = byte_index(&self.lines[row], removed);
+            self.lines[row].drain(..byte);
+        }
+        let adjust = |row: usize, col: usize| -> usize {
+            if row >= first && row <= last {
+                col.saturating_sub(removals[row - first])
+            } else {
+                col
+            }
+        };
+        if let Some((anchor_row, anchor_col)) = self.selection {
+            self.selection = Some((anchor_row, adjust(anchor_row, anchor_col)));
+        }
+        self.caret_col = adjust(self.caret_row, self.caret_col);
         self.edits += 1;
     }
 
@@ -729,9 +1270,8 @@ impl TextEditor {
     ) -> (usize, usize) {
         let total = self.line_count().max(1);
         let row = row_at(body, self.scroll_y, row_h, total, position.y);
-        let col = (((position.x - text_left) / char_w).round() as isize)
-            .clamp(0, self.line_chars(row) as isize) as usize;
-        (row, col)
+        let display_col = (((position.x - text_left) / char_w).max(0.0)) as usize;
+        (row, self.char_column_at(row, display_col))
     }
 
     /// Places the caret under a pointer position and clears any selection.
@@ -909,13 +1449,7 @@ impl TextEditor {
                                 }
                             }
                             egui::Key::Tab => {
-                                if self.completion.is_open() {
-                                    self.accept_completion();
-                                } else {
-                                    // Indentation is its own atomic step, not part of a typing
-                                    // burst, so one undo removes the whole two-space indent.
-                                    self.insert_text("  ", EditKind::Atomic);
-                                }
+                                self.handle_tab(modifiers.shift);
                             }
                             egui::Key::Escape => {
                                 // Dismiss only: the buffer and the caret stay exactly as they
@@ -1007,17 +1541,15 @@ impl TextEditor {
             // Keep the arrow keys for the caret. egui's focus system otherwise treats a bare
             // arrow as "move keyboard focus to the closest widget in that direction" before the
             // editor can consume it, which drops focus out of the editor after one Up/Down
-            // (DEF-002). While the popup is open, Tab and Escape belong to it too: Tab accepts
-            // a completion instead of moving focus, and Escape dismisses the popup instead of
-            // surrendering focus. The filter is stored for the NEXT pass, so it is written here,
-            // after the events, when this pass's popup state is final; otherwise the Escape that
-            // dismisses the popup would be seen by egui first and surrender the editor's focus.
+            // (DEF-002). Tab is always locked too: EDT-008 makes Tab indent the selection (and
+            // Shift+Tab outdent it), so egui must not use it for focus traversal. While the
+            // popup is open, Escape belongs to it as well.
             let completion_open = self.completion.is_open();
             ui.memory_mut(|memory| {
                 memory.set_focus_lock_filter(
                     id,
                     egui::EventFilter {
-                        tab: completion_open,
+                        tab: true,
                         escape: completion_open,
                         horizontal_arrows: true,
                         vertical_arrows: true,
@@ -1134,6 +1666,10 @@ impl TextEditor {
         );
 
         let mut laid_out = 0usize;
+        // EDT-007: resolve the bracket pair once for this pass. `bracket_match` is derived from
+        // the caret alone, so every painted row sees the same pair.
+        let bracket_match = self.bracket_match();
+        let tab_width = self.preferences.indent_width.max(1);
         // The selection is painted under the text, one row at a time, so a multi-line range
         // reads as one continuous highlight and never covers a glyph.
         let selection = self.selection_range();
@@ -1151,10 +1687,12 @@ impl TextEditor {
                         self.line_chars(row)
                     };
                     if to > from {
+                        let from_x = text_left + self.display_column(row, from) as f32 * char_w;
+                        let to_x = text_left + self.display_column(row, to) as f32 * char_w;
                         painter.rect_filled(
                             Rect::from_min_max(
-                                pos2(text_left + from as f32 * char_w, y + 1.0),
-                                pos2(text_left + to as f32 * char_w, y + row_h - 1.0),
+                                pos2(from_x, y + 1.0),
+                                pos2(to_x, y + row_h - 1.0),
                             ),
                             1.0,
                             SELECTION,
@@ -1162,8 +1700,41 @@ impl TextEditor {
                     }
                 }
             }
+            // EDT-007: a matched bracket pair gets the teal cell background and underline; an
+            // unmatched bracket gets the distinct red one. They paint under the glyph, so the
+            // bracket character itself stays readable in the capture.
+            if let Some(matched) = bracket_match {
+                let paint_cell = |position: (usize, usize), background: Color32, line: Color32| {
+                    if position.0 != row {
+                        return;
+                    }
+                    let x = text_left + self.display_column(row, position.1) as f32 * char_w;
+                    painter.rect_filled(
+                        Rect::from_min_max(pos2(x, y + 1.0), pos2(x + char_w, y + row_h - 1.0)),
+                        2.0,
+                        background,
+                    );
+                    painter.rect_filled(
+                        Rect::from_min_max(
+                            pos2(x, y + row_h - 2.0),
+                            pos2(x + char_w, y + row_h - 1.0),
+                        ),
+                        1.0,
+                        line,
+                    );
+                };
+                if matched.is_matched() {
+                    paint_cell(matched.at, BRACKET_MATCH_BG, BRACKET_MATCH);
+                    if let Some(mate) = matched.mate {
+                        paint_cell(mate, BRACKET_MATCH_BG, BRACKET_MATCH);
+                    }
+                } else {
+                    paint_cell(matched.at, BRACKET_UNMATCHED_BG, BRACKET_UNMATCHED);
+                }
+            }
             let line = &self.lines[row];
-            let job = syntax::job(line, font.clone(), &syntax::DARK, &self.syntax);
+            let display_line = expand_tabs(line, tab_width);
+            let job = syntax::job(&display_line, font.clone(), &syntax::DARK, &self.syntax);
             let galley = painter.layout_job(job);
             laid_out += 1;
             painter.galley(pos2(text_left, y), galley, syntax::DARK.plain);
@@ -1178,7 +1749,8 @@ impl TextEditor {
                 if range.line == row + 1 {
                     // Underline the offending span, from the reported column to end-of-line.
                     // An empty span (column at EOL) still gets one cell so the failure is visible.
-                    let x0 = text_left + range.start_char as f32 * char_w;
+                    let x0 =
+                        text_left + self.display_column(row, range.start_char) as f32 * char_w;
                     let cells = range.end_char.saturating_sub(range.start_char).max(1);
                     let x1 = x0 + cells as f32 * char_w;
                     painter.rect_filled(
@@ -1229,7 +1801,8 @@ impl TextEditor {
         }
 
         if focused {
-            let caret_x = text_left + self.caret_col as f32 * char_w;
+            let caret_x =
+                text_left + self.display_column(self.caret_row, self.caret_col) as f32 * char_w;
             let caret_y = rect.top() - self.scroll_y + self.caret_row as f32 * row_h;
             painter.line_segment(
                 [
@@ -1351,7 +1924,8 @@ impl TextEditor {
         } else {
             caret_top - height - 3.0
         };
-        let caret_x = text_left + self.caret_col as f32 * char_w;
+        let caret_x =
+            text_left + self.display_column(self.caret_row, self.caret_col) as f32 * char_w;
         let mut x = caret_x;
         let right_limit = rect.right() - 4.0 - width;
         if x > right_limit {
@@ -1427,6 +2001,90 @@ fn completion_colour(kind: CompletionKind) -> Color32 {
     }
 }
 
+/// True for the three bracket pairs EDT-007 matches.
+fn is_bracket(ch: char) -> bool {
+    matches!(ch, '(' | ')' | '[' | ']' | '{' | '}')
+}
+
+/// The closing partner of an opening bracket, if `ch` is one.
+fn closing_bracket(ch: char) -> Option<char> {
+    match ch {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        _ => None,
+    }
+}
+
+/// The opening partner of a closing bracket, if `ch` is one.
+fn opening_bracket(ch: char) -> Option<char> {
+    match ch {
+        ')' => Some('('),
+        ']' => Some('['),
+        '}' => Some('{'),
+        _ => None,
+    }
+}
+
+/// The closing character of a quote pair, if `ch` starts one.
+fn quote_pair(ch: char) -> Option<char> {
+    match ch {
+        '"' => Some('"'),
+        '\'' => Some('\''),
+        _ => None,
+    }
+}
+
+/// True when `ch` can be the closing half of an auto-closed pair.
+fn is_closing(ch: char) -> bool {
+    matches!(ch, ')' | ']' | '}' | '"' | '\'')
+}
+
+/// The bracket that closes `ch` (or opens it), for the status line.
+fn matching_partner(ch: char) -> char {
+    closing_bracket(ch)
+        .or_else(|| opening_bracket(ch))
+        .unwrap_or(ch)
+}
+
+/// True at the first character of a Lovelace identifier.
+fn is_ident_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+/// True inside a Lovelace identifier after its first character.
+fn is_ident_continue(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+/// How many leading characters one outdent removes: one tab, or up to `indent_width` spaces.
+fn outdent_amount(line: &str, indent_width: usize) -> usize {
+    let mut removed = 0usize;
+    for ch in line.chars() {
+        match ch {
+            '\t' if removed == 0 => return 1,
+            ' ' if removed < indent_width => removed += 1,
+            _ => break,
+        }
+    }
+    removed
+}
+
+/// Expands tabs to `width` spaces for layout, leaving every other character unchanged.
+fn expand_tabs(line: &str, width: usize) -> String {
+    let width = width.max(1);
+    let mut expanded = String::with_capacity(line.len());
+    for ch in line.chars() {
+        if ch == '\t' {
+            expanded.push_str(&" ".repeat(width));
+        } else {
+            expanded.push(ch);
+        }
+    }
+    expanded
+}
+
+/// The byte index of a char column in one line.
 fn byte_index(line: &str, char_col: usize) -> usize {
     line.char_indices()
         .nth(char_col)
@@ -1782,5 +2440,320 @@ mod tests {
         editor.set_caret(0, 99);
         assert_eq!(caret(&editor), (0, 2), "the caret clamps before the ending");
         assert_eq!(editor.line_col_1based(), (1, 3));
+    }
+
+    /// EDT-007: nested pairs of the same kind and brackets of another kind are skipped, and the
+    /// caret is adjacent to a bracket from either side.
+    #[test]
+    fn nested_brackets_match_the_enclosing_pair_and_keep_the_exact_positions() {
+        let mut editor = TextEditor::from_source("a(b[c]d)e");
+        editor.set_caret(0, 1); // immediately before '('
+        assert_eq!(
+            editor.bracket_match(),
+            Some(BracketMatch {
+                bracket: '(',
+                at: (0, 1),
+                mate: Some((0, 7)),
+            })
+        );
+        assert_eq!(
+            editor.bracket_status().as_deref(),
+            Some("Bracket ( at 1:2 matched by ) at 1:8")
+        );
+
+        // The caret immediately after ')' names the same pair.
+        editor.set_caret(0, 8);
+        assert_eq!(
+            editor.bracket_match(),
+            Some(BracketMatch {
+                bracket: ')',
+                at: (0, 7),
+                mate: Some((0, 1)),
+            })
+        );
+
+        // A same-kind nested pair: the inner '(' must not pair with the outer ')'.
+        let mut nested = TextEditor::from_source("f(g(h), i)");
+        nested.set_caret(0, 3);
+        assert_eq!(
+            nested.bracket_match(),
+            Some(BracketMatch {
+                bracket: '(',
+                at: (0, 3),
+                mate: Some((0, 5)),
+            })
+        );
+        nested.set_caret(0, 1);
+        assert_eq!(
+            nested.bracket_match(),
+            Some(BracketMatch {
+                bracket: '(',
+                at: (0, 1),
+                mate: Some((0, 9)),
+            })
+        );
+    }
+
+    /// EDT-007: a bracket with no partner is a distinct state, not a pair with a guessed mate.
+    #[test]
+    fn an_unmatched_bracket_reports_the_distinct_unmatched_state() {
+        let mut editor = TextEditor::from_source("(a(b)");
+        editor.set_caret(0, 0);
+        assert_eq!(
+            editor.bracket_match(),
+            Some(BracketMatch {
+                bracket: '(',
+                at: (0, 0),
+                mate: None,
+            })
+        );
+        assert_eq!(
+            editor.bracket_status().as_deref(),
+            Some("Unmatched ( at 1:1")
+        );
+
+        // The inner pair is still matched; only the outer bracket is unmatched.
+        editor.set_caret(0, 2);
+        assert_eq!(
+            editor.bracket_match(),
+            Some(BracketMatch {
+                bracket: '(',
+                at: (0, 2),
+                mate: Some((0, 4)),
+            })
+        );
+
+        // A closing bracket with no opener is unmatched too.
+        let mut closing = TextEditor::from_source("a]b");
+        closing.set_caret(0, 2);
+        assert_eq!(
+            closing.bracket_status().as_deref(),
+            Some("Unmatched ] at 1:2")
+        );
+        assert!(!closing.jump_to_matching_bracket());
+        assert_eq!(caret(&closing), (0, 2), "an unmatched jump must not move");
+    }
+
+    /// EDT-010: go to matching bracket moves the caret to the exact mate and back.
+    #[test]
+    fn go_to_matching_bracket_moves_the_caret_to_the_exact_mate() {
+        let mut editor = TextEditor::from_source("f(ab[cd]e)");
+        editor.set_caret(0, 1); // on '('
+        assert!(editor.jump_to_matching_bracket());
+        assert_eq!(caret(&editor), (0, 9), "the caret is on the closing ')'");
+        assert!(editor.jump_to_matching_bracket());
+        assert_eq!(caret(&editor), (0, 1), "and back on the opening '('");
+
+        // A caret inside the brackets, not adjacent to one, jumps nowhere.
+        editor.set_caret(0, 3);
+        assert!(!editor.jump_to_matching_bracket());
+        assert_eq!(caret(&editor), (0, 3));
+    }
+
+    /// EDT-008: Tab indents every line a multi-line selection touches and Shift+Tab undoes it,
+    /// with the selection endpoints following the text they covered.
+    #[test]
+    fn indent_and_outdent_a_multiline_selection() {
+        let mut editor = TextEditor::from_source("a\nb\nc");
+        editor.set_caret(0, 0);
+        editor.select_to(2, 1);
+
+        editor.indent();
+        assert_eq!(editor.source(), "    a\n    b\n    c");
+        assert_eq!(
+            editor.selection_range(),
+            Some(((0, 4), (2, 5))),
+            "the selection stays over the same three lines"
+        );
+        assert_eq!(caret(&editor), (2, 5));
+
+        editor.outdent();
+        assert_eq!(editor.source(), "a\nb\nc");
+        assert_eq!(editor.selection_range(), Some(((0, 0), (2, 1))));
+        assert_eq!(caret(&editor), (2, 1));
+
+        // One more outdent does nothing: there is no leading whitespace left.
+        editor.outdent();
+        assert_eq!(editor.source(), "a\nb\nc");
+    }
+
+    /// EDT-008: smart Enter keeps the current indentation and adds one level after `{`.
+    #[test]
+    fn smart_enter_keeps_the_indent_and_adds_a_level_after_an_opening_brace() {
+        let mut editor = TextEditor::from_source("    if (x) {\n        y = 1");
+        editor.set_caret(0, 12); // end of `    if (x) {`
+        editor.newline();
+        assert_eq!(
+            editor.source(),
+            "    if (x) {\n        \n        y = 1",
+            "the new line has the enclosing four spaces plus one four-space level"
+        );
+        assert_eq!(caret(&editor), (1, 8));
+
+        // An ordinary indented line simply keeps its indentation.
+        let mut plain = TextEditor::from_source("    a");
+        plain.set_caret(0, 5);
+        plain.newline();
+        assert_eq!(plain.source(), "    a\n    ");
+        assert_eq!(caret(&plain), (1, 4));
+    }
+
+    /// EDT-008: typing the closing character of an auto-closed pair steps over it instead of
+    /// inserting a duplicate; disabling auto-close inserts the typed character literally.
+    #[test]
+    fn auto_close_skips_over_the_closing_character_and_is_configurable() {
+        let mut editor = TextEditor::from_source("");
+        assert_eq!(
+            editor.preferences,
+            EditorSettings {
+                indent_width: 4,
+                use_spaces: true,
+                auto_close: true,
+            }
+        );
+        editor.insert_str("(");
+        assert_eq!(editor.source(), "()", "the closing bracket is inserted");
+        assert_eq!(caret(&editor), (0, 1), "the caret is between the pair");
+
+        editor.insert_str(")");
+        assert_eq!(
+            editor.source(),
+            "()",
+            "the typed ')' steps over the one already there"
+        );
+        assert_eq!(caret(&editor), (0, 2));
+
+        editor.insert_str("{");
+        assert_eq!(editor.source(), "(){}");
+        assert_eq!(caret(&editor), (0, 3));
+
+        let mut quoted = TextEditor::from_source("");
+        quoted.insert_str("\"");
+        assert_eq!(quoted.source(), "\"\"");
+        assert_eq!(caret(&quoted), (0, 1));
+
+        let mut disabled = TextEditor::from_source("");
+        disabled.preferences.auto_close = false;
+        disabled.insert_str("(");
+        assert_eq!(disabled.source(), "(");
+        assert_eq!(caret(&disabled), (0, 1));
+    }
+
+    /// EDT-008: the indent width and tabs-vs-spaces setting decide what Tab writes and how wide
+    /// a literal tab is displayed.
+    #[test]
+    fn tab_width_and_tabs_vs_spaces_settings_are_honoured() {
+        let mut spaces = TextEditor::from_source("");
+        spaces.preferences = EditorSettings {
+            indent_width: 2,
+            use_spaces: true,
+            auto_close: true,
+        };
+        spaces.indent();
+        assert_eq!(spaces.source(), "  ");
+        assert_eq!(caret(&spaces), (0, 2));
+        assert_eq!(spaces.display_column(0, 2), 2);
+
+        let mut tabs = TextEditor::from_source("");
+        tabs.preferences = EditorSettings {
+            indent_width: 8,
+            use_spaces: false,
+            auto_close: true,
+        };
+        tabs.indent();
+        assert_eq!(tabs.source(), "\t", "tabs mode writes one literal tab");
+        assert_eq!(
+            tabs.display_column(0, 1),
+            8,
+            "the tab is eight display cells wide"
+        );
+        tabs.insert_str("x");
+        assert_eq!(tabs.source(), "\tx");
+        assert_eq!(
+            tabs.display_column(0, 2),
+            9,
+            "the character after a tab starts in column 9"
+        );
+        assert_eq!(tabs.line_col_1based(), (1, 3), "the readout stays in chars");
+    }
+
+    /// EDT-010: go to line accepts 1-based `line` and `line:column`, and refuses bad input.
+    #[test]
+    fn go_to_line_moves_the_caret_to_the_exact_line_and_column() {
+        let mut editor = TextEditor::from_source("one\ntwo\nthree\nfour");
+        assert_eq!(editor.go_to_line("3:2"), Ok((3, 2)));
+        assert_eq!(caret(&editor), (2, 1));
+        assert_eq!(editor.go_to_line(" 4 "), Ok((4, 1)));
+        assert_eq!(caret(&editor), (3, 0));
+
+        assert_eq!(
+            editor.go_to_line("0"),
+            Err("Line 0 is outside 1..=4.".to_string())
+        );
+        assert_eq!(
+            editor.go_to_line("9"),
+            Err("Line 9 is outside 1..=4.".to_string())
+        );
+        assert_eq!(
+            editor.go_to_line("two"),
+            Err("'two' is not a line number.".to_string())
+        );
+        assert_eq!(caret(&editor), (3, 0), "a rejected jump leaves the caret");
+
+        // A column past the line's end clamps to the line, not to the next line.
+        assert_eq!(editor.go_to_line("1:99"), Ok((1, 4)));
+        assert_eq!(caret(&editor), (0, 3));
+    }
+
+    /// EDT-010: find symbol filters the document's identifiers (strings and keywords excluded)
+    /// and jumps to the first occurrence of the chosen name.
+    #[test]
+    fn find_symbol_filters_the_documents_identifiers_and_jumps() {
+        let editor =
+            TextEditor::from_source("func alpha(x) {\n    beta = alpha + x\n    \"alpha\"\n}");
+        assert_eq!(
+            editor.document_symbols(),
+            vec![
+                SymbolHit {
+                    name: "alpha".to_string(),
+                    row: 0,
+                    col: 5,
+                },
+                SymbolHit {
+                    name: "x".to_string(),
+                    row: 0,
+                    col: 11,
+                },
+                SymbolHit {
+                    name: "beta".to_string(),
+                    row: 1,
+                    col: 4,
+                },
+            ],
+            "keywords are excluded, duplicate names keep their first position, strings are skipped"
+        );
+        assert_eq!(
+            editor.find_symbols("AL"),
+            vec![SymbolHit {
+                name: "alpha".to_string(),
+                row: 0,
+                col: 5,
+            }],
+            "the filter is case-insensitive and matches inside the name"
+        );
+        assert_eq!(
+            editor.find_symbols("ta"),
+            vec![SymbolHit {
+                name: "beta".to_string(),
+                row: 1,
+                col: 4,
+            }]
+        );
+
+        let mut editor = editor;
+        let beta = editor.find_symbols("beta")[0].clone();
+        assert!(editor.jump_to_symbol(&beta));
+        assert_eq!(caret(&editor), (1, 4));
+        assert_eq!(editor.line_col_1based(), (2, 5));
     }
 }

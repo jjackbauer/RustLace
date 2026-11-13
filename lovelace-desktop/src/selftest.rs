@@ -482,20 +482,96 @@ fn check_engine_plot() -> Result<(), String> {
         }
     };
     let parsed = svg::parse(&plot.svg);
+    if engine_name == "fake" {
+        // The deterministic fallback engine still publishes the small generator stub: a
+        // 640x400 canvas with one 3-vertex polyline. Its shape is pinned exactly, so the
+        // real-engine assertion below cannot silently become the fallback's.
+        if parsed.width != 640 * svg::MILLI || parsed.height != 400 * svg::MILLI {
+            return Err(format!(
+                "the fake engine SVG canvas is {} by {} milli-points, expected 640000 by 400000",
+                parsed.width, parsed.height
+            ));
+        }
+        if parsed.polylines.len() != 1 {
+            return Err(format!(
+                "parsed {} polylines from the fake engine SVG",
+                parsed.polylines.len()
+            ));
+        }
+        if parsed.polylines[0].points.len() != 3 {
+            return Err(format!(
+                "parsed {} points, expected 3",
+                parsed.polylines[0].points.len()
+            ));
+        }
+        if parsed.texts.is_empty() && parsed.title.is_none() {
+            return Err("the fake engine SVG carried no label".to_string());
+        }
+        return Ok(());
+    }
+    // DEF-003 / round 30: the current engine publishes an 800x600 chart with a frame, both
+    // axes, tick geometry, tick labels, the title text and ONE densely sampled series
+    // polyline (1 + 338 + 241 = 580 samples for this three-point path, not the old 3-point
+    // stub). Assert the census, the canvas, the sample count and the three mapped data
+    // vertices - a range or a lower bound would let a regression back in.
+    let counts = crate::gui_selftest::plot_element_counts(&plot.svg);
+    let expected_counts = [2usize, 14, 13, 1];
+    if counts != expected_counts {
+        return Err(format!(
+            "the engine SVG's element counts are rect {} / line {} / text {} / polyline {}, expected {} / {} / {} / {}",
+            counts[0],
+            counts[1],
+            counts[2],
+            counts[3],
+            expected_counts[0],
+            expected_counts[1],
+            expected_counts[2],
+            expected_counts[3]
+        ));
+    }
+    if parsed.width != 800 * svg::MILLI || parsed.height != 600 * svg::MILLI {
+        return Err(format!(
+            "the engine SVG canvas is {} by {} milli-points, expected 800000 by 600000",
+            parsed.width, parsed.height
+        ));
+    }
     if parsed.polylines.len() != 1 {
         return Err(format!(
-            "parsed {} polylines from the engine SVG",
+            "parsed {} polylines from the engine SVG, expected 1",
             parsed.polylines.len()
         ));
     }
-    if parsed.polylines[0].points.len() != 3 {
+    let points = &parsed.polylines[0].points;
+    if points.len() != 580 {
         return Err(format!(
-            "parsed {} points, expected 3",
-            parsed.polylines[0].points.len()
+            "parsed {} sampled points, expected 580 (the dense parametric spline)",
+            points.len()
         ));
     }
-    if parsed.texts.is_empty() && parsed.title.is_none() {
-        return Err("the engine SVG carried no label".to_string());
+    let expected_vertices = [
+        svg::Point {
+            x: 101_818,
+            y: 522_500,
+        },
+        svg::Point {
+            x: 738_181,
+            y: 297_500,
+        },
+        svg::Point {
+            x: 313_939,
+            y: 72_500,
+        },
+    ];
+    for vertex in expected_vertices {
+        if !points.contains(&vertex) {
+            return Err(format!(
+                "the engine SVG's series does not pass through ({}, {}) milli-points",
+                vertex.x, vertex.y
+            ));
+        }
+    }
+    if !parsed.texts.iter().any(|text| text.text == "selftest") {
+        return Err("the engine SVG carried no title text".to_string());
     }
     Ok(())
 }

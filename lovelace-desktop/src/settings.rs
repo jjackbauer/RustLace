@@ -27,6 +27,10 @@ pub const MAX_RECENT_FILES: usize = 20;
 pub const MIN_PRECISION: usize = 1;
 /// Largest accepted display precision, in decimal places.
 pub const MAX_PRECISION: usize = 100_000;
+/// Smallest accepted editor indent width, in columns.
+pub const MIN_INDENT_WIDTH: usize = 1;
+/// Largest accepted editor indent width, in columns.
+pub const MAX_INDENT_WIDTH: usize = 8;
 
 /// Saved window geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +108,42 @@ impl SessionState {
     }
 }
 
+/// EDT-008: the editor behaviour the settings document configures.
+///
+/// `indent_width` is both the number of columns one indentation level occupies and the width a
+/// literal tab is painted at. `use_spaces` decides whether Tab and indentation write spaces or a
+/// literal tab. `auto_close` enables bracket and quote auto-closing with skip-over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditorSettings {
+    /// Columns per indentation level and the displayed width of a tab.
+    pub indent_width: usize,
+    /// True: indentation is spaces; false: indentation is a literal tab.
+    pub use_spaces: bool,
+    /// True: typing `(`, `[`, `{`, `"` or `'` also inserts its closing character.
+    pub auto_close: bool,
+}
+
+impl Default for EditorSettings {
+    fn default() -> EditorSettings {
+        EditorSettings {
+            indent_width: 4,
+            use_spaces: true,
+            auto_close: true,
+        }
+    }
+}
+
+impl EditorSettings {
+    /// The one indentation unit inserted by Tab and by smart Enter.
+    pub fn indent_unit(&self) -> String {
+        if self.use_spaces {
+            " ".repeat(self.indent_width)
+        } else {
+            "\t".to_string()
+        }
+    }
+}
+
 /// Everything the application persists between runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -113,6 +153,8 @@ pub struct Settings {
     pub window: WindowGeometry,
     /// Saved layout fractions.
     pub layout: LayoutFractions,
+    /// EDT-008: indentation and auto-close behaviour.
+    pub editor: EditorSettings,
     /// Most-recently used file paths, newest first.
     pub recent_files: Vec<String>,
     /// Display precision of the document that was active at exit.
@@ -129,6 +171,7 @@ impl Default for Settings {
             schema_version: SCHEMA_VERSION,
             window: WindowGeometry::default(),
             layout: LayoutFractions::default(),
+            editor: EditorSettings::default(),
             recent_files: Vec::new(),
             active_precision: DEFAULT_PRECISION,
             session: None,
@@ -175,6 +218,17 @@ impl Settings {
             (
                 "recent_files",
                 Json::str_array(self.recent_files.iter().cloned()),
+            ),
+            (
+                "editor",
+                Json::obj(vec![
+                    (
+                        "indent_width",
+                        Json::Num(self.editor.indent_width.to_string()),
+                    ),
+                    ("use_spaces", Json::Bool(self.editor.use_spaces)),
+                    ("auto_close", Json::Bool(self.editor.auto_close)),
+                ]),
             ),
             (
                 "active_precision",
@@ -309,6 +363,32 @@ impl Settings {
                 ) as u32;
             } else {
                 warnings.push("layout is not an object; default fractions used.".to_string());
+            }
+        }
+        if let Some(editor) = root.get("editor") {
+            if let Json::Obj(_) = editor {
+                settings.editor.indent_width = read_i64(
+                    editor,
+                    "indent_width",
+                    settings.editor.indent_width as i64,
+                    MIN_INDENT_WIDTH as i64,
+                    MAX_INDENT_WIDTH as i64,
+                    &mut warnings,
+                ) as usize;
+                settings.editor.use_spaces = read_bool(
+                    editor,
+                    "use_spaces",
+                    settings.editor.use_spaces,
+                    &mut warnings,
+                );
+                settings.editor.auto_close = read_bool(
+                    editor,
+                    "auto_close",
+                    settings.editor.auto_close,
+                    &mut warnings,
+                );
+            } else {
+                warnings.push("editor is not an object; default editor settings used.".to_string());
             }
         }
         settings.active_precision = read_i64(
@@ -510,6 +590,21 @@ fn read_i64(
     }
 }
 
+/// Reads a boolean field, recording a warning when it is missing or not a boolean.
+fn read_bool(container: &Json, name: &str, default: bool, warnings: &mut Vec<String>) -> bool {
+    match container.get(name) {
+        Some(Json::Bool(value)) => *value,
+        Some(_) => {
+            warnings.push(format!("{name} is not a boolean; using {default}."));
+            default
+        }
+        None => {
+            warnings.push(format!("{name} is missing; using {default}."));
+            default
+        }
+    }
+}
+
 /// The per-user application directory: %APPDATA%\Lovelace on Windows, and the usual XDG
 /// location elsewhere. Every file the application writes outside a document lives below it,
 /// so the settings file and the plot directory are always siblings resolved the same way.
@@ -640,6 +735,69 @@ mod tests {
         );
         assert!(
             settings.warnings.len() >= 4,
+            "warnings: {:?}",
+            settings.warnings
+        );
+    }
+
+    #[test]
+    fn editor_settings_round_trip_and_defaults() {
+        let mut settings = Settings::new();
+        assert_eq!(
+            settings.editor,
+            EditorSettings {
+                indent_width: 4,
+                use_spaces: true,
+                auto_close: true,
+            },
+            "the shipped default is a four-space indent with auto-close on"
+        );
+        settings.editor = EditorSettings {
+            indent_width: 8,
+            use_spaces: false,
+            auto_close: false,
+        };
+        let again = Settings::from_json(&settings.to_json());
+        assert_eq!(again.editor, settings.editor);
+        assert_eq!(again.editor.indent_unit(), "\t");
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+
+        // A file written before EDT-008 has no editor object: the defaults apply, and the rest
+        // of the document still loads.
+        let old = Settings::from_json(r#"{"schema_version": 1, "active_precision": 250}"#);
+        assert_eq!(old.editor, EditorSettings::default());
+        assert_eq!(old.active_precision, 250);
+    }
+
+    #[test]
+    fn malformed_editor_settings_fall_back_field_by_field_with_warnings() {
+        let text = r#"{
+            "schema_version": 1,
+            "editor": {"indent_width": 99, "use_spaces": "yes", "auto_close": false}
+        }"#;
+        let settings = Settings::from_json(text);
+        assert_eq!(
+            settings.editor,
+            EditorSettings {
+                indent_width: MAX_INDENT_WIDTH,
+                use_spaces: true,
+                auto_close: false,
+            },
+            "indent_width is clamped, use_spaces falls back, the valid bool is kept"
+        );
+        assert!(
+            settings
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("indent_width=99")),
+            "warnings: {:?}",
+            settings.warnings
+        );
+        assert!(
+            settings
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("use_spaces is not a boolean")),
             "warnings: {:?}",
             settings.warnings
         );

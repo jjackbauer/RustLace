@@ -160,6 +160,12 @@ fn usage() -> String {
     text.push_str("  Esc                                 cancel the in-flight run\n");
     text.push_str("  Ctrl+Z                              undo the active document's last edit\n");
     text.push_str("  Ctrl+Y, Ctrl+Shift+Z                redo the last undone edit\n");
+    text.push_str("  Tab, Shift+Tab                      indent or outdent the selected lines\n");
+    text.push_str("  Ctrl+G                              go to a 1-based line or line:column\n");
+    text.push_str("  Ctrl+M                              jump to the bracket matching the caret's\n");
+    text.push_str("  Ctrl+Shift+O                        find a symbol in the active document\n");
+    text.push_str("  Ctrl+Tab, Ctrl+Shift+Tab            next / previous document tab\n");
+    text.push_str("  Ctrl+,                              editor settings (indent, tabs, auto-close)\n");
     text.push_str(
         "  F8                                  jump to the last failed run's diagnostic\n",
     );

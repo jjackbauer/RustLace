@@ -759,6 +759,24 @@ impl Workbench {
         }
     }
 
+    /// EDT-010: selects the next tab, wrapping from the last to the first.
+    ///
+    /// Returns the active index after the move; a one-tab workbench stays on that tab.
+    pub fn select_next_tab(&mut self) -> usize {
+        if self.docs.len() > 1 {
+            self.active = (self.active + 1) % self.docs.len();
+        }
+        self.active
+    }
+
+    /// EDT-010: selects the previous tab, wrapping from the first to the last.
+    pub fn select_previous_tab(&mut self) -> usize {
+        if self.docs.len() > 1 {
+            self.active = (self.active + self.docs.len() - 1) % self.docs.len();
+        }
+        self.active
+    }
+
     /// The active document, if there is one.
     pub fn active_document(&self) -> &WorkbenchDocument {
         &self.docs[self.active]
@@ -3718,6 +3736,35 @@ mod tests {
         );
         assert_eq!(workbench.documents()[0].revision, 1);
         assert_eq!(workbench.documents()[1].revision, 1);
+    }
+
+    #[test]
+    fn keyboard_tab_navigation_changes_the_active_document_and_wraps() {
+        let mut workbench = fake_workbench();
+        let start = workbench.documents().len();
+        workbench.new_document();
+        workbench.new_document();
+        let count = start + 2;
+        assert_eq!(workbench.documents().len(), count);
+        assert_eq!(
+            workbench.active(),
+            count - 1,
+            "new documents select the new tab"
+        );
+
+        assert_eq!(workbench.select_next_tab(), 0, "the last tab wraps to the first");
+        assert_eq!(workbench.select_next_tab(), 1);
+        assert_eq!(workbench.select_previous_tab(), 0);
+        assert_eq!(
+            workbench.select_previous_tab(),
+            count - 1,
+            "the first tab wraps to the last"
+        );
+        assert_eq!(
+            workbench.active_document().id,
+            workbench.documents()[count - 1].id,
+            "the active document is the one the index names"
+        );
     }
 
     #[test]

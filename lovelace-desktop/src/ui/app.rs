@@ -171,6 +171,28 @@ impl Default for PngExport {
     }
 }
 
+/// EDT-010: the in-window go-to-line prompt state.
+#[derive(Clone, Debug, Default)]
+struct GoToLinePrompt {
+    /// What the user has typed (`line` or `line:column`, 1-based).
+    text: String,
+    /// The last rejection, shown under the field until the next submission.
+    error: Option<String>,
+    /// True until the field has been given keyboard focus.
+    focus: bool,
+}
+
+/// EDT-010: the in-window find-symbol prompt state.
+#[derive(Clone, Debug, Default)]
+struct SymbolPrompt {
+    /// The case-insensitive filter over the document's identifiers.
+    query: String,
+    /// Index into the current filtered list of the highlighted entry.
+    selected: usize,
+    /// True until the field has been given keyboard focus.
+    focus: bool,
+}
+
 /// What the user is answering when the unsaved-changes prompt is open (DOC-003).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnsavedAnswer {
@@ -341,6 +363,12 @@ pub struct WorkbenchApp {
     /// PLT-006: the last export's short result and whether it is an error, shown in the plot
     /// header so the action has feedback even when the file dialog closes without a trace.
     plot_export_status: Option<(String, bool)>,
+    /// EDT-010: the open go-to-line prompt, if any.
+    goto_line: Option<GoToLinePrompt>,
+    /// EDT-010: the open find-symbol prompt, if any.
+    find_symbol: Option<SymbolPrompt>,
+    /// EDT-008: true while the editor-settings window is open.
+    editor_settings_open: bool,
     editor_frac: f32,
     workspace_frac: f32,
     logs_frac: f32,
@@ -468,6 +496,7 @@ impl WorkbenchApp {
 
         let mut app = WorkbenchApp::with_storage(workbench, storage);
         app.settings = settings;
+        app.apply_editor_settings();
         // A record the session restore consumed is exactly the text now in its tab, so the journal
         // keeps tracking it instead of rewriting it on the first frame; it is deleted when the
         // document is saved, closed or the window exits cleanly.
@@ -549,6 +578,9 @@ impl WorkbenchApp {
             loaded_plot_svg: None,
             plot_export: None,
             plot_export_status: None,
+            goto_line: None,
+            find_symbol: None,
+            editor_settings_open: false,
             editor_frac: 0.40,
             workspace_frac: 0.20,
             logs_frac: 0.18,
@@ -648,6 +680,7 @@ impl WorkbenchApp {
     /// file load, a reload) gets its text and newline style re-loaded; the fresh tab of a document
     /// created since the last frame gets a new editor at the start of its text.
     fn sync_editors(&mut self) {
+        let preferences = self.settings.editor;
         let ids: Vec<DocumentId> = self
             .workbench
             .documents()
@@ -677,6 +710,7 @@ impl WorkbenchApp {
                         // DOC-005: a loaded or recovered buffer puts the journaled caret back.
                         editor.set_caret(caret.0, caret.1);
                         editor.selection = selection.map(|(anchor, _end)| anchor);
+                        editor.preferences = preferences;
                         editors.push(editor);
                         revisions.push(document.revision);
                     }
@@ -687,6 +721,7 @@ impl WorkbenchApp {
                         );
                         editor.set_caret(caret.0, caret.1);
                         editor.selection = selection.map(|(anchor, _end)| anchor);
+                        editor.preferences = preferences;
                         editors.push(editor);
                         revisions.push(document.revision);
                     }
@@ -719,7 +754,18 @@ impl WorkbenchApp {
         let session = self.workbench.session_state();
         let recent = self.workbench.recent_files();
         let precision = self.workbench.active_document().precision;
-        format!("{session:?}|{recent:?}|{precision}")
+        format!("{session:?}|{recent:?}|{precision}|{:?}", self.settings.editor)
+    }
+
+    /// EDT-008: copies the persisted editor settings into every open editor.
+    ///
+    /// The settings are the single source of truth for indentation width, tabs-vs-spaces and
+    /// auto-close; a change in the settings window applies to every tab in the same frame.
+    fn apply_editor_settings(&mut self) {
+        let preferences = self.settings.editor;
+        for editor in &mut self.editors {
+            editor.preferences = preferences;
+        }
     }
 
     /// Writes the session, the recent list and the active precision when they changed.
@@ -1277,6 +1323,281 @@ impl WorkbenchApp {
         }
     }
 
+    /// Executes one EDT-010 editor navigation command.
+    ///
+    /// Tab navigation changes the workbench's active document (the editors are reconciled by
+    /// `sync`), the bracket command acts on the active editor, and the two prompts are opened as
+    /// keyboard-focused in-window fields. Every path returns keyboard focus to the editor when it
+    /// completes, so the whole sequence is mouse-free.
+    fn apply_editor_command(&mut self, command: keyboard::EditorCommand, ctx: &egui::Context) {
+        crate::run_trace::mark("editor_command", command.label());
+        match command {
+            keyboard::EditorCommand::NextTab => {
+                self.workbench.select_next_tab();
+                self.focus_editor(ctx);
+            }
+            keyboard::EditorCommand::PreviousTab => {
+                self.workbench.select_previous_tab();
+                self.focus_editor(ctx);
+            }
+            keyboard::EditorCommand::GoToMatchingBracket => {
+                let active = self.workbench.active();
+                if self.editors[active].jump_to_matching_bracket() {
+                    self.focus_editor(ctx);
+                }
+            }
+            keyboard::EditorCommand::GoToLine => {
+                self.find_symbol = None;
+                self.goto_line = Some(GoToLinePrompt {
+                    text: String::new(),
+                    error: None,
+                    focus: true,
+                });
+            }
+            keyboard::EditorCommand::FindSymbol => {
+                self.goto_line = None;
+                self.find_symbol = Some(SymbolPrompt {
+                    query: String::new(),
+                    selected: 0,
+                    focus: true,
+                });
+            }
+        }
+    }
+
+    /// Requests keyboard focus for the editor surface on the next pass.
+    fn focus_editor(&mut self, ctx: &egui::Context) {
+        for editor in &mut self.editors {
+            editor.completion.dismiss();
+        }
+        ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+    }
+
+    /// EDT-010: the go-to-line prompt.
+    ///
+    /// A single-line field accepts `line` or `line:column` (1-based). Enter jumps and closes,
+    /// Escape closes without moving the caret, and a rejected value stays in the field with its
+    /// reason visible.
+    fn goto_line_window(&mut self, ctx: &egui::Context) {
+        let Some(mut prompt) = self.goto_line.take() else {
+            return;
+        };
+        let mut submit = false;
+        let mut cancel = false;
+        egui::Window::new("Go to line")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_TOP, vec2(0.0, 96.0))
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("Line or line:column, 1-based. Enter jumps; Esc cancels.")
+                        .color(DIM),
+                );
+                let field = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut prompt.text)
+                            .id_salt("goto_line_input")
+                            .desired_width(180.0)
+                            .hint_text("42 or 42:8"),
+                    )
+                    .on_hover_text("The line to move the caret to");
+                if prompt.focus {
+                    // Retry until the field really owns the keyboard focus: the window's first
+                    // pass or a UIA Invoke can leave another widget focused for a frame.
+                    field.request_focus();
+                }
+                if field.has_focus() {
+                    prompt.focus = false;
+                }
+                if let Some(error) = &prompt.error {
+                    ui.label(RichText::new(error).color(ERROR).monospace());
+                }
+                submit = ui.input(|input| input.key_pressed(Key::Enter));
+                cancel = ui.input(|input| input.key_pressed(Key::Escape));
+            });
+        if cancel {
+            self.focus_editor(ctx);
+            return;
+        }
+        if submit {
+            let active = self.workbench.active();
+            match self.editors[active].go_to_line(&prompt.text) {
+                Ok(_) => {
+                    self.focus_editor(ctx);
+                }
+                Err(reason) => {
+                    prompt.error = Some(reason);
+                    prompt.focus = true;
+                    self.goto_line = Some(prompt);
+                }
+            }
+        } else {
+            self.goto_line = Some(prompt);
+        }
+    }
+
+    /// EDT-010: the find-symbol prompt.
+    ///
+    /// The list is the active document's identifiers filtered by the query; the highlighted row
+    /// is keyboard-movable with Up/Down and Enter jumps to its first occurrence. Nothing here
+    /// needs the pointer: the field takes focus when the prompt opens.
+    fn find_symbol_window(&mut self, ctx: &egui::Context) {
+        let Some(mut prompt) = self.find_symbol.take() else {
+            return;
+        };
+        let active = self.workbench.active();
+        let hits = self.editors[active].find_symbols(&prompt.query);
+        if hits.is_empty() {
+            prompt.selected = 0;
+        } else {
+            prompt.selected = prompt.selected.min(hits.len() - 1);
+        }
+        let mut jump: Option<usize> = None;
+        let mut cancel = false;
+        let mut submit = false;
+        egui::Window::new("Find symbol in file")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_TOP, vec2(0.0, 96.0))
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("Filter the document's identifiers. Enter jumps; Esc cancels.")
+                        .color(DIM),
+                );
+                let field = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut prompt.query)
+                            .id_salt("find_symbol_input")
+                            .desired_width(240.0)
+                            .hint_text("filter"),
+                    )
+                    .on_hover_text("Case-insensitive filter over the document's identifiers");
+                if prompt.focus {
+                    // Retry until the field really owns the keyboard focus, exactly like the
+                    // go-to-line prompt.
+                    field.request_focus();
+                }
+                if field.has_focus() {
+                    prompt.focus = false;
+                }
+                let down = ui.input(|input| input.key_pressed(Key::ArrowDown));
+                let up = ui.input(|input| input.key_pressed(Key::ArrowUp));
+                if down && !hits.is_empty() {
+                    prompt.selected = (prompt.selected + 1).min(hits.len() - 1);
+                }
+                if up && !hits.is_empty() {
+                    prompt.selected = prompt.selected.saturating_sub(1);
+                }
+                ui.separator();
+                if hits.is_empty() {
+                    ui.label(RichText::new("No identifier matches.").color(DIM));
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt("find_symbol_list")
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        for (index, hit) in hits.iter().enumerate() {
+                            let label = format!(
+                                "{}   {}:{}",
+                                hit.name,
+                                hit.row + 1,
+                                hit.col + 1
+                            );
+                            let selected = index == prompt.selected;
+                            if ui.selectable_label(selected, label).clicked() {
+                                jump = Some(index);
+                            }
+                        }
+                    });
+                submit = ui.input(|input| input.key_pressed(Key::Enter));
+                cancel = ui.input(|input| input.key_pressed(Key::Escape));
+            });
+        if cancel {
+            self.focus_editor(ctx);
+            return;
+        }
+        if let Some(index) = jump {
+            let hit = hits[index].clone();
+            if self.editors[active].jump_to_symbol(&hit) {
+                self.focus_editor(ctx);
+            }
+            return;
+        }
+        if submit {
+            if let Some(hit) = hits.get(prompt.selected).cloned() {
+                if self.editors[active].jump_to_symbol(&hit) {
+                    self.focus_editor(ctx);
+                }
+            }
+            return;
+        }
+        prompt.selected = prompt.selected.min(hits.len().saturating_sub(1));
+        self.find_symbol = Some(prompt);
+    }
+
+    /// EDT-008: the editor settings window.
+    ///
+    /// The controls edit a copy of the persisted settings; a change applies to every open editor
+    /// in the same frame and is written to the settings file immediately, so the choice survives
+    /// a restart and the tests can pin the value the editor actually uses.
+    fn editor_settings_window(&mut self, ctx: &egui::Context) {
+        if !self.editor_settings_open {
+            return;
+        }
+        let mut preferences = self.settings.editor;
+        let mut changed = false;
+        let mut open = self.editor_settings_open;
+        egui::Window::new("Editor settings")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .anchor(Align2::CENTER_TOP, vec2(0.0, 96.0))
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("Indentation and typing behaviour for every document")
+                        .color(DIM),
+                );
+                changed |= ui
+                    .checkbox(&mut preferences.use_spaces, "Indent with spaces")
+                    .on_hover_text("Off: Tab and smart Enter write a literal tab")
+                    .changed();
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut preferences.indent_width)
+                            .range(settings::MIN_INDENT_WIDTH..=settings::MAX_INDENT_WIDTH)
+                            .speed(1.0),
+                    )
+                    .on_hover_text("Columns per indentation level and the displayed tab width")
+                    .changed();
+                changed |= ui
+                    .checkbox(&mut preferences.auto_close, "Auto-close brackets and quotes")
+                    .on_hover_text(
+                        "Typing ( [ { \" or ' inserts the closing character; typing the closing \
+                         character steps over the one already there",
+                    )
+                    .changed();
+                ui.separator();
+                ui.label(
+                    RichText::new(format!(
+                        "Tab writes {}",
+                        if preferences.use_spaces {
+                            format!("{} spaces", preferences.indent_width)
+                        } else {
+                            "one tab".to_string()
+                        }
+                    ))
+                    .monospace()
+                    .color(ACCENT),
+                );
+            });
+        self.editor_settings_open = open;
+        if changed {
+            self.settings.editor = preferences;
+            self.apply_editor_settings();
+            self.persist_state(true);
+        }
+    }
+
     /// The file bar: New / Open / Save / Save As / Recent / Close / Quit and the active
     /// document's encoding and path.
     fn file_bar(&mut self, ui: &mut Ui) {
@@ -1486,8 +1807,10 @@ impl WorkbenchApp {
                 }
             }
             // An open completion popup owns Escape for dismissal; it must not also cancel the
-            // document's run. The editor closes the popup later in this same frame.
+            // document's run. The editor closes the popup later in this same frame. An open
+            // go-to-line or find-symbol prompt owns Escape for cancelling itself.
             let completion_open = self.editors[self.workbench.active()].completion.is_open();
+            let prompt_open = self.goto_line.is_some() || self.find_symbol.is_some();
             // While the quick-eval field owns focus, a bare Enter belongs to the field, not to
             // Run. The fallback to the frame's modifier state is only for the editor/other
             // panes: a stale Ctrl bit must not turn the field's submit key into Ctrl+Enter.
@@ -1495,7 +1818,7 @@ impl WorkbenchApp {
                 || (!quick_eval_focused && (input.modifiers.command || input.modifiers.ctrl));
             keyboard::command_for_shortcut(
                 enter,
-                escape && !completion_open && !quick_eval_focused,
+                escape && !completion_open && !quick_eval_focused && !prompt_open,
                 command_modifier,
             )
         });
@@ -1514,7 +1837,98 @@ impl WorkbenchApp {
             self.apply_file_command(command, ui.ctx());
         }
 
+        // EDT-010: editor navigation shortcuts. They are read from the same key events, before
+        // any pane consumes them, so go-to-line, go-to-bracket, find-symbol and next/previous tab
+        // all work without a pointer.
+        let editor_shortcut = ui.input(|input| {
+            input.events.iter().find_map(|event| {
+                let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                else {
+                    return None;
+                };
+                let letter = match key {
+                    Key::Tab => '\t',
+                    Key::G => 'G',
+                    Key::M => 'M',
+                    Key::O => 'O',
+                    _ => return None,
+                };
+                keyboard::editor_command_for_shortcut(
+                    letter,
+                    modifiers.command || modifiers.ctrl,
+                    modifiers.shift,
+                )
+            })
+        });
+        if let Some(command) = editor_shortcut {
+            self.apply_editor_command(command, ui.ctx());
+        }
+        // EDT-008: Ctrl+, opens the editor settings window, the keyboard route to the
+        // indent-width / tabs-vs-spaces / auto-close configuration.
+        if ui.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: Key::Comma,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.command || modifiers.ctrl
+                )
+            })
+        }) {
+            self.editor_settings_open = true;
+        }
+
         self.sync();
+        // EDT-008: Tab belongs to the code editor (indent / outdent / accept a completion), not
+        // to egui's focus traversal. Handling it here, before any toolbar widget registers as a
+        // focus candidate, is what keeps the very first Tab from moving focus out of the editor
+        // and indenting nothing. The event is removed so the editor's own loop cannot run the
+        // same action twice; focus returns on the next pass.
+        let tab_shift = ui.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::Key {
+                    key: Key::Tab,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => Some(modifiers.shift),
+                _ => None,
+            })
+        });
+        if let Some(shift) = tab_shift {
+            let editor_focused =
+                ui.ctx().memory(|memory| memory.focused()) == Some(surface_id());
+            if editor_focused {
+                let active = self.workbench.active();
+                self.editors[active].handle_tab(shift);
+                // The edit happened before `editor_pane` measured the editor's edit counter, so
+                // publish the buffer to the workbench here instead of relying on that pass.
+                let source = self.editors[active].source();
+                self.workbench.set_source(active, source);
+                self.loaded_revisions[active] = self.workbench.documents()[active].revision;
+                self.pending_focus = Some(surface_id());
+                ui.ctx().input_mut(|input| {
+                    input.events.retain(|event| {
+                        !matches!(
+                            event,
+                            egui::Event::Key {
+                                key: Key::Tab,
+                                pressed: true,
+                                ..
+                            }
+                        )
+                    });
+                });
+            }
+        }
         if self.trace_pending {
             crate::run_trace::mark("sync_done", "event queue polled and document synced");
         }
@@ -1553,6 +1967,10 @@ impl WorkbenchApp {
         // PLT-006: the PNG options window sits over every pane, not inside the plot pane, so a
         // click on it cannot also reach the plot canvas underneath.
         self.plot_export_window(ui.ctx());
+        // EDT-010 / EDT-008: the keyboard navigation prompts and the editor settings window.
+        self.goto_line_window(ui.ctx());
+        self.find_symbol_window(ui.ctx());
+        self.editor_settings_window(ui.ctx());
         // DOC-002: the native window title carries the active file name and its dirty marker.
         self.update_window_title(ui.ctx());
         // A queued focus request is cleared only once the editor actually holds the focus; while
@@ -1658,6 +2076,41 @@ impl WorkbenchApp {
             if let Some(guidance) = &self.precision_error {
                 ui.label(RichText::new(guidance).color(ERROR))
                     .on_hover_text("The precision was not changed; the run uses the last valid value.");
+            }
+            ui.separator();
+
+            if ui
+                .button("Editor settings")
+                .on_hover_text(
+                    "Indent width, tabs vs spaces and bracket/quote auto-close (Ctrl+,)",
+                )
+                .clicked()
+            {
+                self.editor_settings_open = true;
+            }
+            if ui
+                .button("Go to line")
+                .on_hover_text("Jump the caret to a 1-based line or line:column (Ctrl+G)")
+                .clicked()
+            {
+                self.find_symbol = None;
+                self.goto_line = Some(GoToLinePrompt {
+                    text: String::new(),
+                    error: None,
+                    focus: true,
+                });
+            }
+            if ui
+                .button("Find symbol")
+                .on_hover_text("Filter the active document's identifiers (Ctrl+Shift+O)")
+                .clicked()
+            {
+                self.goto_line = None;
+                self.find_symbol = Some(SymbolPrompt {
+                    query: String::new(),
+                    selected: 0,
+                    focus: true,
+                });
             }
             ui.separator();
 
@@ -1831,6 +2284,22 @@ impl WorkbenchApp {
                 if let Some(summary) = self.editors[active].completion_summary() {
                     ui.separator();
                     ui.label(RichText::new(summary).monospace().color(ACCENT));
+                }
+                // EDT-007: the matching-bracket state is also stated in the pane header, so both
+                // the matched pair and the distinct unmatched state are readable (and visible in
+                // a UIA capture) without inspecting painted pixel colours.
+                if let Some(status) = self.editors[active].bracket_status() {
+                    ui.separator();
+                    let color = if status.starts_with("Unmatched") {
+                        ERROR
+                    } else {
+                        ACCENT
+                    };
+                    ui.label(RichText::new(status).monospace().color(color))
+                        .on_hover_text(
+                            "The bracket next to the caret: matched pairs name both positions; \
+                             an unmatched bracket is a distinct red state",
+                        );
                 }
             });
             let before = self.editors[active].edits;
@@ -3771,6 +4240,232 @@ mod tests {
         let mut app = WorkbenchApp::with_workbench(workbench);
         app.editors[0].set_caret(row, col);
         app
+    }
+
+    #[test]
+    fn ctrl_tab_and_ctrl_shift_tab_change_the_active_document_from_the_keyboard() {
+        let mut workbench = Workbench::new();
+        let initial = workbench.documents().len();
+        workbench.new_document();
+        workbench.new_document();
+        let count = initial + 2;
+        let last = count - 1;
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        assert_eq!(app.workbench.active(), last, "the newest tab is active");
+
+        let ctrl = ctrl_modifiers();
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::Tab, ctrl)],
+        );
+        assert_eq!(app.workbench.active(), 0, "Ctrl+Tab wraps to the first tab");
+        assert_eq!(app.editors.len(), count);
+
+        let ctrl_shift = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            shift: true,
+            ..Default::default()
+        };
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl_shift),
+                key(Key::Tab, ctrl_shift),
+            ],
+        );
+        assert_eq!(
+            app.workbench.active(),
+            last,
+            "Ctrl+Shift+Tab wraps back to the last tab"
+        );
+        assert_eq!(
+            app.workbench.active_document().id,
+            app.workbench.documents()[last].id
+        );
+    }
+
+    #[test]
+    fn ctrl_g_go_to_line_prompt_moves_the_caret_to_the_exact_line() {
+        let mut app = app_with_source("one\ntwo\nthree\nfour", 0, 0);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let ctrl = ctrl_modifiers();
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::G, ctrl)],
+        );
+        assert!(
+            app.goto_line.is_some(),
+            "Ctrl+G must open the go-to-line prompt"
+        );
+
+        // The prompt's field takes focus on the pass after the window appears.
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, vec![egui::Event::Text("3".to_string())]);
+        assert_eq!(
+            app.goto_line.as_ref().map(|prompt| prompt.text.as_str()),
+            Some("3"),
+            "typed digits must land in the prompt, not the document"
+        );
+        assert_eq!(app.editors[0].source(), "one\ntwo\nthree\nfour");
+
+        frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::Enter, egui::Modifiers::default())],
+        );
+        assert_eq!(app.editors[0].line_col_1based(), (3, 1));
+        assert_eq!(app.editors[0].source(), "one\ntwo\nthree\nfour");
+        assert!(app.goto_line.is_none(), "a successful jump closes the prompt");
+    }
+
+    #[test]
+    fn ctrl_m_jumps_to_the_matching_bracket_from_the_keyboard() {
+        let mut app = app_with_source("f(ab[cd]e)", 0, 1);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let ctrl = ctrl_modifiers();
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::M, ctrl)],
+        );
+        assert_eq!(
+            app.editors[0].line_col_1based(),
+            (1, 10),
+            "Ctrl+M moves the caret from '(' to its exact mate ')'"
+        );
+        assert_eq!(app.editors[0].source(), "f(ab[cd]e)");
+    }
+
+    #[test]
+    fn tab_and_shift_tab_indent_the_selected_block_through_the_key_events() {
+        let mut app = app_with_source("a\nb\nc", 0, 0);
+        app.editors[0].select_to(2, 1);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::Tab, egui::Modifiers::default())],
+        );
+        assert_eq!(app.editors[0].source(), "    a\n    b\n    c");
+        assert_eq!(app.workbench.documents()[0].source, "    a\n    b\n    c");
+
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(shift), key(Key::Tab, shift)],
+        );
+        assert_eq!(app.editors[0].source(), "a\nb\nc");
+    }
+
+    #[test]
+    fn enter_after_an_opening_brace_indents_the_new_line_through_the_key_event() {
+        let mut app = app_with_source("    if (x) {", 0, 12);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::Enter, egui::Modifiers::default())],
+        );
+        assert_eq!(app.editors[0].source(), "    if (x) {\n        ");
+        assert_eq!(app.editors[0].line_col_1based(), (2, 9));
+    }
+
+    #[test]
+    fn persisted_editor_settings_are_applied_to_the_editors() {
+        let (storage, directory) = app_storage("editor-settings");
+        let mut settings = Settings::new();
+        settings.editor = settings::EditorSettings {
+            indent_width: 2,
+            use_spaces: false,
+            auto_close: false,
+        };
+        settings
+            .save(storage.settings_path.as_ref().expect("settings path"))
+            .expect("save the settings");
+        let mut app = WorkbenchApp::launch(storage, None);
+        assert_eq!(
+            app.settings.editor,
+            settings::EditorSettings {
+                indent_width: 2,
+                use_spaces: false,
+                auto_close: false,
+            },
+            "the settings file is the source of truth"
+        );
+        assert_eq!(
+            app.editors[0].preferences, app.settings.editor,
+            "every editor receives the persisted preferences"
+        );
+        let empty = app
+            .editors
+            .iter()
+            .position(|editor| editor.source().is_empty())
+            .expect("the launch has an untitled empty document");
+        app.editors[empty].indent();
+        assert_eq!(
+            app.editors[empty].source(),
+            "\t",
+            "the editor honours use_spaces=false and writes one literal tab"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn ctrl_shift_o_find_symbol_filters_the_file_and_enter_jumps() {
+        let mut app = app_with_source("alpha = 1\nbeta = alpha + 2\n", 0, 0);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let ctrl_shift = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            shift: true,
+            ..Default::default()
+        };
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl_shift),
+                key(Key::O, ctrl_shift),
+            ],
+        );
+        assert!(
+            app.find_symbol.is_some(),
+            "Ctrl+Shift+O must open the find-symbol prompt"
+        );
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, vec![egui::Event::Text("be".to_string())]);
+        assert_eq!(
+            app.find_symbol.as_ref().map(|prompt| prompt.query.as_str()),
+            Some("be"),
+            "the filter is typed into the prompt"
+        );
+
+        frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::Enter, egui::Modifiers::default())],
+        );
+        assert_eq!(
+            app.editors[0].line_col_1based(),
+            (2, 1),
+            "Enter jumps to beta's first occurrence on line 2"
+        );
+        assert!(app.find_symbol.is_none());
     }
 
     #[test]

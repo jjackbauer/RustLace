@@ -79,6 +79,62 @@ pub fn command_for_shortcut(
     None
 }
 
+/// EDT-010: one editor navigation command a keyboard shortcut can request.
+///
+/// These are window-level commands because tab navigation and the prompts belong to the window,
+/// while bracket matching and go-to-line act on the active editor. The window and `--gui-selftest`
+/// map the same shortcut table through [`editor_command_for_shortcut`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorCommand {
+    /// Ctrl+G: open the go-to-line prompt.
+    GoToLine,
+    /// Ctrl+M: jump to the bracket matching the one at the caret.
+    GoToMatchingBracket,
+    /// Ctrl+Shift+O: filter the document's identifiers and jump to one.
+    FindSymbol,
+    /// Ctrl+Tab: select the next document tab.
+    NextTab,
+    /// Ctrl+Shift+Tab: select the previous document tab.
+    PreviousTab,
+}
+
+impl EditorCommand {
+    /// The command's stable name, for logs and for the acceptance output.
+    pub fn label(self) -> &'static str {
+        match self {
+            EditorCommand::GoToLine => "Go to line",
+            EditorCommand::GoToMatchingBracket => "Go to matching bracket",
+            EditorCommand::FindSymbol => "Find symbol",
+            EditorCommand::NextTab => "Next tab",
+            EditorCommand::PreviousTab => "Previous tab",
+        }
+    }
+}
+
+/// Maps the editor-navigation shortcuts to a command.
+///
+/// `key` is the character of the pressed key (`"\t"` for Tab), matched case-insensitively;
+/// `modifier` is Ctrl on Windows and Linux (Command on macOS) and must be held for every editor
+/// command. Ctrl+Shift+Tab is Previous Tab; Ctrl+Tab is Next Tab. Ctrl+Shift+O is Find Symbol;
+/// Ctrl+O without Shift remains the file-open command and is not claimed here.
+pub fn editor_command_for_shortcut(
+    key: char,
+    modifier: bool,
+    shift: bool,
+) -> Option<EditorCommand> {
+    if !modifier {
+        return None;
+    }
+    match key.to_ascii_lowercase() {
+        '\t' if shift => Some(EditorCommand::PreviousTab),
+        '\t' => Some(EditorCommand::NextTab),
+        'g' if !shift => Some(EditorCommand::GoToLine),
+        'm' if !shift => Some(EditorCommand::GoToMatchingBracket),
+        'o' if shift => Some(EditorCommand::FindSymbol),
+        _ => None,
+    }
+}
+
 /// Maps a letter typed with the command modifier to a file command.
 ///
 /// `letter` is the character of the pressed key, compared case-insensitively; `modifier` is Ctrl
@@ -187,5 +243,57 @@ mod tests {
         assert_eq!(FileCommand::Save.label(), "Save");
         assert_eq!(FileCommand::SaveAs.label(), "Save As");
         assert_eq!(FileCommand::CloseTab.label(), "Close");
+    }
+
+    #[test]
+    fn editor_navigation_shortcuts_map_without_the_mouse() {
+        assert_eq!(
+            editor_command_for_shortcut('g', true, false),
+            Some(EditorCommand::GoToLine)
+        );
+        assert_eq!(
+            editor_command_for_shortcut('G', true, false),
+            Some(EditorCommand::GoToLine),
+            "the letter is matched case-insensitively"
+        );
+        assert_eq!(
+            editor_command_for_shortcut('m', true, false),
+            Some(EditorCommand::GoToMatchingBracket)
+        );
+        assert_eq!(
+            editor_command_for_shortcut('o', true, true),
+            Some(EditorCommand::FindSymbol)
+        );
+        assert_eq!(
+            editor_command_for_shortcut('\t', true, false),
+            Some(EditorCommand::NextTab)
+        );
+        assert_eq!(
+            editor_command_for_shortcut('\t', true, true),
+            Some(EditorCommand::PreviousTab)
+        );
+
+        for key in ['g', 'm', '\t'] {
+            assert_eq!(
+                editor_command_for_shortcut(key, false, false),
+                None,
+                "{key:?} without the modifier must not be a command"
+            );
+        }
+        assert_eq!(editor_command_for_shortcut('o', true, false), None);
+        assert_eq!(editor_command_for_shortcut('g', true, true), None);
+        assert_eq!(editor_command_for_shortcut('x', true, false), None);
+    }
+
+    #[test]
+    fn every_editor_command_has_a_label() {
+        assert_eq!(EditorCommand::GoToLine.label(), "Go to line");
+        assert_eq!(
+            EditorCommand::GoToMatchingBracket.label(),
+            "Go to matching bracket"
+        );
+        assert_eq!(EditorCommand::FindSymbol.label(), "Find symbol");
+        assert_eq!(EditorCommand::NextTab.label(), "Next tab");
+        assert_eq!(EditorCommand::PreviousTab.label(), "Previous tab");
     }
 }
