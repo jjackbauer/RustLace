@@ -637,6 +637,12 @@ fn journey_j07() -> Result<(), String> {
     let first_source = j07_source().to_string();
     let edited_source = j07_edited_source().to_string();
     let mut workbench = new_workbench();
+    // REF-incremental was captured at precision 1000, and `pi(n)` may not ask for more digits
+    // than the document precision: with the desktop default of 30 the documented `pi(100)`
+    // input is refused before any reuse can be observed. Select the reference session's
+    // precision first, exactly as the window's precision control does (J-03); the expected
+    // observable and every assertion below are unchanged.
+    workbench.set_precision(0, 1000);
     workbench.set_source(0, first_source.clone());
     println!("JOURNEY J-07 observed input={first_source:?}");
 
@@ -737,6 +743,9 @@ fn j08_function_source(body: &str) -> String {
 fn journey_j08() -> Result<(), String> {
     let mut checks = Checks::new("J-08");
     let mut workbench = new_workbench();
+    // Same precondition as J-07: the documented `pi(100)` / `pi(50)` inputs need a document
+    // precision that allows them, and the reference session ran at 1000.
+    workbench.set_precision(0, 1000);
 
     // Phase 1: a variable edit.
     let first_source = "a = 2\nb = a + 1\nc = pi(100)\n";
