@@ -313,7 +313,7 @@ fn check_arithmetic() -> Result<String, String> {
     })?;
     let status = workbench.status_text(1, 1);
     if !status.contains("rev 1")
-        || !status.contains("precision 1000")
+        || !status.contains("precision 30")
         || !status.contains("Ln 1, Col 1")
         || !status.contains("run Finished")
     {

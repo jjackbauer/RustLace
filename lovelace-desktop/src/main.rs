@@ -46,6 +46,8 @@ mod keyboard;
 mod language;
 mod log_kind;
 mod netcheck;
+#[cfg(test)]
+mod precision_default;
 mod quick_eval;
 mod recovery;
 mod results_tree;

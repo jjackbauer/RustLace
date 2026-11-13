@@ -1383,7 +1383,7 @@ mod tests {
         assert_eq!((line, column), (2, 2));
         let status = app.status_text(line, column);
         assert!(status.contains("rev 1"), "status: {status}");
-        assert!(status.contains("precision 1000"), "status: {status}");
+        assert!(status.contains("precision 30"), "status: {status}");
         assert!(status.contains("Ln 2, Col 2"), "status: {status}");
         assert!(status.contains("idle"), "status: {status}");
     }

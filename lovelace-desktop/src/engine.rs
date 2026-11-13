@@ -43,7 +43,15 @@ pub use fake::Value as FakeValue;
 pub use real::RealEngine;
 
 /// Default display precision, in decimal places.
-pub const DEFAULT_PRECISION: usize = 1000;
+///
+/// DEV-009 (user-directed, see `docs/goal-desktop-v4/deviations.md`): 30, matching the C#
+/// extension host's 30 computation / 15 display default (`Lovelace.Suite/ModusHost.cs:50,53`)
+/// and staying inside the shared `<= 37` fixed-width gate
+/// (`lovelace_lang::complex::FAST_PATH_MAX_DIGITS`, the Rust port of
+/// `Lovelace.Complex/Complex.cs:109`/`Lovelace.Suite/NumericOps.cs:113`, and
+/// `rust/lovelace-lang/src/builtins.rs:5748`). A persisted `active_precision` keeps its stored
+/// value; only a fresh settings document and a new document take this default.
+pub const DEFAULT_PRECISION: usize = 30;
 
 /// Returns the application-scoped directory the engine writes plot files into.
 ///

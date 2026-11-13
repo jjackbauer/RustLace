@@ -1424,6 +1424,7 @@ impl Workbench {
     }
 
     /// Sets the active tab's precision.
+    #[allow(dead_code)] // numeric setter kept for hosts; the toolbar uses `set_active_precision_text`
     pub fn set_active_precision(&mut self, decimals: usize) {
         self.set_precision(self.active, decimals);
     }

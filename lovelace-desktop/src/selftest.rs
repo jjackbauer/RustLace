@@ -100,9 +100,11 @@ fn check_new_document() -> Result<(), String> {
     if !effects.contains(&Effect::Repaint) {
         return Err("NewDocument did not request a repaint".to_string());
     }
-    if app.documents[0].precision != 1000 {
+    // DEV-009: the fresh-document default is 30 digits (the C# extension host's 30/15 budget,
+    // inside the <= 37 fixed-width gate), not the old 1000.
+    if app.documents[0].precision != 30 {
         return Err(format!(
-            "default precision was {}, expected 1000",
+            "default precision was {}, expected 30",
             app.documents[0].precision
         ));
     }
@@ -259,7 +261,8 @@ fn check_precision() -> Result<(), String> {
             app.documents[1].engine().precision()
         ));
     }
-    if app.documents[0].precision != 1000 {
+    // DEV-009: the sibling document still holds the new 30-digit default.
+    if app.documents[0].precision != 30 {
         return Err("precision leaked into the other document".to_string());
     }
     if app.settings.active_precision != 250 {
@@ -383,7 +386,8 @@ fn check_settings_round_trip() -> Result<(), String> {
 
 fn check_settings_corrupt() -> Result<(), String> {
     let broken = Settings::from_json("{ this is not json");
-    if broken.window.width != 1280 || broken.active_precision != 1000 {
+    // DEV-009: a corrupt settings document falls back to the 30-digit default.
+    if broken.window.width != 1280 || broken.active_precision != 30 {
         return Err("corrupt settings did not fall back to the defaults".to_string());
     }
     if broken.warnings.is_empty() {
@@ -393,7 +397,9 @@ fn check_settings_corrupt() -> Result<(), String> {
         "{{\"schema_version\": {}, \"active_precision\": 7}}",
         SCHEMA_VERSION + 1
     ));
-    if newer.active_precision != 1000 {
+    // DEV-009: a newer schema is refused whole, so the default is the 30-digit one, not the
+    // stored 7 that a partial read would have kept.
+    if newer.active_precision != 30 {
         return Err("newer-schema settings were partially accepted".to_string());
     }
     if !newer
