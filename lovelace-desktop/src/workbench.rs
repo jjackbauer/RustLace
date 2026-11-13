@@ -1905,6 +1905,23 @@ impl Workbench {
         self.clear_variables(self.active)
     }
 
+    /// LAY-002: empties the active document's visible log and its in-flight pending lines.
+    ///
+    /// The logs pane always starts with the engine's boot lines, so without an explicit clear the
+    /// pane's own empty state would be unreachable. The clear is a product command (the Logs
+    /// header's Clear log button); it removes only this document's lines, writes no line of its
+    /// own, and returns how many lines were removed. A run in flight is not cancelled: its next
+    /// committed statement appends future lines to the now-empty log.
+    pub fn clear_log_active(&mut self) -> usize {
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return 0;
+        };
+        let removed = doc.logs.len() + doc.pending_logs.len();
+        doc.logs.clear();
+        doc.pending_logs.clear();
+        removed
+    }
+
     /// INC-009: drops the document's incremental cache, so the next run evaluates every statement.
     ///
     /// This is "Run All Fresh" without a second implementation: the run itself is the normal one,

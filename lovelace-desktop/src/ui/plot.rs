@@ -33,7 +33,7 @@ use resvg::usvg;
 
 use super::theme;
 use egui::{
-    Align2, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle,
+    Align2, CursorIcon, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle,
     TextureOptions, Ui, Vec2, pos2, vec2,
 };
 
@@ -514,12 +514,19 @@ impl Plot {
                 Stroke::new(1.0, theme::plot_border()),
                 StrokeKind::Inside,
             );
-            painter.text(
+            // LAY-002: the empty message is a real label node, so it is in the accessibility
+            // tree and a UIA capture, not only in the painted pixels.
+            let label_rect = Rect::from_center_size(
                 rect.center(),
-                Align2::CENTER_CENTER,
-                "No plot yet. Run a script that calls plot(...).",
-                FontId::proportional(14.0),
-                theme::plot_empty_text(),
+                vec2(rect.width().min(520.0) - 8.0, 40.0_f32.min(rect.height())),
+            );
+            ui.put(
+                label_rect,
+                egui::Label::new(
+                    RichText::new("No plot yet. Run a script that calls plot(...).")
+                        .color(theme::plot_empty_text()),
+                )
+                .wrap(),
             );
             return PlotMetrics {
                 screen: rect,

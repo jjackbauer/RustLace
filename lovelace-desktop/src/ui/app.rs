@@ -24,7 +24,9 @@ use crate::recovery::{self, RecoveryJournal, RecoveryRecord, RecoveryScan};
 use crate::results_tree::{
     ArrayNode, ExpansionState, ResultProjection, StructuredNode, element_path, field_path,
 };
-use crate::settings::{self, MAX_PRECISION, MIN_PRECISION, Settings};
+use crate::settings::{
+    self, CompactPaneSetting, MAX_PRECISION, MIN_PRECISION, Settings, WorkbenchLayout,
+};
 use crate::workbench::{DocumentView, FileConflict, SaveOutcome, Workbench};
 use crate::workspace_table::{
     FunctionColumn, FunctionTable, VariableColumn, VariableTable, cell_text, ordered_functions,
@@ -45,6 +47,25 @@ const MIN_PLOT: f32 = 240.0;
 const MIN_WORKSPACE: f32 = 180.0;
 const MIN_LOGS: f32 = 100.0;
 const MIN_TOP: f32 = 240.0;
+/// LAY-002: the Symbolic Inspector's column in the bottom strip, and the Logs pane beside it.
+/// Both are wide enough for a scrollable text/tree body at the normal split; the dense split
+/// shrinks them proportionally, the same rule the top columns use.
+const MIN_INSPECTOR_WIDTH: f32 = 220.0;
+const MIN_LOGS_WIDTH: f32 = 220.0;
+const DENSE_MIN_INSPECTOR_WIDTH: f32 = 150.0;
+const DENSE_MIN_LOGS_WIDTH: f32 = 150.0;
+
+/// The shipped pane-size fractions. LAY-001: the editor gets 48% of the client (about 47.5% of
+/// the workbench after the splitters), above the 45% rule, while the graph and workspace columns
+/// keep their minimums. LAY-004 persists these values; a double-click or the reset command
+/// returns to exactly these numbers.
+pub const DEFAULT_EDITOR_FRACTION: f32 = 0.48;
+/// The Workspace column's share of the client width.
+pub const DEFAULT_WORKSPACE_FRACTION: f32 = 0.20;
+/// The Logs strip's share of the client height.
+pub const DEFAULT_LOGS_FRACTION: f32 = 0.22;
+/// The Symbolic Inspector's share of the client width inside the bottom strip.
+pub const DEFAULT_INSPECTOR_FRACTION: f32 = 0.30;
 
 /// LAY-011: the smallest client (in points) that still fits three columns and a logs strip.
 ///
@@ -113,24 +134,27 @@ impl LayoutMode {
     }
 }
 
-/// LAY-011: the ancillary panes the compact layout can show in its drawer.
+/// LAY-011 / LAY-002: the ancillary panes the compact layout can show in its drawer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompactPane {
-    /// The engine plot.
-    Plot,
-    /// The Workspace pane (Result and Inspector views).
+    /// The engine graph.
+    Graph,
+    /// The Workspace pane (the committed result and the variables/functions tables).
     Workspace,
     /// The run log and quick eval.
     Logs,
+    /// LAY-002: the six-section Symbolic Inspector over the last committed result.
+    Inspector,
 }
 
 impl CompactPane {
     /// The pane's tab label, which is also its accessible name.
     pub fn label(self) -> &'static str {
         match self {
-            CompactPane::Plot => "Plot",
+            CompactPane::Graph => "Graph",
             CompactPane::Workspace => "Workspace",
             CompactPane::Logs => "Logs",
+            CompactPane::Inspector => "Symbolic Inspector",
         }
     }
 }
@@ -212,33 +236,39 @@ pub struct PaneLayout {
     pub mode: LayoutMode,
     /// Editor pane.
     pub editor: Rect,
-    /// Plot pane (empty in the compact layout unless its drawer is open).
+    /// Graph pane (empty in the compact layout unless its drawer is open).
     pub plot: Rect,
     /// Workspace pane (empty in the compact layout unless its drawer is open).
     pub workspace: Rect,
     /// Logs pane (empty in the compact layout unless its drawer is open).
     pub logs: Rect,
-    /// Editor / plot splitter.
+    /// LAY-002: the Symbolic Inspector pane, beside the Logs pane in the bottom strip.
+    pub inspector: Rect,
+    /// Editor / graph splitter.
     pub split_a: Rect,
-    /// Plot / workspace splitter.
+    /// Graph / workspace splitter.
     pub split_b: Rect,
-    /// Top / logs splitter.
+    /// Top / bottom-strip splitter.
     pub split_c: Rect,
+    /// Logs / Symbolic Inspector splitter.
+    pub split_d: Rect,
     /// The compact rectangles, when [`PaneLayout::mode`] is [`LayoutMode::Compact`].
     #[cfg_attr(not(test), allow(dead_code))]
     pub compact: Option<CompactLayout>,
 }
 
-/// Computes the four-pane layout from the saved fractions, honouring minimum sizes whenever the
+/// Computes the five-pane layout from the saved fractions, honouring minimum sizes whenever the
 /// window is large enough and compressing the minimums proportionally when it is not.
 ///
-/// `dense` selects the compact minimums and the compact editor share used by
-/// [`LayoutMode::DenseSplit`]; the four panes are the same.
+/// The top row is editor | graph | workspace. The bottom strip is split again: logs on the left,
+/// the Symbolic Inspector on the right. `dense` selects the compact minimums and the compact
+/// editor share used by [`LayoutMode::DenseSplit`]; the five panes are the same.
 pub fn compute_layout(
     full: Rect,
     editor_frac: f32,
     workspace_frac: f32,
     logs_frac: f32,
+    inspector_frac: f32,
     dense: bool,
 ) -> PaneLayout {
     let (min_editor_base, min_plot_base, min_workspace_base, editor_frac) = if dense {
@@ -282,6 +312,26 @@ pub fn compute_layout(
     let logs_h = (full.height() * logs_frac).clamp(min_logs, max_logs);
     let top_h = (usable_h - logs_h).max(0.0);
 
+    // LAY-002: the bottom strip holds the Logs pane and the Symbolic Inspector. The inspector's
+    // fraction is of the whole client width, the same measure the top fractions use.
+    let (min_logs_w_base, min_inspector_w_base) = if dense {
+        (DENSE_MIN_LOGS_WIDTH, DENSE_MIN_INSPECTOR_WIDTH)
+    } else {
+        (MIN_LOGS_WIDTH, MIN_INSPECTOR_WIDTH)
+    };
+    let usable_bottom_w = (full.width() - SPLIT).max(0.0);
+    let bottom_min_sum = min_logs_w_base + min_inspector_w_base;
+    let shrink_b = if usable_bottom_w >= bottom_min_sum {
+        1.0
+    } else {
+        usable_bottom_w / bottom_min_sum
+    };
+    let min_logs_w = min_logs_w_base * shrink_b;
+    let min_inspector_w = min_inspector_w_base * shrink_b;
+    let max_inspector_w = (usable_bottom_w - min_logs_w).max(min_inspector_w);
+    let inspector_w = (full.width() * inspector_frac).clamp(min_inspector_w, max_inspector_w);
+    let logs_w = (usable_bottom_w - inspector_w).max(0.0);
+
     let top_rect = Rect::from_min_size(full.min, vec2(full.width(), top_h));
     let editor = Rect::from_min_size(top_rect.min, vec2(editor_w, top_h));
     let split_a = Rect::from_min_size(pos2(editor.right(), top_rect.top()), vec2(SPLIT, top_h));
@@ -295,10 +345,13 @@ pub fn compute_layout(
         pos2(full.left(), top_rect.bottom()),
         vec2(full.width(), SPLIT),
     );
-    let logs = Rect::from_min_size(
-        pos2(full.left(), split_c.bottom()),
-        vec2(full.width(), logs_h),
+    let bottom_top = split_c.bottom();
+    let logs = Rect::from_min_size(pos2(full.left(), bottom_top), vec2(logs_w, logs_h));
+    let split_d = Rect::from_min_size(
+        pos2(logs.right(), bottom_top),
+        vec2(SPLIT.min(full.right() - logs.right()).max(0.0), logs_h),
     );
+    let inspector = Rect::from_min_size(pos2(split_d.right(), bottom_top), vec2(inspector_w, logs_h));
 
     PaneLayout {
         full,
@@ -311,9 +364,11 @@ pub fn compute_layout(
         plot,
         workspace,
         logs,
+        inspector,
         split_a,
         split_b,
         split_c,
+        split_d,
         compact: None,
     }
 }
@@ -640,6 +695,13 @@ pub struct WorkbenchApp {
     editor_frac: f32,
     workspace_frac: f32,
     logs_frac: f32,
+    /// LAY-002 / LAY-004: the Symbolic Inspector column's share of the client width, persisted
+    /// with the other pane sizes.
+    inspector_frac: f32,
+    /// The layout fractions the settings file was last synchronised from/to. A splitter drag or
+    /// a keyboard resize compares against this so the settings file is written when the layout
+    /// actually changed, not on every painted frame.
+    persisted_layout: WorkbenchLayout,
     /// LAY-011: the layout the current pass uses, decided from the window's client size.
     layout_mode: LayoutMode,
     /// LAY-011: which ancillary pane the compact drawer shows; `None` is the collapsed state.
@@ -670,6 +732,10 @@ pub struct WorkbenchApp {
     /// SYM-001: expression-tree headers painted in the last pass (path and rectangle), the same
     /// test seam as `result_toggle_rects`.
     inspector_toggle_rects: Vec<(String, Rect)>,
+    /// LAY-002: expression-tree headers painted by the dedicated Symbolic Inspector pane in the
+    /// last pass. Kept apart from the Workspace Inspector view's seam so a capture or test can
+    /// address the pane's own tree.
+    symbolic_inspector_toggle_rects: Vec<(String, Rect)>,
     /// SYM-001: the Result and Inspector tab rectangles painted in the last pass. The pointer
     /// tests click these centres; UIA reaches the same buttons by their names.
     workspace_view_tabs: [Option<Rect>; 2],
@@ -801,6 +867,9 @@ impl WorkbenchApp {
 
         let mut app = WorkbenchApp::with_storage(workbench, storage);
         app.settings = settings;
+        // LAY-004: the persisted pane sizes and the compact drawer's visible pane are applied
+        // before the first frame, so a relaunch paints the layout the user left.
+        app.apply_workbench_layout();
         // VIS-002: the persisted theme wins over the dark default; the first frame applies it.
         app.theme = app.settings.theme;
         // A11Y-014: the persisted ASCII/Unicode choice, applied from the first frame.
@@ -903,9 +972,11 @@ impl WorkbenchApp {
             find_symbol: None,
             editor_settings_open: false,
             find_focus: false,
-            editor_frac: 0.48,
-            workspace_frac: 0.20,
-            logs_frac: 0.18,
+            editor_frac: DEFAULT_EDITOR_FRACTION,
+            workspace_frac: DEFAULT_WORKSPACE_FRACTION,
+            logs_frac: DEFAULT_LOGS_FRACTION,
+            inspector_frac: DEFAULT_INSPECTOR_FRACTION,
+            persisted_layout: WorkbenchLayout::default(),
             layout_mode: LayoutMode::Split,
             compact_pane: None,
             compact_editor_frac: COMPACT_EDITOR_DEFAULT,
@@ -919,6 +990,7 @@ impl WorkbenchApp {
             inspector_open: false,
             inspector_expansion: InspectorExpansion::new(),
             inspector_toggle_rects: Vec::new(),
+            symbolic_inspector_toggle_rects: Vec::new(),
             workspace_view_tabs: [None; 2],
             result_toggle_rects: Vec::new(),
             variable_header_rects: [None; 3],
@@ -1134,6 +1206,67 @@ impl WorkbenchApp {
         for editor in &mut self.editors {
             editor.preferences = preferences;
         }
+    }
+
+    /// LAY-004: copies the persisted workbench layout into the live fractions.
+    fn apply_workbench_layout(&mut self) {
+        let layout = self.settings.workbench_layout;
+        self.editor_frac = layout.editor_permille as f32 / 1000.0;
+        self.workspace_frac = layout.workspace_permille as f32 / 1000.0;
+        self.logs_frac = layout.logs_permille as f32 / 1000.0;
+        self.inspector_frac = layout.inspector_permille as f32 / 1000.0;
+        self.compact_editor_frac = layout.compact_editor_permille as f32 / 1000.0;
+        self.compact_pane = match layout.compact_pane {
+            CompactPaneSetting::Hidden => None,
+            CompactPaneSetting::Graph => Some(CompactPane::Graph),
+            CompactPaneSetting::Workspace => Some(CompactPane::Workspace),
+            CompactPaneSetting::Logs => Some(CompactPane::Logs),
+            CompactPaneSetting::Inspector => Some(CompactPane::Inspector),
+        };
+        self.persisted_layout = layout;
+    }
+
+    /// LAY-004: the workbench layout value that represents the live pane sizes.
+    fn layout_settings(&self) -> WorkbenchLayout {
+        WorkbenchLayout {
+            editor_permille: (self.editor_frac * 1000.0).round().clamp(0.0, 1000.0) as u32,
+            workspace_permille: (self.workspace_frac * 1000.0).round().clamp(0.0, 1000.0) as u32,
+            logs_permille: (self.logs_frac * 1000.0).round().clamp(0.0, 1000.0) as u32,
+            inspector_permille: (self.inspector_frac * 1000.0).round().clamp(0.0, 1000.0) as u32,
+            compact_editor_permille: (self.compact_editor_frac * 1000.0)
+                .round()
+                .clamp(0.0, 1000.0) as u32,
+            compact_pane: match self.compact_pane {
+                None => CompactPaneSetting::Hidden,
+                Some(CompactPane::Graph) => CompactPaneSetting::Graph,
+                Some(CompactPane::Workspace) => CompactPaneSetting::Workspace,
+                Some(CompactPane::Logs) => CompactPaneSetting::Logs,
+                Some(CompactPane::Inspector) => CompactPaneSetting::Inspector,
+            },
+        }
+    }
+
+    /// LAY-004: writes the layout to the settings file when a splitter, the reset command or the
+    /// compact drawer changed it. Called after the change, not on every painted frame.
+    fn persist_layout_if_changed(&mut self) {
+        let layout = self.layout_settings();
+        if layout == self.persisted_layout {
+            return;
+        }
+        self.settings.workbench_layout = layout;
+        self.persisted_layout = layout;
+        self.persist_state(true);
+    }
+
+    /// LAY-003: restores the shipped pane sizes. Pane visibility is the user's separate choice
+    /// and is left as it is; the reset command and a splitter double-click both land here.
+    fn reset_pane_sizes(&mut self) {
+        self.editor_frac = DEFAULT_EDITOR_FRACTION;
+        self.workspace_frac = DEFAULT_WORKSPACE_FRACTION;
+        self.logs_frac = DEFAULT_LOGS_FRACTION;
+        self.inspector_frac = DEFAULT_INSPECTOR_FRACTION;
+        self.compact_editor_frac = COMPACT_EDITOR_DEFAULT;
+        self.persist_layout_if_changed();
     }
 
     /// Writes the session, the recent list and the active precision when they changed.
@@ -2181,7 +2314,7 @@ impl WorkbenchApp {
         // layout Plot, Workspace and Logs live behind the drawer.
         if self.layout_mode == LayoutMode::Compact {
             match pane {
-                Pane::Plot => self.compact_pane = Some(CompactPane::Plot),
+                Pane::Plot => self.compact_pane = Some(CompactPane::Graph),
                 Pane::Workspace => self.compact_pane = Some(CompactPane::Workspace),
                 Pane::Logs => self.compact_pane = Some(CompactPane::Logs),
                 Pane::Toolbar | Pane::Editor => {}
@@ -2298,6 +2431,12 @@ impl WorkbenchApp {
                 if self.view.has_snapshot && !self.workbench.active_is_running() {
                     self.workbench.clear_variables_active();
                 }
+                true
+            }
+            // LAY-003: the keyboard/command half of "double-click or command restores sensible
+            // defaults"; the splitter double-click calls the same method.
+            Action::ResetLayout => {
+                self.reset_pane_sizes();
                 true
             }
             Action::PlotFit => {
@@ -3470,6 +3609,20 @@ impl WorkbenchApp {
                     ui.close();
                 }
                 ui.separator();
+                // LAY-003: the visible command that restores the shipped pane sizes. The same
+                // operation is a splitter double-click and the Ctrl+Shift+L binding.
+                if ui
+                    .button(format!(
+                        "Reset pane sizes ({})",
+                        keyboard::chord_of(Action::ResetLayout)
+                    ))
+                    .on_hover_text("Restore the default editor, graph, workspace, logs and inspector sizes")
+                    .clicked()
+                {
+                    self.reset_pane_sizes();
+                    ui.close();
+                }
+                ui.separator();
                 let mut unicode = self.settings.unicode_glyphs;
                 if ui
                     .checkbox(&mut unicode, "Unicode mathematical glyphs")
@@ -3653,6 +3806,17 @@ impl WorkbenchApp {
                     .clicked()
                 {
                     self.open_shortcuts();
+                    ui.close();
+                }
+                // LAY-003: the compact layout's visible reset command, beside the shortcuts entry.
+                if ui
+                    .button(format!(
+                        "Reset pane sizes ({})",
+                        keyboard::chord_of(Action::ResetLayout)
+                    ))
+                    .clicked()
+                {
+                    self.reset_pane_sizes();
                     ui.close();
                 }
                 let mut unicode = self.settings.unicode_glyphs;
@@ -3948,6 +4112,7 @@ impl WorkbenchApp {
                     self.editor_frac,
                     self.workspace_frac,
                     self.logs_frac,
+                    self.inspector_frac,
                     dense,
                 );
                 self.layout = Some(layout);
@@ -3958,40 +4123,68 @@ impl WorkbenchApp {
                 self.plot_pane(ui, layout.plot, &view);
                 self.workspace_pane(ui, layout.workspace, &view);
                 self.logs_pane(ui, layout.logs, &view);
+                self.symbolic_inspector_pane(ui, layout.inspector, &view);
 
                 let drag_a = splitter(
                     ui,
                     layout.split_a,
                     "split_editor",
                     true,
-                    "Editor / plot splitter",
+                    "Editor / graph splitter",
                 );
                 let drag_b = splitter(
                     ui,
                     layout.split_b,
                     "split_workspace",
                     true,
-                    "Plot / workspace splitter",
+                    "Graph / workspace splitter",
                 );
                 let drag_c = splitter(
                     ui,
                     layout.split_c,
                     "split_logs",
                     false,
-                    "Workspace / logs splitter",
+                    "Top row / bottom strip splitter",
+                );
+                let drag_d = splitter(
+                    ui,
+                    layout.split_d,
+                    "split_inspector",
+                    true,
+                    "Logs / Symbolic Inspector splitter",
                 );
 
-                if drag_a != 0.0 {
+                if drag_a.delta != 0.0 {
                     self.editor_frac =
-                        (self.editor_frac + drag_a / full.width().max(1.0)).clamp(0.02, 0.95);
+                        (self.editor_frac + drag_a.delta / full.width().max(1.0)).clamp(0.02, 0.95);
                 }
-                if drag_b != 0.0 {
-                    self.workspace_frac =
-                        (self.workspace_frac - drag_b / full.width().max(1.0)).clamp(0.02, 0.95);
+                if drag_b.delta != 0.0 {
+                    self.workspace_frac = (self.workspace_frac
+                        - drag_b.delta / full.width().max(1.0))
+                    .clamp(0.02, 0.95);
                 }
-                if drag_c != 0.0 {
+                if drag_c.delta != 0.0 {
                     self.logs_frac =
-                        (self.logs_frac - drag_c / full.height().max(1.0)).clamp(0.02, 0.9);
+                        (self.logs_frac - drag_c.delta / full.height().max(1.0)).clamp(0.02, 0.9);
+                }
+                if drag_d.delta != 0.0 {
+                    // The inspector sits to the right of its divider, so a rightward drag must
+                    // shrink its fraction: the divider follows the pointer.
+                    self.inspector_frac = (self.inspector_frac
+                        - drag_d.delta / full.width().max(1.0))
+                    .clamp(0.05, 0.95);
+                }
+                // LAY-003: a double-click restores the shipped pane sizes; a completed drag or a
+                // keyboard resize writes the new sizes. LAY-004 persists exactly here, once per
+                // gesture rather than once per painted frame.
+                let outcomes = [drag_a, drag_b, drag_c, drag_d];
+                if outcomes.iter().any(|outcome| outcome.reset) {
+                    self.reset_pane_sizes();
+                } else if outcomes
+                    .iter()
+                    .any(|outcome| outcome.drag_stopped || outcome.keyboard)
+                {
+                    self.persist_layout_if_changed();
                 }
             }
             LayoutMode::Compact => self.compact_panes(ui, full, &view),
@@ -4011,7 +4204,7 @@ impl WorkbenchApp {
             mode: LayoutMode::Compact,
             editor: layout.editor,
             plot: match layout.pane {
-                Some(CompactPane::Plot) => layout.drawer.unwrap_or(Rect::NOTHING),
+                Some(CompactPane::Graph) => layout.drawer.unwrap_or(Rect::NOTHING),
                 _ => Rect::NOTHING,
             },
             workspace: match layout.pane {
@@ -4022,9 +4215,14 @@ impl WorkbenchApp {
                 Some(CompactPane::Logs) => layout.drawer.unwrap_or(Rect::NOTHING),
                 _ => Rect::NOTHING,
             },
+            inspector: match layout.pane {
+                Some(CompactPane::Inspector) => layout.drawer.unwrap_or(Rect::NOTHING),
+                _ => Rect::NOTHING,
+            },
             split_a: Rect::NOTHING,
             split_b: Rect::NOTHING,
             split_c: Rect::NOTHING,
+            split_d: Rect::NOTHING,
             compact: Some(layout),
         });
         self.compact_tabs.clear();
@@ -4033,30 +4231,38 @@ impl WorkbenchApp {
         self.compact_pane_tabs(ui, layout.tab_bar);
         self.editor_pane(ui, layout.editor, view);
         match (layout.pane, layout.drawer) {
-            (Some(CompactPane::Plot), Some(drawer)) => self.plot_pane(ui, drawer, view),
+            (Some(CompactPane::Graph), Some(drawer)) => self.plot_pane(ui, drawer, view),
             (Some(CompactPane::Workspace), Some(drawer)) => self.workspace_pane(ui, drawer, view),
             (Some(CompactPane::Logs), Some(drawer)) => self.logs_pane_compact(ui, drawer, view),
+            (Some(CompactPane::Inspector), Some(drawer)) => {
+                self.symbolic_inspector_pane(ui, drawer, view)
+            }
             _ => {}
         }
         if let (Some(splitter_rect), Some(drawer)) = (layout.splitter, layout.drawer) {
-            let drag = splitter(
+            let outcome = splitter(
                 ui,
                 splitter_rect,
                 "compact_split_editor",
                 true,
                 "Editor / pane drawer splitter",
             );
-            if drag != 0.0 {
+            if outcome.delta != 0.0 {
                 let usable = (layout.editor.width() + drawer.width()).max(1.0);
-                self.compact_editor_frac =
-                    (self.compact_editor_frac + drag / usable).clamp(COMPACT_EDITOR_MIN, 0.82);
+                self.compact_editor_frac = (self.compact_editor_frac + outcome.delta / usable)
+                    .clamp(COMPACT_EDITOR_MIN, 0.82);
+            }
+            if outcome.reset {
+                self.reset_pane_sizes();
+            } else if outcome.drag_stopped || outcome.keyboard {
+                self.persist_layout_if_changed();
             }
         }
     }
 
-    /// LAY-011: the compact pane switcher. Every collapsed pane is one pointer action away and
-    /// every button is named for UI Automation; the Inspector button selects the Workspace pane
-    /// in its Inspector view, so the inspector is also one action away.
+    /// LAY-011 / LAY-002: the compact pane switcher. Every collapsed pane is one pointer action
+    /// away and every button is named for UI Automation; the Inspector tab opens the dedicated
+    /// Symbolic Inspector drawer, so that pane is one action away too.
     fn compact_pane_tabs(&mut self, ui: &mut Ui, rect: Rect) {
         ui.scope_builder(
             UiBuilder::new()
@@ -4066,7 +4272,12 @@ impl WorkbenchApp {
                 .accessibility_label("Collapsed panes"),
             |ui| {
                 ui.add_space(4.0);
-                for pane in [CompactPane::Plot, CompactPane::Workspace, CompactPane::Logs] {
+                for pane in [
+                    CompactPane::Graph,
+                    CompactPane::Workspace,
+                    CompactPane::Logs,
+                    CompactPane::Inspector,
+                ] {
                     let selected = self.compact_pane == Some(pane);
                     let response = ui.selectable_label(selected, pane.label());
                     response.widget_info(|| {
@@ -4080,31 +4291,22 @@ impl WorkbenchApp {
                         node.set_selected(selected);
                     });
                     self.compact_tabs.push((pane, response.rect));
+                    if pane == CompactPane::Inspector {
+                        self.compact_inspector = Some(response.rect);
+                    }
                     if response.clicked() {
                         self.compact_pane = Some(pane);
+                        // LAY-004: which pane the drawer shows is the window's visible-pane
+                        // state, so it is written as soon as the user chooses it.
+                        self.persist_layout_if_changed();
                     }
-                }
-                // The Inspector is a view of the Workspace pane, not a fourth pane; the tab opens
-                // Workspace and selects the Inspector view in the same action.
-                let inspector_selected =
-                    self.compact_pane == Some(CompactPane::Workspace) && self.inspector_open;
-                let inspector = ui.selectable_label(inspector_selected, "Inspector");
-                inspector.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Tab, true, "Inspector".to_string())
-                });
-                ui.ctx().accesskit_node_builder(inspector.id, |node| {
-                    node.set_selected(inspector_selected);
-                });
-                self.compact_inspector = Some(inspector.rect);
-                if inspector.clicked() {
-                    self.inspector_open = true;
-                    self.compact_pane = Some(CompactPane::Workspace);
                 }
                 if self.compact_pane.is_some() {
                     let hide = ui.button("Hide panes");
                     self.compact_hide = Some(hide.rect);
                     if hide.clicked() {
                         self.compact_pane = None;
+                        self.persist_layout_if_changed();
                     }
                 }
             },
@@ -4125,13 +4327,25 @@ impl WorkbenchApp {
             let (line, column) = self.editors[active].line_col_1based();
             format!("run log · Ln {line}, Col {column}")
         };
-        let header_hint = header_text_width(&header_line) + 8.0;
+        let header_hint =
+            header_text_width(&header_line) + header_text_width("Logs") + 8.0 + 80.0;
         with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
+                ui.label(RichText::new("Logs").small().strong().color(theme::dim()));
                 ui.add(
                     egui::Label::new(RichText::new(&header_line).color(theme::dim())).truncate(),
                 )
                 .on_hover_text(format!("Log kinds: {legend}"));
+                if ui
+                    .add_enabled(
+                        !view.logs.is_empty(),
+                        egui::Button::new(RichText::new("Clear log").small()),
+                    )
+                    .on_hover_text("Empty this document's log; future runs append to it again")
+                    .clicked()
+                {
+                    self.workbench.clear_log_active();
+                }
             });
             ui.scope_builder(
                 UiBuilder::new()
@@ -4271,7 +4485,8 @@ impl WorkbenchApp {
         let bracket_line = self.editors[active].bracket_status();
         let signature_line = self.editors[active].signature_summary();
         let find_line = self.editors[active].find_summary();
-        let mut header_hint = header_text_width(&title)
+        let mut header_hint = header_text_width("Editor")
+            + header_text_width(&title)
             + header_text_width(&header_lines)
             + header_text_width(&encoding);
         if let Some(line) = &typography_line {
@@ -4289,6 +4504,8 @@ impl WorkbenchApp {
         }
         with_pane(ui, rect, &pane_title, header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
+                // LAY-002: a visible pane title. The same string is the pane's accessible name.
+                ui.label(RichText::new("Editor").small().strong().color(theme::dim()));
                 ui.label(RichText::new(&title).color(theme::accent()).monospace());
                 ui.label(RichText::new(&header_lines).color(theme::dim()));
                 ui.label(RichText::new(&encoding).monospace().small().color(theme::dim()))
@@ -4368,7 +4585,7 @@ impl WorkbenchApp {
                 body = Rect::from_min_max(pos2(body.left(), top), body.max);
             }
             let before = self.editors[active].edits;
-            let metrics = self.editors[active].ui(ui, body, &catalogue, &engine_state);
+            let _ = self.editors[active].ui(ui, body, &catalogue, &engine_state);
             if self.editors[active].edits != before {
                 // An edit makes the old position describe text that is gone. Drop it now, not
                 // only on the next frame, so the paint pass cannot show a stale underline.
@@ -4377,13 +4594,24 @@ impl WorkbenchApp {
                 self.workbench.set_source(active, source);
                 self.loaded_revisions[active] = self.workbench.documents()[active].revision;
             }
-            if metrics.laid_out_rows == 0 {
-                ui.painter().text(
+            if self.editors[active].bytes() == 0 {
+                // LAY-002: the editor pane's own empty state. An empty buffer is one blank line
+                // (laid out rows = 1), so the empty condition is the byte count, not the row
+                // count; the message invites the first keystroke without a placeholder document.
+                let label_rect = Rect::from_center_size(
                     body.center(),
-                    Align2::CENTER_CENTER,
-                    "This document is empty. Type a Lovelace script.",
-                    FontId::proportional(13.0),
-                    theme::dim(),
+                    vec2(
+                        body.width().min(420.0),
+                        40.0_f32.min(body.height().max(0.0)),
+                    ),
+                );
+                ui.put(
+                    label_rect,
+                    egui::Label::new(
+                        RichText::new("This document is empty. Type a Lovelace script.")
+                            .color(theme::dim()),
+                    )
+                    .wrap(),
                 );
             }
         });
@@ -4605,11 +4833,15 @@ impl WorkbenchApp {
                 + 100.0
                 + 105.0
         };
+        // LAY-002: the visible pane title, on every layout (the compact form too).
+        header_hint += header_text_width("Graph");
         if let Some((status, _)) = &self.plot_export_status {
             header_hint += header_text_width(status);
         }
-        with_pane(ui, rect, "Plot - engine SVG", header_hint, |ui, header, body| {
+        with_pane(ui, rect, "Graph", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
+                // LAY-002: a visible pane title; "Graph" is the pane's accessible name too.
+                ui.label(RichText::new("Graph").small().strong().color(theme::dim()));
                 // PLT-004: Fit restores the whole plot; 100% is the natural-size reset (one SVG
                 // point per logical screen pixel) and is a different view on a pane whose fit
                 // scale is not 1:1. Both are one click, and the wheel/drag handlers in
@@ -5081,9 +5313,14 @@ impl WorkbenchApp {
         let mut workspace_filter_id: Option<Id> = None;
         let mut result_toggle_rects: Vec<(String, Rect)> = Vec::new();
         let pane_focus = self.pane_focus;
-        let header_hint = 40.0 + 140.0 + header_text_width(&format!("{variable_count} vars · {function_count} funcs"));
+        let header_hint = 40.0
+            + 140.0
+            + header_text_width("Workspace")
+            + header_text_width(&format!("{variable_count} vars · {function_count} funcs"));
         with_pane(ui, rect, "Workspace", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
+                // LAY-002: a visible pane title; the same string is the accessible name.
+                ui.label(RichText::new("Workspace").small().strong().color(theme::dim()));
                 let label = ui.label("Filter");
                 // LAY-011: the field never asks for more width than the header has left, so the
                 // dense split's narrower Workspace column still paints the whole control.
@@ -5533,11 +5770,24 @@ impl WorkbenchApp {
                 self.workbench.engine_name()
             )
         };
-        let header_hint = header_text_width(&header_line) + 8.0 + 60.0;
+        let header_hint =
+            header_text_width(&header_line) + header_text_width("Logs") + 8.0 + 60.0 + 80.0;
         with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
+                // LAY-002: a visible pane title; the same string is the accessible name.
+                ui.label(RichText::new("Logs").small().strong().color(theme::dim()));
                 ui.label(RichText::new(&header_line).color(theme::dim()))
                     .on_hover_text(format!("Log kinds: {legend}"));
+                // LAY-002: the reachable empty state. The boot lines mean the log is never empty
+                // unless the user clears it; this is that command.
+                let can_clear = !view.logs.is_empty();
+                if ui
+                    .add_enabled(can_clear, egui::Button::new(RichText::new("Clear log").small()))
+                    .on_hover_text("Empty this document's log; future runs append to it again")
+                    .clicked()
+                {
+                    self.workbench.clear_log_active();
+                }
             });
             ui.scope_builder(
                 UiBuilder::new()
@@ -5579,6 +5829,63 @@ impl WorkbenchApp {
         });
     }
 
+    /// LAY-002: the dedicated Symbolic Inspector pane.
+    ///
+    /// It shows the same committed inspection payload as the Workspace pane's Inspector view,
+    /// but as its own titled pane beside the Logs pane, so the five Studio panes (editor,
+    /// workspace, graph, logs, symbolic inspector) are each visible at once and can be resized
+    /// independently. Its empty state and every "section missing" error come from
+    /// [`paint_inspector`]; the pane reads only the committed snapshot, never the editor buffer.
+    fn symbolic_inspector_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
+        let state_line = if !view.has_snapshot {
+            "empty".to_string()
+        } else if view.result_inspection.is_some() {
+            format!("rev {}", view.revision.0)
+        } else {
+            format!("rev {} · no payload", view.revision.0)
+        };
+        let header_hint =
+            header_text_width("Symbolic Inspector") + header_text_width(&state_line) + 16.0;
+        let expansion = &mut self.inspector_expansion;
+        let mut toggles: Vec<(String, Rect)> = Vec::new();
+        with_pane(ui, rect, "Symbolic Inspector", header_hint, |ui, header, body| {
+            header_row(ui, header, |ui| {
+                ui.label(
+                    RichText::new("Symbolic Inspector")
+                        .small()
+                        .strong()
+                        .color(theme::accent()),
+                );
+                ui.label(RichText::new(&state_line).small().color(theme::dim()))
+                    .on_hover_text(
+                        "The six symbolic sections of the last committed result; the editor \
+                         buffer is never inspected",
+                    );
+            });
+            ui.scope_builder(
+                UiBuilder::new()
+                    .max_rect(body.shrink2(vec2(8.0, 4.0)))
+                    .layout(Layout::top_down(Align::Min)),
+                |ui| {
+                    let width = (body.width() - 112.0).max(80.0);
+                    // LAY-011: egui's default minimum scrolled size is 64 points, which is taller
+                    // than the bottom strip at the minimum window; the viewport would then report
+                    // rows below the pane even though the paint clip is correct. The body is the
+                    // authority for this pane's viewport, so the minimum is removed.
+                    egui::ScrollArea::vertical()
+                        .id_salt("symbolic_inspector_scroll")
+                        .min_scrolled_height(0.0)
+                        .min_scrolled_width(0.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            paint_inspector(ui, view, width, expansion, &mut toggles);
+                        });
+                },
+            );
+        });
+        self.symbolic_inspector_toggle_rects = toggles;
+    }
+
     /// The one-line quick-eval field and its keyboard contract (RUN-002 / LOG-003).
     ///
     /// The label is visible and the hint text is the reference placeholder. Enter submits; Esc
@@ -5587,15 +5894,19 @@ impl WorkbenchApp {
     fn quick_eval_row(&mut self, ui: &mut Ui) {
         let mut submit = false;
         let mut navigate: i8 = 0;
-        ui.horizontal(|ui| {
+        // LAY-002: the Logs pane is narrower now that the Symbolic Inspector shares the bottom
+        // strip, so the row wraps its trailing hints and sizes the field to the space left
+        // instead of laying a fixed 340-point field past the pane's right edge.
+        ui.horizontal_wrapped(|ui| {
             let label = ui.label(RichText::new("Quick eval").strong().color(theme::text()));
             let id = quick_eval_id();
+            let width = 340.0_f32.min((ui.available_width() - 150.0).max(90.0));
             let response = ui
                 .add(
                     egui::TextEdit::singleline(self.quick_eval.text_mut())
                         .id(id)
                         .hint_text("quick eval — one-liner, press Enter")
-                        .desired_width(340.0),
+                        .desired_width(width),
                 )
                 .labelled_by(label.id);
             label_input(ui, &response, "Quick eval expression");
@@ -6710,7 +7021,20 @@ fn with_pane<R>(
     .inner
 }
 
-fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &str) -> f32 {
+/// LAY-003: what one painted splitter did in this pass.
+#[derive(Clone, Copy, Debug, Default)]
+struct SplitterOutcome {
+    /// Movement of the divider along its own axis, in points.
+    delta: f32,
+    /// True on the pass the pointer released a drag: the moment to persist the new sizes.
+    drag_stopped: bool,
+    /// LAY-003: a double-click asks for the shipped pane sizes.
+    reset: bool,
+    /// True when an arrow/Home/End key moved the divider: persist at once (no release follows).
+    keyboard: bool,
+}
+
+fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &str) -> SplitterOutcome {
     let id = Id::unique(salt);
     let response = ui.interact(rect, id, Sense::click_and_drag());
     if response.clicked() || response.drag_started() || response.is_pointer_button_down_on() {
@@ -6746,6 +7070,10 @@ fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &
         0.0
     };
 
+    // LAY-003: a focused splitter resizes from the keyboard. Arrow keys step 8 points (32 with
+    // Shift); Home/End move the divider to its extreme, where the layout's minimum-size clamp
+    // stops it. `keyboard` is reported so the caller persists the new size immediately.
+    let mut keyboard = false;
     if focused {
         let step = if ui.input(|input| input.modifiers.shift) {
             32.0
@@ -6755,28 +7083,39 @@ fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &
         if horizontal_axis {
             if ui.input(|input| input.key_pressed(Key::ArrowRight)) {
                 delta += step;
+                keyboard = true;
             }
             if ui.input(|input| input.key_pressed(Key::ArrowLeft)) {
                 delta -= step;
-            }
-            if ui.input(|input| input.key_pressed(Key::Home)) {
-                delta -= 1000.0;
-            }
-            if ui.input(|input| input.key_pressed(Key::End)) {
-                delta += 1000.0;
+                keyboard = true;
             }
         } else {
             if ui.input(|input| input.key_pressed(Key::ArrowDown)) {
                 delta += step;
+                keyboard = true;
             }
             if ui.input(|input| input.key_pressed(Key::ArrowUp)) {
                 delta -= step;
+                keyboard = true;
             }
+        }
+        if ui.input(|input| input.key_pressed(Key::Home)) {
+            delta -= 1000.0;
+            keyboard = true;
+        }
+        if ui.input(|input| input.key_pressed(Key::End)) {
+            delta += 1000.0;
+            keyboard = true;
         }
     }
 
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Splitter, true, label));
-    delta
+    SplitterOutcome {
+        delta,
+        drag_stopped: response.drag_stopped(),
+        reset: response.double_clicked(),
+        keyboard,
+    }
 }
 
 /// The native window options shared by the workbench and the EDT-016 measurement mode.
@@ -11257,15 +11596,35 @@ mod tests {
             KeyName::Digit(4) => Key::Num4,
             KeyName::Digit(5) => Key::Num5,
             KeyName::Digit(other) => panic!("no egui digit key for {other}"),
-            KeyName::Char('n') => Key::N,
-            KeyName::Char('q') => Key::Q,
-            KeyName::Char('u') => Key::U,
-            KeyName::Char('p') => Key::P,
-            KeyName::Char('c') => Key::C,
-            KeyName::Char('f') => Key::F,
-            KeyName::Char('t') => Key::T,
-            KeyName::Char('z') => Key::Z,
-            KeyName::Char(other) => panic!("no egui key for {other:?}"),
+            KeyName::Char(letter) => match letter {
+                'a' => Key::A,
+                'b' => Key::B,
+                'c' => Key::C,
+                'd' => Key::D,
+                'e' => Key::E,
+                'f' => Key::F,
+                'g' => Key::G,
+                'h' => Key::H,
+                'i' => Key::I,
+                'j' => Key::J,
+                'k' => Key::K,
+                'l' => Key::L,
+                'm' => Key::M,
+                'n' => Key::N,
+                'o' => Key::O,
+                'p' => Key::P,
+                'q' => Key::Q,
+                'r' => Key::R,
+                's' => Key::S,
+                't' => Key::T,
+                'u' => Key::U,
+                'v' => Key::V,
+                'w' => Key::W,
+                'x' => Key::X,
+                'y' => Key::Y,
+                'z' => Key::Z,
+                other => panic!("no egui key for {other:?}"),
+            },
         }
     }
 
@@ -12339,10 +12698,10 @@ mod tests {
         );
         assert_eq!(progress.numeric_value, Some(app.view.total as f64));
 
-        // Splitters: the three pane dividers have a role and a name.
+        // Splitters: the four pane dividers have a role and a name.
         let splitters: Vec<&a11y::NodeRow> =
             rows.iter().filter(|row| row.role == Role::Splitter).collect();
-        assert_eq!(splitters.len(), 3, "three pane splitters\n{dump}");
+        assert_eq!(splitters.len(), 4, "four pane splitters\n{dump}");
         for splitter in &splitters {
             assert!(
                 !splitter.name.is_empty(),
@@ -12426,15 +12785,16 @@ mod tests {
             );
             let rows = accessibility_rows(&ctx, &mut app, screen);
             let window = Rect::from_min_size(pos2(0.0, 0.0), screen).expand(0.5);
-            // The four pane rectangles the frame painted. A `Ui` node's own accesskit bounds are
-            // not filled in until a widget owns it, so containment is measured against the same
-            // rectangles the panes paint into — the pane a control visibly sits in.
+            // The five pane rectangles the frame painted. A `Ui` node's own accesskit bounds
+            // are not filled in until a widget owns it, so containment is measured against the
+            // same rectangles the panes paint into — the pane a control visibly sits in.
             let layout = app.layout.expect("the frame paints the pane layout");
             let panes = [
                 ("Editor", layout.editor),
-                ("Plot", layout.plot),
+                ("Graph", layout.plot),
                 ("Workspace", layout.workspace),
                 ("Logs", layout.logs),
+                ("Symbolic Inspector", layout.inspector),
             ];
             let mut checked = 0usize;
             for row in &rows {
@@ -12481,7 +12841,7 @@ mod tests {
                     row.bounds,
                     pane
                 );
-                if *pane_name == "Editor" || *pane_name == "Plot" {
+                if *pane_name == "Editor" || *pane_name == "Graph" {
                     assert!(
                         pane.expand(0.5).contains_rect(row.bounds),
                         "{percent}%: {:?} '{}' at {:?} exceeds the {pane_name} pane at {:?}",
@@ -13028,9 +13388,11 @@ mod tests {
                         ("plot", layout.plot),
                         ("workspace", layout.workspace),
                         ("logs", layout.logs),
+                        ("inspector", layout.inspector),
                         ("split_a", layout.split_a),
                         ("split_b", layout.split_b),
                         ("split_c", layout.split_c),
+                        ("split_d", layout.split_d),
                     ],
                     LayoutMode::Compact => {
                         let compact = layout.compact.expect("compact rectangles");
@@ -13097,10 +13459,10 @@ mod tests {
                         row.bounds
                     );
                 }
-                // The dense split keeps all four panes on screen; the compact layout replaces
+                // The dense split keeps all five panes on screen; the compact layout replaces
                 // them with its drawer, so only the dense split is asserted here.
                 if layout.mode == LayoutMode::DenseSplit {
-                    for title in ["Plot - engine SVG", "Workspace", "Logs"] {
+                    for title in ["Graph", "Workspace", "Logs", "Symbolic Inspector"] {
                         assert!(
                             rows.iter().any(|row| row.role == egui::Role::Pane
                                 && row.name == title),
@@ -13112,13 +13474,13 @@ mod tests {
                 }
                 // Every pane tab is visible and one click opens its pane.
                 if layout.mode == LayoutMode::Compact {
-                    for tab in ["Plot", "Workspace", "Logs", "Inspector"] {
+                    for tab in ["Graph", "Workspace", "Logs", "Symbolic Inspector"] {
                         assert!(
                             rows.iter().any(|row| row.name == tab && row.interactive()),
                             "{percent}%: the collapsed pane tab {tab:?} is missing"
                         );
                     }
-                    assert_eq!(app.compact_tabs.len(), 3, "three pane tabs are painted");
+                    assert_eq!(app.compact_tabs.len(), 4, "four pane tabs are painted");
                     for (pane, rect) in app.compact_tabs.clone() {
                         let pos = rect.center();
                         frame_sized(&ctx, &mut app, screen, vec![egui::Event::PointerMoved(pos)]);
@@ -13156,9 +13518,10 @@ mod tests {
                         // The pane is painted with its own titled frame.
                         let pane_rows = accessibility_rows(&ctx, &mut app, screen);
                         let title = match pane {
-                            CompactPane::Plot => "Plot - engine SVG",
+                            CompactPane::Graph => "Graph",
                             CompactPane::Workspace => "Workspace",
                             CompactPane::Logs => "Logs",
+                            CompactPane::Inspector => "Symbolic Inspector",
                         };
                         assert!(
                             pane_rows.iter().any(|row| row.role == egui::Role::Pane
@@ -13168,20 +13531,13 @@ mod tests {
                             a11y::dump_table(&pane_rows)
                         );
                     }
-                    // The Inspector tab opens the Workspace drawer in the Inspector view.
-                    let inspector = app
-                        .compact_inspector
-                        .expect("the Inspector tab is painted");
-                    let pos = inspector.center();
-                    frame_sized(&ctx, &mut app, screen, vec![egui::Event::PointerMoved(pos)]);
-                    frame_sized(&ctx, &mut app, screen, vec![pointer_button(pos, true)]);
-                    frame_sized(&ctx, &mut app, screen, vec![pointer_button(pos, false)]);
+                    // LAY-002: the Symbolic Inspector tab opens the dedicated inspector drawer,
+                    // so the fifth pane is one pointer action away in the compact layout.
                     assert!(
-                        app.inspector_open && app.compact_pane == Some(CompactPane::Workspace),
-                        "{percent}%: one click on Inspector must show the inspector in the drawer"
+                        app.compact_inspector.is_some(),
+                        "{percent}%: the Symbolic Inspector tab is painted"
                     );
                     app.compact_pane = None;
-                    app.inspector_open = false;
                 }
                 // No non-scrolling interactive control may leave the client, and no painted
                 // text may be cut horizontally at any edge it is clipped to.
@@ -13284,6 +13640,562 @@ mod tests {
             app.workbench.cancel_active();
         }
         gate.release();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // LAY-001 / LAY-002 / LAY-003 / LAY-004: the five-pane layout, its splitters and persistence.
+    // -----------------------------------------------------------------------------------------
+
+    /// Every text shape a frame painted, so a test can assert what the window really shows.
+    fn painted_texts(
+        ctx: &egui::Context,
+        app: &mut WorkbenchApp,
+        screen: egui::Vec2,
+    ) -> Vec<String> {
+        let output = frame_capturing(ctx, app, screen, Vec::new(), Default::default());
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        texts
+    }
+
+    /// A pointer click at `pos` at an explicit client size (the same move/press/release sequence
+    /// a mouse produces).
+    fn pointer_click_sized(
+        ctx: &egui::Context,
+        app: &mut WorkbenchApp,
+        screen: egui::Vec2,
+        pos: egui::Pos2,
+    ) {
+        frame_sized(ctx, app, screen, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame_sized(ctx, app, screen, vec![pointer_button(pos, pressed)]);
+        }
+    }
+
+    /// A real pointer drag: press on `from`, move through intermediate positions while the
+    /// button is down, release on `to`. Every event is a genuine pointer event delivered to the
+    /// splitter widget; no test seam sets the fraction directly.
+    fn pointer_drag_sized(
+        ctx: &egui::Context,
+        app: &mut WorkbenchApp,
+        screen: egui::Vec2,
+        from: egui::Pos2,
+        to: egui::Pos2,
+    ) {
+        frame_sized(ctx, app, screen, vec![egui::Event::PointerMoved(from)]);
+        frame_sized(ctx, app, screen, vec![pointer_button(from, true)]);
+        for step in [0.25_f32, 0.5, 0.75, 1.0] {
+            let pos = from + (to - from) * step;
+            frame_sized(ctx, app, screen, vec![egui::Event::PointerMoved(pos)]);
+        }
+        frame_sized(ctx, app, screen, vec![pointer_button(to, false)]);
+    }
+
+    /// Two real pointer clicks at `pos`, the gesture egui classifies as a double-click.
+    fn pointer_double_click_sized(
+        ctx: &egui::Context,
+        app: &mut WorkbenchApp,
+        screen: egui::Vec2,
+        pos: egui::Pos2,
+    ) {
+        for _ in 0..2 {
+            frame_sized(ctx, app, screen, vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame_sized(ctx, app, screen, vec![pointer_button(pos, pressed)]);
+            }
+        }
+    }
+
+    /// LAY-001: at the default 1280x800 window the editor is the primary surface.
+    ///
+    /// The assertion is measured from the frame the window painted (the same `PaneLayout` the
+    /// panes are painted into), and it also proves the other four panes stay reachable, so the
+    /// editor's width is not won by hiding results or the graph.
+    #[test]
+    fn lay_001_the_editor_is_the_primary_surface_at_1280x800() {
+        let mut app = structural_app();
+        let ctx = egui::Context::default();
+        let screen = vec2(1280.0, 800.0);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let layout = app.layout.expect("the frame paints the pane layout");
+        assert_eq!(layout.mode, LayoutMode::Split, "1280x800 is the normal split");
+        let share = layout.editor.width() / layout.full.width().max(1.0);
+        eprintln!(
+            "LAY-001 editor share={:.1}% editor={:.1}x{:.1} full={:.1}x{:.1}",
+            share * 100.0,
+            layout.editor.width(),
+            layout.editor.height(),
+            layout.full.width(),
+            layout.full.height()
+        );
+        assert!(
+            share >= 0.45,
+            "the editor must keep at least 45% of the client width, has {:.1}%",
+            share * 100.0
+        );
+        // Visual priority: the editor is wider than either ancillary top column, and every other
+        // pane keeps a usable rectangle.
+        assert!(
+            layout.editor.width() > layout.plot.width(),
+            "the editor must be wider than the graph: editor={:?} graph={:?}",
+            layout.editor,
+            layout.plot
+        );
+        assert!(
+            layout.editor.width() > layout.workspace.width(),
+            "the editor must be wider than the workspace: editor={:?} workspace={:?}",
+            layout.editor,
+            layout.workspace
+        );
+        for (name, rect) in [
+            ("graph", layout.plot),
+            ("workspace", layout.workspace),
+            ("logs", layout.logs),
+            ("symbolic inspector", layout.inspector),
+        ] {
+            assert!(
+                rect.width() >= 150.0 && rect.height() >= 90.0,
+                "the {name} pane must stay usable: {rect:?}"
+            );
+        }
+    }
+
+    /// LAY-002: the five Studio panes are visible, each carries its own title, and each paints
+    /// its own empty state before a run and its own populated content after one. The Symbolic
+    /// Inspector's dedicated pane is a sibling of the Logs pane, not a tab hidden in Workspace.
+    #[test]
+    fn lay_002_the_five_panes_are_titled_and_own_their_empty_and_populated_states() {
+        let ctx = egui::Context::default();
+        let screen = vec2(1280.0, 800.0);
+        // A fresh window whose document is empty (the starter text cleared through the same
+        // workbench path an edit uses) leaves every pane in its empty state in one frame: no
+        // run has published anything and the editor buffer has no content.
+        let mut workbench = Workbench::new();
+        workbench.set_source(0, String::new());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        // The engine's boot lines are always in the log, so the Logs pane's empty state is
+        // reached through the pane's own Clear log command (the next frame paints it empty).
+        assert!(app.workbench.clear_log_active() >= 1);
+        let texts = painted_texts(&ctx, &mut app, screen);
+        for empty in [
+            "This document is empty. Type a Lovelace script.",
+            "No run has published a workspace yet.",
+            "No plot yet. Run a script that calls plot(...).",
+            "No log entries yet. Run the document.",
+            "No run has published a result yet.",
+        ] {
+            assert!(
+                texts.iter().any(|text| text == empty),
+                "each pane must paint its own empty state; missing {empty:?}\ntexts: {texts:?}"
+            );
+        }
+        // Every pane has a visible title and the same string is its accessible name. The editor's
+        // title carries the document name.
+        let rows = accessibility_rows(&ctx, &mut app, screen);
+        let pane_names: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.role == egui::Role::Pane && !row.name.is_empty())
+            .map(|row| row.name.as_str())
+            .collect();
+        for title in ["Workspace", "Graph", "Logs", "Symbolic Inspector"] {
+            assert!(
+                pane_names.contains(&title),
+                "the {title} pane is missing; painted panes: {pane_names:?}"
+            );
+        }
+        assert!(
+            pane_names
+                .iter()
+                .any(|name| name.starts_with("Editor - ")),
+            "the editor pane is titled with its document: {pane_names:?}"
+        );
+        // The titles are visible text, not only accessible names.
+        for title in ["Workspace", "Graph", "Logs", "Symbolic Inspector"] {
+            assert!(
+                texts.iter().any(|text| text == title),
+                "the pane title {title:?} must be painted: {texts:?}"
+            );
+        }
+
+        // Populated: a run with a symbolic result, a plot, variables and log lines fills all five
+        // panes from the one committed snapshot.
+        let plot_dir = scratch_dir("lay-002-populated");
+        let mut app = a11y_app(plot_dir.clone());
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let texts = run_from_keyboard(&ctx, &mut app);
+        for populated in [
+            "Expression tree",
+            "Pretty",
+            "Canonical",
+            "a11y journey plot",
+            "sqrt(2)*pi",
+        ] {
+            assert!(
+                texts.iter().any(|text| text.contains(populated)),
+                "the populated window must show {populated:?}\ntexts: {texts:?}"
+            );
+        }
+        // The graph pane holds the engine SVG canvas; the inspector tree has a node header.
+        let rows = accessibility_rows(&ctx, &mut app, screen);
+        assert!(
+            rows.iter().any(|row| row.role == egui::Role::Image
+                && row.name.contains("SVG plot canvas")),
+            "the graph pane must carry the engine plot canvas"
+        );
+        assert!(
+            rows.iter().any(|row| row.name.contains("Expression tree")),
+            "the Symbolic Inspector must publish its expression-tree section"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.name.starts_with("x | Symbolic | sqrt(2)*pi")),
+            "the Workspace pane must publish the committed variable row"
+        );
+
+        // The inspector's own error state: an engine that publishes no inspection payload paints
+        // the specific reason in the dedicated pane instead of an empty box.
+        let mut app = structural_app();
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        run_from_keyboard(&ctx, &mut app);
+        let texts = painted_texts(&ctx, &mut app, screen);
+        assert!(
+            texts.iter().any(|text| text
+                .starts_with("The engine published no inspection payload for this result.")),
+            "the inspector's missing-payload error must paint in its own pane: {texts:?}"
+        );
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// LAY-003: a splitter resizes its adjacent panes by a real pointer drag and by arrow keys on
+    /// the focused splitter, clamps at every pane minimum, and a double-click or the reset
+    /// command restores the shipped sizes.
+    #[test]
+    fn lay_003_splitters_resize_by_pointer_and_keyboard_then_reset() {
+        let mut app = structural_app();
+        let ctx = egui::Context::default();
+        let screen = vec2(1280.0, 800.0);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let start = app.layout.expect("the initial layout");
+        let start_editor = start.editor.width();
+
+        // Pointer drag: editor/graph divider +120 points.
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            start.split_a.center(),
+            start.split_a.center() + vec2(120.0, 0.0),
+        );
+        let dragged = app.layout.expect("the dragged layout");
+        assert!(
+            dragged.editor.width() >= start_editor + 100.0,
+            "a pointer drag must widen the editor: {start_editor} -> {}",
+            dragged.editor.width()
+        );
+
+        // Double-click restores the shipped sizes exactly. The preceding gesture is a drag (its
+        // release is not a click), so this is the first click pair the pointer state sees.
+        pointer_double_click_sized(&ctx, &mut app, screen, dragged.split_a.center());
+        assert_eq!(
+            app.editor_frac, DEFAULT_EDITOR_FRACTION,
+            "a splitter double-click must restore the default editor fraction"
+        );
+        assert_eq!(app.workspace_frac, DEFAULT_WORKSPACE_FRACTION);
+        assert_eq!(app.logs_frac, DEFAULT_LOGS_FRACTION);
+        assert_eq!(app.inspector_frac, DEFAULT_INSPECTOR_FRACTION);
+
+        // Keyboard: focus the editor/graph splitter with a real click, then resize with the
+        // arrow key its focus path handles.
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let splitter_center = app.layout.expect("the reset layout").split_a.center();
+        pointer_click_sized(&ctx, &mut app, screen, splitter_center);
+        let before_key = app.layout.expect("the layout before the arrow key").editor.width();
+        frame_sized(
+            &ctx,
+            &mut app,
+            screen,
+            vec![key(Key::ArrowRight, egui::Modifiers::default())],
+        );
+        // The splitter applies the arrow after this pass's layout was computed, so the next
+        // painted frame is the one that shows the new size.
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let after_key = app.layout.expect("the layout after the arrow key");
+        assert!(
+            after_key.editor.width() >= before_key + 6.0,
+            "ArrowRight on the focused splitter must widen the editor: {before_key} -> {}",
+            after_key.editor.width()
+        );
+        assert!(
+            app.editor_frac > DEFAULT_EDITOR_FRACTION,
+            "the keyboard resize must move the saved fraction: {}",
+            app.editor_frac
+        );
+
+        // The command path (Ctrl+Shift+L) restores the same defaults the double-click did.
+        let _ = press_action(&ctx, &mut app, Action::ResetLayout);
+        assert_eq!(
+            app.editor_frac, DEFAULT_EDITOR_FRACTION,
+            "the reset command must restore the default editor fraction"
+        );
+        assert_eq!(app.inspector_frac, DEFAULT_INSPECTOR_FRACTION);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+
+        // Direction: each divider follows the pointer. The Symbolic Inspector divider moves
+        // right to shrink the inspector; the graph/workspace divider moves right to shrink the
+        // workspace. Both are real pointer drags, not fraction writes.
+        let direction = app.layout.expect("the default layout");
+        let inspector_before = direction.inspector.width();
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            direction.split_d.center(),
+            direction.split_d.center() + vec2(60.0, 0.0),
+        );
+        let moved_inspector = app.layout.expect("the inspector-divider layout");
+        assert!(
+            moved_inspector.split_d.left() >= direction.split_d.left() + 40.0,
+            "the inspector divider must follow a rightward pointer drag: {} -> {}",
+            direction.split_d.left(),
+            moved_inspector.split_d.left()
+        );
+        assert!(
+            moved_inspector.inspector.width() <= inspector_before - 40.0,
+            "a rightward inspector drag must shrink the inspector: {inspector_before} -> {}",
+            moved_inspector.inspector.width()
+        );
+        let workspace_before = moved_inspector.workspace.width();
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            moved_inspector.split_b.center(),
+            moved_inspector.split_b.center() + vec2(60.0, 0.0),
+        );
+        let moved_workspace = app.layout.expect("the workspace-divider layout");
+        assert!(
+            moved_workspace.split_b.left() >= moved_inspector.split_b.left() + 40.0,
+            "the workspace divider must follow a rightward pointer drag: {} -> {}",
+            moved_inspector.split_b.left(),
+            moved_workspace.split_b.left()
+        );
+        assert!(
+            moved_workspace.workspace.width() <= workspace_before - 40.0,
+            "a rightward workspace drag must shrink the workspace: {workspace_before} -> {}",
+            moved_workspace.workspace.width()
+        );
+        // The command path restores the defaults again before the minimum-size drags.
+        let _ = press_action(&ctx, &mut app, Action::ResetLayout);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+
+        // Pointer drag to the far left: the minimum-size clamp stops the editor at 320 points.
+        let current = app.layout.expect("the layout before the clamp drags");
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            current.split_a.center(),
+            pos2(4.0, current.split_a.center().y),
+        );
+        let clamped = app.layout.expect("the clamped layout");
+        eprintln!(
+            "LAY-003 min clamp: editor={:.1} graph={:.1} workspace={:.1} logs_h={:.1} inspector_w={:.1}",
+            clamped.editor.width(),
+            clamped.plot.width(),
+            clamped.workspace.width(),
+            clamped.logs.height(),
+            clamped.inspector.width()
+        );
+        assert!(
+            clamped.editor.width() >= MIN_EDITOR - 0.5,
+            "the editor must clamp at {MIN_EDITOR}: {}",
+            clamped.editor.width()
+        );
+        assert!(
+            clamped.plot.width() >= MIN_PLOT - 0.5,
+            "the graph must clamp at {MIN_PLOT}: {}",
+            clamped.plot.width()
+        );
+        assert!(
+            clamped.workspace.width() >= MIN_WORKSPACE - 0.5,
+            "the workspace must clamp at {MIN_WORKSPACE}: {}",
+            clamped.workspace.width()
+        );
+        // Workspace minimum: drag its divider right until the pane stops shrinking.
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            clamped.split_b.center(),
+            clamped.split_b.center() + vec2(200.0, 0.0),
+        );
+        let workspace_min = app.layout.expect("the workspace-minimum layout");
+        assert!(
+            workspace_min.workspace.width() >= MIN_WORKSPACE - 0.5
+                && workspace_min.workspace.width() <= MIN_WORKSPACE + 20.0,
+            "the workspace must stop at its {MIN_WORKSPACE} minimum: {}",
+            workspace_min.workspace.width()
+        );
+        // Graph minimum: drag the same divider left until the graph stops shrinking.
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            workspace_min.split_b.center(),
+            workspace_min.split_b.center() - vec2(700.0, 0.0),
+        );
+        let graph_min = app.layout.expect("the graph-minimum layout");
+        assert!(
+            graph_min.plot.width() >= MIN_PLOT - 0.5 && graph_min.plot.width() <= MIN_PLOT + 10.0,
+            "the graph must stop at its {MIN_PLOT} minimum: {}",
+            graph_min.plot.width()
+        );
+        // The logs/inspector divider clamps the inspector at its own minimum.
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            graph_min.split_d.center(),
+            pos2(screen.x - 4.0, graph_min.split_d.center().y),
+        );
+        let bottom = app.layout.expect("the bottom-strip layout");
+        assert!(
+            bottom.inspector.width() >= MIN_INSPECTOR_WIDTH - 0.5
+                && bottom.inspector.width() <= MIN_INSPECTOR_WIDTH + 20.0,
+            "the inspector must stop at its {MIN_INSPECTOR_WIDTH} minimum: {}",
+            bottom.inspector.width()
+        );
+        // And the top/bottom divider clamps the Logs strip's height.
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            bottom.split_c.center(),
+            pos2(bottom.split_c.center().x, screen.y - 4.0),
+        );
+        let vertical = app.layout.expect("the vertical layout");
+        assert!(
+            vertical.logs.height() >= MIN_LOGS - 0.5
+                && vertical.logs.height() <= MIN_LOGS + 20.0,
+            "the logs strip must stop at its {MIN_LOGS} minimum: {}",
+            vertical.logs.height()
+        );
+    }
+
+    /// LAY-004: pane sizes and the compact drawer's visible pane are written to the settings file
+    /// when the user changes them and restored by a fresh launch from that file.
+    #[test]
+    fn lay_004_pane_sizes_and_visibility_persist_across_relaunch() {
+        let ctx = egui::Context::default();
+        let (storage, directory) = app_storage("layout-persist");
+        let settings_path = storage.settings_path.clone().expect("settings path");
+        let screen = vec2(1280.0, 800.0);
+        let mut app = WorkbenchApp::launch(storage.clone(), None);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let before = app.layout.expect("the initial layout");
+        pointer_drag_sized(
+            &ctx,
+            &mut app,
+            screen,
+            before.split_a.center(),
+            before.split_a.center() + vec2(90.0, 0.0),
+        );
+        let after = app.layout.expect("the dragged layout");
+        assert!(
+            after.editor.width() > before.editor.width() + 60.0,
+            "the drag must change the size that is persisted"
+        );
+        let saved = Settings::load(&settings_path);
+        assert!(
+            saved.warnings.is_empty(),
+            "the settings file must stay valid: {:?}",
+            saved.warnings
+        );
+        assert_eq!(
+            saved.workbench_layout.editor_permille,
+            app.layout_settings().editor_permille,
+            "the dragged editor size must be written to the settings file"
+        );
+        assert!(
+            directory.join("desktop.json").exists(),
+            "the settings file must exist after the drag"
+        );
+
+        // Relaunch from the same settings file: the sizes come back before any frame paints.
+        let expected = app.layout_settings();
+        drop(app);
+        let mut relaunched = WorkbenchApp::launch(storage.clone(), None);
+        assert_eq!(
+            relaunched.layout_settings(),
+            expected,
+            "a fresh launch must restore the persisted pane sizes"
+        );
+        frame_sized(&ctx, &mut relaunched, screen, Vec::new());
+        let restored = relaunched.layout.expect("the restored layout");
+        assert!(
+            (restored.editor.width() - after.editor.width()).abs() < 0.5,
+            "the restored geometry must match the pre-close geometry: {} vs {}",
+            restored.editor.width(),
+            after.editor.width()
+        );
+
+        // Visibility: in the compact layout the drawer either shows one pane or is collapsed.
+        // Opening the Symbolic Inspector is a visible-pane choice; it must survive a relaunch.
+        let compact = vec2(450.0, 300.0);
+        frame_sized(&ctx, &mut relaunched, compact, Vec::new());
+        assert_eq!(
+            relaunched.layout.expect("the compact layout").mode,
+            LayoutMode::Compact
+        );
+        let inspector_tab = relaunched
+            .compact_tabs
+            .iter()
+            .find(|(pane, _)| *pane == CompactPane::Inspector)
+            .map(|(_, rect)| *rect)
+            .expect("the Symbolic Inspector tab is painted");
+        pointer_click_sized(&ctx, &mut relaunched, compact, inspector_tab.center());
+        for _ in 0..2 {
+            frame_sized(&ctx, &mut relaunched, compact, Vec::new());
+        }
+        assert_eq!(
+            relaunched.compact_pane,
+            Some(CompactPane::Inspector),
+            "the click must open the Symbolic Inspector drawer"
+        );
+        let opened = relaunched.layout.expect("the open drawer layout");
+        assert!(
+            opened.inspector.is_positive(),
+            "the opened drawer paints the Symbolic Inspector pane"
+        );
+        let expected_visibility = relaunched.layout_settings();
+        assert_eq!(
+            expected_visibility.compact_pane,
+            settings::CompactPaneSetting::Inspector
+        );
+        drop(relaunched);
+
+        let mut third = WorkbenchApp::launch(storage, None);
+        frame_sized(&ctx, &mut third, compact, Vec::new());
+        assert_eq!(
+            third.compact_pane,
+            Some(CompactPane::Inspector),
+            "the visible pane choice must be restored by the relaunch"
+        );
+        let restored_layout = third.layout.expect("the restored compact layout");
+        assert_eq!(restored_layout.mode, LayoutMode::Compact);
+        assert!(
+            restored_layout.inspector.is_positive(),
+            "the restored drawer must paint the Symbolic Inspector pane"
+        );
+        assert_eq!(
+            third.layout_settings().editor_permille,
+            expected_visibility.editor_permille,
+            "the sizes and the visibility must come from the same settings document"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }
 

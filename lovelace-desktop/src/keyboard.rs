@@ -281,7 +281,7 @@ pub enum Pane {
     Toolbar,
     /// The editor surface.
     Editor,
-    /// The plot pane (Fit is its first control).
+    /// The graph pane (Fit is its first control).
     Plot,
     /// The workspace pane (the Result/Inspector tabs).
     Workspace,
@@ -304,7 +304,7 @@ impl Pane {
         match self {
             Pane::Toolbar => "toolbar",
             Pane::Editor => "editor",
-            Pane::Plot => "plot",
+            Pane::Plot => "graph",
             Pane::Workspace => "workspace",
             Pane::Logs => "logs",
         }
@@ -351,6 +351,8 @@ pub enum Action {
     WorkspaceFilterFocus,
     /// Clear the committed variables, keeping functions.
     ClearVariables,
+    /// LAY-003: restore the shipped pane sizes.
+    ResetLayout,
     /// Fit the whole plot in the pane.
     PlotFit,
     /// Plot at natural size.
@@ -395,7 +397,7 @@ impl Action {
             Action::FocusPane(pane) => match pane {
                 Pane::Toolbar => "Focus toolbar",
                 Pane::Editor => "Focus editor",
-                Pane::Plot => "Focus plot",
+                Pane::Plot => "Focus graph",
                 Pane::Workspace => "Focus workspace",
                 Pane::Logs => "Focus logs",
             },
@@ -403,6 +405,7 @@ impl Action {
             Action::WorkspaceInspectorView => "Inspector view",
             Action::WorkspaceFilterFocus => "Focus filter",
             Action::ClearVariables => "Clear variables",
+            Action::ResetLayout => "Reset pane sizes",
             Action::PlotFit => "Fit plot",
             Action::PlotActualSize => "Plot 100%",
             Action::PlotZoomIn => "Zoom in",
@@ -473,7 +476,7 @@ const fn binding(
 
 use Action::{
     ClearVariables, Completion, EditorSettings, FocusPane, JumpToDiagnostic, NextPane, PlotActualSize,
-    PlotExportPng, PlotFit, PlotZoomIn, PlotZoomOut, PreviousPane, QuickEvalFocus, Quit,
+    PlotExportPng, PlotFit, PlotZoomIn, PlotZoomOut, PreviousPane, QuickEvalFocus, Quit, ResetLayout,
     ShortcutsHelp, ToggleTheme, ToggleUnicodeGlyphs, WorkspaceFilterFocus, WorkspaceInspectorView,
     WorkspaceResultView,
 };
@@ -563,7 +566,7 @@ pub const BINDINGS: &[Binding] = &[
         FocusPane(Pane::Plot),
         Shortcut::new(Digit(3), true, false, false),
         Global,
-        "Move keyboard focus to the plot pane",
+        "Move keyboard focus to the graph pane",
     ),
     binding(
         FocusPane(Pane::Workspace),
@@ -601,6 +604,12 @@ pub const BINDINGS: &[Binding] = &[
         Shortcut::new(Char('c'), true, false, true),
         Global,
         "Clear the committed variables; function definitions are kept",
+    ),
+    binding(
+        ResetLayout,
+        Shortcut::new(Char('l'), true, true, false),
+        Global,
+        "Restore the shipped pane sizes (a splitter double-click does the same)",
     ),
     binding(
         PlotFit,
@@ -1171,6 +1180,7 @@ mod tests {
                 | Action::WorkspaceInspectorView
                 | Action::WorkspaceFilterFocus
                 | Action::ClearVariables
+                | Action::ResetLayout
                 | Action::PlotFit
                 | Action::PlotActualSize
                 | Action::PlotZoomIn

@@ -130,6 +130,87 @@ impl Default for LayoutFractions {
     }
 }
 
+/// LAY-004: which ancillary pane the compact layout's drawer shows.
+///
+/// The compact layout (LAY-011) is the window's one pane-visibility mechanism: the drawer is
+/// either collapsed to the tab row or shows exactly one ancillary pane. Persisting which state
+/// the user left means a relaunch restores the same visible pane set, not only the same sizes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CompactPaneSetting {
+    /// The drawer is collapsed; only the editor and the tab row are visible.
+    #[default]
+    Hidden,
+    /// The drawer shows the engine graph.
+    Graph,
+    /// The drawer shows the Workspace pane.
+    Workspace,
+    /// The drawer shows the Logs pane.
+    Logs,
+    /// The drawer shows the Symbolic Inspector pane.
+    Inspector,
+}
+
+impl CompactPaneSetting {
+    /// The string written to the settings document.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CompactPaneSetting::Hidden => "hidden",
+            CompactPaneSetting::Graph => "graph",
+            CompactPaneSetting::Workspace => "workspace",
+            CompactPaneSetting::Logs => "logs",
+            CompactPaneSetting::Inspector => "inspector",
+        }
+    }
+
+    /// Parses a persisted choice; `None` means the text is not a pane the build knows, and the
+    /// caller keeps the default and records a warning.
+    pub fn parse(text: &str) -> Option<CompactPaneSetting> {
+        match text {
+            "hidden" => Some(CompactPaneSetting::Hidden),
+            "graph" => Some(CompactPaneSetting::Graph),
+            "workspace" => Some(CompactPaneSetting::Workspace),
+            "logs" => Some(CompactPaneSetting::Logs),
+            "inspector" => Some(CompactPaneSetting::Inspector),
+            _ => None,
+        }
+    }
+}
+
+/// LAY-004: the workbench's pane sizes and pane visibility, persisted across relaunch.
+///
+/// The fractions are permille of the client (width fractions for the editor, Workspace and
+/// Symbolic Inspector columns; height fractions for the Logs strip and the compact drawer's
+/// editor). The default values are exactly the ones the window starts with, so a double-click on
+/// a splitter or the reset command writes the same numbers a fresh launch uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkbenchLayout {
+    /// Editor column width, permille of the client width.
+    pub editor_permille: u32,
+    /// Workspace column width, permille of the client width.
+    pub workspace_permille: u32,
+    /// Bottom strip height, permille of the client height.
+    pub logs_permille: u32,
+    /// Symbolic Inspector width, permille of the client width.
+    pub inspector_permille: u32,
+    /// LAY-011: the editor's share of the compact layout while the drawer is open.
+    pub compact_editor_permille: u32,
+    /// LAY-004: the pane the compact drawer shows, or `Hidden`.
+    pub compact_pane: CompactPaneSetting,
+}
+
+impl Default for WorkbenchLayout {
+    fn default() -> WorkbenchLayout {
+        WorkbenchLayout {
+            editor_permille: 480,
+            workspace_permille: 200,
+            logs_permille: 220,
+            inspector_permille: 300,
+            compact_editor_permille: 550,
+            compact_pane: CompactPaneSetting::Hidden,
+        }
+    }
+}
+
 /// One tab of the last session: the file it showed, or just its identity for an unsaved buffer.
 ///
 /// DOC-004: a tab with a path is restored by reading that file again; a tab without one can only
@@ -330,6 +411,8 @@ pub struct Settings {
     pub window: WindowGeometry,
     /// Saved layout fractions.
     pub layout: LayoutFractions,
+    /// LAY-004: the workbench's pane sizes and the compact drawer's visible pane.
+    pub workbench_layout: WorkbenchLayout,
     /// EDT-008: indentation and auto-close behaviour.
     pub editor: EditorSettings,
     /// VIS-002: the colour theme the window paints; dark is the shipped default.
@@ -359,6 +442,7 @@ impl Default for Settings {
             schema_version: SCHEMA_VERSION,
             window: WindowGeometry::default(),
             layout: LayoutFractions::default(),
+            workbench_layout: WorkbenchLayout::default(),
             editor: EditorSettings::default(),
             theme: ThemePreference::default(),
             theme_follows_system: false,
@@ -404,6 +488,35 @@ impl Settings {
                     (
                         "plot_height_permille",
                         Json::Num(self.layout.plot_height_permille.to_string()),
+                    ),
+                ]),
+            ),
+            (
+                "workbench_layout",
+                Json::obj(vec![
+                    (
+                        "editor_permille",
+                        Json::Num(self.workbench_layout.editor_permille.to_string()),
+                    ),
+                    (
+                        "workspace_permille",
+                        Json::Num(self.workbench_layout.workspace_permille.to_string()),
+                    ),
+                    (
+                        "logs_permille",
+                        Json::Num(self.workbench_layout.logs_permille.to_string()),
+                    ),
+                    (
+                        "inspector_permille",
+                        Json::Num(self.workbench_layout.inspector_permille.to_string()),
+                    ),
+                    (
+                        "compact_editor_permille",
+                        Json::Num(self.workbench_layout.compact_editor_permille.to_string()),
+                    ),
+                    (
+                        "compact_pane",
+                        Json::Str(self.workbench_layout.compact_pane.as_str().to_string()),
                     ),
                 ]),
             ),
@@ -585,6 +698,67 @@ impl Settings {
                 ) as u32;
             } else {
                 warnings.push("layout is not an object; default fractions used.".to_string());
+            }
+        }
+        // LAY-004: absent workbench_layout is a settings file from before the workbench persisted
+        // its pane sizes; the defaults apply with no warning, the same rule the editor typography
+        // fields follow.
+        if let Some(workbench) = root.get("workbench_layout") {
+            if let Json::Obj(_) = workbench {
+                settings.workbench_layout.editor_permille = read_i64(
+                    workbench,
+                    "editor_permille",
+                    settings.workbench_layout.editor_permille as i64,
+                    300,
+                    800,
+                    &mut warnings,
+                ) as u32;
+                settings.workbench_layout.workspace_permille = read_i64(
+                    workbench,
+                    "workspace_permille",
+                    settings.workbench_layout.workspace_permille as i64,
+                    100,
+                    450,
+                    &mut warnings,
+                ) as u32;
+                settings.workbench_layout.logs_permille = read_i64(
+                    workbench,
+                    "logs_permille",
+                    settings.workbench_layout.logs_permille as i64,
+                    100,
+                    450,
+                    &mut warnings,
+                ) as u32;
+                settings.workbench_layout.inspector_permille = read_i64(
+                    workbench,
+                    "inspector_permille",
+                    settings.workbench_layout.inspector_permille as i64,
+                    150,
+                    600,
+                    &mut warnings,
+                ) as u32;
+                settings.workbench_layout.compact_editor_permille = read_i64(
+                    workbench,
+                    "compact_editor_permille",
+                    settings.workbench_layout.compact_editor_permille as i64,
+                    480,
+                    820,
+                    &mut warnings,
+                ) as u32;
+                if let Some(pane) = workbench.get("compact_pane") {
+                    match pane.as_str().and_then(CompactPaneSetting::parse) {
+                        Some(parsed) => settings.workbench_layout.compact_pane = parsed,
+                        None => warnings.push(
+                            "workbench_layout.compact_pane is not a known pane; the drawer starts \
+                             collapsed."
+                                .to_string(),
+                        ),
+                    }
+                }
+            } else {
+                warnings.push(
+                    "workbench_layout is not an object; default pane sizes used.".to_string(),
+                );
             }
         }
         if let Some(editor) = root.get("editor") {
@@ -1010,6 +1184,15 @@ mod tests {
         settings.layout.editor_width_permille = 640;
         settings.layout.logs_height_permille = 250;
         settings.layout.plot_height_permille = 400;
+        // LAY-004: the workbench's own pane sizes and its visible compact pane round-trip.
+        settings.workbench_layout = WorkbenchLayout {
+            editor_permille: 530,
+            workspace_permille: 240,
+            logs_permille: 300,
+            inspector_permille: 410,
+            compact_editor_permille: 620,
+            compact_pane: CompactPaneSetting::Inspector,
+        };
         settings.active_precision = 2500;
         settings.add_recent("C:/scripts/a.ls");
         settings.add_recent("C:/scripts/b.ls");
@@ -1021,6 +1204,68 @@ mod tests {
             again.warnings.is_empty(),
             "round trip must be warning-free: {:?}",
             again.warnings
+        );
+    }
+
+    /// LAY-004: the workbench layout survives the settings document and rejects bad values
+    /// field by field. A settings file written before the workbench persisted its layout loads
+    /// its default pane sizes without a warning.
+    #[test]
+    fn the_workbench_pane_layout_round_trips_and_clamps() {
+        let settings = Settings::from_json(r#"{"schema_version": 1}"#);
+        assert_eq!(settings.workbench_layout, WorkbenchLayout::default());
+        assert!(
+            !settings
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("workbench_layout")),
+            "an older settings file is not a warning: {:?}",
+            settings.warnings
+        );
+
+        let bad = Settings::from_json(
+            r#"{
+                "schema_version": 1,
+                "workbench_layout": {
+                    "editor_permille": 9999,
+                    "workspace_permille": 0,
+                    "logs_permille": 1,
+                    "inspector_permille": 10,
+                    "compact_editor_permille": 9000,
+                    "compact_pane": "not-a-pane"
+                }
+            }"#,
+        );
+        assert_eq!(bad.workbench_layout.editor_permille, 800);
+        assert_eq!(bad.workbench_layout.workspace_permille, 100);
+        assert_eq!(bad.workbench_layout.logs_permille, 100);
+        assert_eq!(bad.workbench_layout.inspector_permille, 150);
+        assert_eq!(bad.workbench_layout.compact_editor_permille, 820);
+        assert_eq!(bad.workbench_layout.compact_pane, CompactPaneSetting::Hidden);
+        assert!(
+            bad.warnings
+                .iter()
+                .any(|warning| warning.contains("compact_pane")),
+            "an unknown pane is reported: {:?}",
+            bad.warnings
+        );
+
+        // Round trip: every fraction and the visible drawer pane survive exactly.
+        let mut settings = Settings::new();
+        settings.workbench_layout = WorkbenchLayout {
+            editor_permille: 505,
+            workspace_permille: 215,
+            logs_permille: 260,
+            inspector_permille: 340,
+            compact_editor_permille: 580,
+            compact_pane: CompactPaneSetting::Logs,
+        };
+        let again = Settings::from_json(&settings.to_json());
+        assert_eq!(again.workbench_layout, settings.workbench_layout);
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+        assert_eq!(
+            CompactPaneSetting::parse(CompactPaneSetting::Graph.as_str()),
+            Some(CompactPaneSetting::Graph)
         );
     }
 
