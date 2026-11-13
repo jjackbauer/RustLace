@@ -15,8 +15,9 @@ use egui::{
 
 use crate::engine::FunctionOrigin;
 use crate::execution::{Diagnostic, DocumentId};
+use crate::glyphs::GlyphMode;
 use crate::inspector::{Inspection, InspectorExpansion, Section, TREE_ROOT_PATH, tree_path};
-use crate::keyboard::{self, FileCommand};
+use crate::keyboard::{self, Action, FileCommand, KeyName, Pane, Shortcut};
 use crate::log_kind::LogKind;
 use crate::quick_eval::QuickEval;
 use crate::recovery::{self, RecoveryJournal, RecoveryRecord, RecoveryScan};
@@ -30,10 +31,12 @@ use crate::workspace_table::{
     ordered_variables,
 };
 
+use super::a11y;
 use super::editor::{TextEditor, surface_id};
 use super::file_dialogs::{self, FileDialogs, NativeFileDialogs};
 use super::plot::{self, Plot, PngBackground};
 use super::theme;
+
 /// Width of a splitter, in pixels.
 pub const SPLIT: f32 = 6.0;
 const MIN_EDITOR: f32 = 320.0;
@@ -407,6 +410,29 @@ pub struct WorkbenchApp {
     precision_error: Option<String>,
     precision_seen: usize,
     layout: Option<PaneLayout>,
+    /// A11Y-001: the focus group the keyboard is in, for F6 / Ctrl+1..5 movement.
+    focused_pane: Pane,
+    /// A11Y-001: a focus request waiting for its pane to paint its first control.
+    pane_focus: Option<Pane>,
+    /// A11Y-001: the Run button's widget id from the last painted pass, so the toolbar group can
+    /// be focused without a pointer.
+    run_button_id: Option<Id>,
+    /// A11Y-001: the plot pane's first control (Fit), focused by the plot group.
+    plot_fit_id: Option<Id>,
+    /// A11Y-001: the workspace Result/Inspector tab ids and the filter field id, so the workspace
+    /// group and Ctrl+Alt+F can focus them.
+    workspace_tab_ids: [Option<Id>; 2],
+    workspace_filter_id: Option<Id>,
+    /// A11Y-007: true while Help > Keyboard Shortcuts is open.
+    shortcuts_open: bool,
+    /// A11Y-007: true on the pass that opens the dialog, so its Close button takes focus.
+    shortcuts_focus: bool,
+    /// A11Y-001: Ctrl+Alt+F requests the workspace filter on the pass it is painted.
+    filter_focus: bool,
+    /// A11Y-014: the ASCII/Unicode notation in force this frame, mirrored from the settings.
+    glyph_mode: GlyphMode,
+    /// A11Y-014: font coverage per character, probed once from the shipped font stack.
+    glyph_coverage: std::collections::HashMap<char, bool>,
     /// True once the window has moved keyboard focus into the editor on its first frame.
     focus_requested: bool,
     /// True between handling Ctrl+Enter and the end of that frame (RUN-001 trace only).
@@ -492,6 +518,8 @@ impl WorkbenchApp {
         app.settings = settings;
         // VIS-002: the persisted theme wins over the dark default; the first frame applies it.
         app.theme = app.settings.theme;
+        // A11Y-014: the persisted ASCII/Unicode choice, applied from the first frame.
+        app.glyph_mode = GlyphMode::from_unicode(app.settings.unicode_glyphs);
         app.apply_editor_settings();
         // A record the session restore consumed is exactly the text now in its tab, so the journal
         // keeps tracking it instead of rewriting it on the first frame; it is deleted when the
@@ -604,14 +632,50 @@ impl WorkbenchApp {
             precision_error: None,
             precision_seen: workbench_precision,
             layout: None,
+            // A11Y-001: the editor owns the keyboard at launch, as it always has.
+            focused_pane: Pane::Editor,
+            pane_focus: None,
+            run_button_id: None,
+            plot_fit_id: None,
+            workspace_tab_ids: [None; 2],
+            workspace_filter_id: None,
+            shortcuts_open: false,
+            shortcuts_focus: false,
+            filter_focus: false,
+            // A11Y-014: `launch` re-reads this from the loaded settings; the constructor's
+            // default is the settings default (ASCII, the engine's own notation).
+            glyph_mode: GlyphMode::Ascii,
+            glyph_coverage: std::collections::HashMap::new(),
             focus_requested: false,
             trace_pending: false,
             trace_after_paint: false,
         }
     }
 
+    /// A11Y-014: localizes the frame's one view in the active ASCII/Unicode notation.
+    ///
+    /// The font probe is the shipped font stack (via [`a11y::font_has_glyph`]) and its answers
+    /// are cached for the session, so a character is measured once and every later frame reuses
+    /// the answer. A glyph the font lacks is replaced by its documented fallback in the same
+    /// call, which is why no pane can ever paint a tofu box.
+    fn localize_glyphs(&mut self, ctx: &egui::Context) {
+        self.glyph_mode = GlyphMode::from_unicode(self.settings.unicode_glyphs);
+        let mode = self.glyph_mode;
+        let coverage = &mut self.glyph_coverage;
+        let view = &mut self.view;
+        let mut probe = |c: char| -> bool {
+            if let Some(known) = coverage.get(&c) {
+                return *known;
+            }
+            let known = a11y::font_has_glyph(ctx, c);
+            coverage.insert(c, known);
+            known
+        };
+        a11y::localize_view(view, mode, &mut probe);
+    }
+
     /// Applies queued events and re-loads the editors whose document changed elsewhere.
-    fn sync(&mut self) {
+    fn sync(&mut self, ctx: &egui::Context) {
         self.workbench.poll();
         // DOC-002: New, Open and Close change the tab list; keep one editor per open document.
         self.sync_editors();
@@ -643,6 +707,10 @@ impl WorkbenchApp {
         // RUN-003: assemble the frame's pane state once, from the same committed snapshot the
         // poll above applied. Every pane below renders this value, not a fresh workbench lookup.
         self.view = self.workbench.active_view();
+        // A11Y-014: the ASCII/Unicode setting is applied to that one view here, before any pane
+        // or table reads it, so the result, the workspace, the logs and the inspector cannot
+        // disagree about the same value (and a missing glyph takes its documented fallback).
+        self.localize_glyphs(ctx);
         // RUN-020: a `setprecision(n)` statement moves the document precision; when it differs
         // from the value the control was last synchronised from, the control is rewritten. The
         // user's in-progress text is only replaced when the *document* actually changed, so an
@@ -820,7 +888,7 @@ impl WorkbenchApp {
     /// A record whose document is already open (the session restore usually recreated the tab from
     /// disk) rewrites that tab's buffer; otherwise the text arrives in a new tab. Either way the
     /// document is dirty against what is on disk, nothing is executed and nothing is written.
-    fn recover_record(&mut self, record: RecoveryRecord) {
+    fn recover_record(&mut self, record: RecoveryRecord, ctx: &egui::Context) {
         let report = self.workbench.recover(&record);
         if report.document_id.0 == record.document_id {
             // The record file is now exactly the text in the tab, so the journal tracks it instead
@@ -835,7 +903,7 @@ impl WorkbenchApp {
                 .log_active(LogKind::Diagnostic, format!("Recovery journal: {message}"));
         }
         self.remove_recovery_record(record.document_id);
-        self.sync();
+        self.sync(ctx);
         self.pending_focus = Some(surface_id());
     }
 
@@ -876,14 +944,14 @@ impl WorkbenchApp {
     }
 
     /// Ctrl+O / File > Open: ask the native Open dialog, then open the chosen file in a tab.
-    fn open_dialog(&mut self) {
+    fn open_dialog(&mut self, ctx: &egui::Context) {
         let Some(path) = self.dialogs.open() else {
             return;
         };
         // A refusal (a non-UTF-8 file, for example) is logged by the workbench with its reason and
         // leaves every tab alone; the editor keeps the focus it already had.
         if let Ok(index) = self.workbench.open(&path) {
-            self.sync_after_tab_change(index);
+            self.sync_after_tab_change(index, ctx);
         }
     }
 
@@ -925,9 +993,9 @@ impl WorkbenchApp {
 
     /// Makes `index` the active tab and reconciles the editors immediately, before any pane in
     /// this frame indexes them.
-    fn sync_after_tab_change(&mut self, index: usize) {
+    fn sync_after_tab_change(&mut self, index: usize, ctx: &egui::Context) {
         self.workbench.set_active(index);
-        self.sync();
+        self.sync(ctx);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -978,7 +1046,7 @@ impl WorkbenchApp {
                 self.workbench.close_document(id);
                 // The tab list changed under this frame's editors; reconcile now so no pane draws
                 // a document that is gone.
-                self.sync();
+                self.sync(ctx);
                 self.pending_focus = Some(surface_id());
             }
             CloseTarget::Window => {
@@ -1260,7 +1328,7 @@ impl WorkbenchApp {
                 return;
             };
             match choice {
-                RecoveryAnswer::Recover => self.recover_record(record),
+                RecoveryAnswer::Recover => self.recover_record(record, ctx),
                 RecoveryAnswer::Discard => self.discard_record(record),
             }
         }
@@ -1316,7 +1384,7 @@ impl WorkbenchApp {
         crate::run_trace::mark("file_command", command.label());
         match command {
             FileCommand::New => self.new_document(),
-            FileCommand::Open => self.open_dialog(),
+            FileCommand::Open => self.open_dialog(ctx),
             FileCommand::Save => self.save_active(false),
             FileCommand::SaveAs => self.save_active(true),
             FileCommand::CloseTab => {
@@ -1384,6 +1452,219 @@ impl WorkbenchApp {
             editor.completion.dismiss();
         }
         ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // A11Y-001: pane focus and the table-driven dispatcher.
+    // ---------------------------------------------------------------------------------------
+
+    /// The focus group the keyboard is actually in, derived from egui's focus owner.
+    ///
+    /// The window stores which group the user last moved to, but a pointer click or Tab can move
+    /// focus inside a group at any time, so F6 continues from the widget that really owns the
+    /// keyboard rather than from a stale label.
+    fn current_pane(&self, ctx: &egui::Context) -> Pane {
+        let Some(id) = ctx.memory(|memory| memory.focused()) else {
+            return self.focused_pane;
+        };
+        if id == surface_id() {
+            return Pane::Editor;
+        }
+        if Some(id) == self.run_button_id {
+            return Pane::Toolbar;
+        }
+        if Some(id) == self.plot_fit_id {
+            return Pane::Plot;
+        }
+        if self.workspace_tab_ids.contains(&Some(id)) || Some(id) == self.workspace_filter_id {
+            return Pane::Workspace;
+        }
+        if id == quick_eval_id() {
+            return Pane::Logs;
+        }
+        self.focused_pane
+    }
+
+    /// Moves keyboard focus into one focus group's first control.
+    ///
+    /// The id is normally known from the last painted pass; on the very first pass it is not, so
+    /// `pane_focus` waits for the pane to paint and requests focus then. That is what makes a
+    /// keyboard journey start from a fresh window without a pointer.
+    fn request_pane_focus(&mut self, pane: Pane, ctx: &egui::Context) {
+        self.focused_pane = pane;
+        let known = match pane {
+            Pane::Toolbar => self.run_button_id,
+            Pane::Editor => Some(surface_id()),
+            Pane::Plot => self.plot_fit_id,
+            Pane::Workspace => self.workspace_tab_ids[0],
+            Pane::Logs => Some(quick_eval_id()),
+        };
+        match known {
+            Some(id) => {
+                self.pane_focus = None;
+                ctx.memory_mut(|memory| memory.request_focus(id));
+            }
+            None => self.pane_focus = Some(pane),
+        }
+    }
+
+    /// F6 / Shift+F6: the next (or previous) focus group, wrapping.
+    fn move_pane_focus(&mut self, forward: bool, ctx: &egui::Context) {
+        let current = self.current_pane(ctx);
+        let next = if forward {
+            current.next()
+        } else {
+            current.previous()
+        };
+        self.request_pane_focus(next, ctx);
+    }
+
+    /// A11Y-007: opens the Help > Keyboard Shortcuts dialog and focuses its Close button.
+    fn open_shortcuts(&mut self) {
+        self.shortcuts_open = true;
+        self.shortcuts_focus = true;
+    }
+
+    /// A11Y-014: switches the window between ASCII and Unicode mathematical notation.
+    ///
+    /// The setting is persisted immediately and the log records the change, so the switch is
+    /// observable without a re-run: the next frame re-localizes the committed view in place.
+    fn set_unicode_glyphs(&mut self, enabled: bool, ctx: &egui::Context) {
+        if self.settings.unicode_glyphs == enabled {
+            return;
+        }
+        self.settings.unicode_glyphs = enabled;
+        self.glyph_mode = GlyphMode::from_unicode(enabled);
+        self.workbench.log_active(
+            LogKind::Info,
+            format!(
+                "Mathematical glyphs: {} notation",
+                self.glyph_mode.name()
+            ),
+        );
+        self.persist_state(true);
+        ctx.request_repaint();
+    }
+
+    /// Dispatches one registered binding from the table.
+    ///
+    /// Returns true when this call executed the action. The actions the window already executes
+    /// at a point of its own (`Run`/`Cancel`, the file commands, the editor navigation commands,
+    /// the editor's own history keys, quick-eval focus, editor settings and F8) return false so
+    /// they are not run twice; each of those paths is itself table-driven through
+    /// [`keyboard::binding_for`] / the legacy mappers. The mapping from action to handler is
+    /// exhaustive, so a newly registered action cannot be silently dead.
+    fn dispatch_binding(&mut self, binding: &'static keyboard::Binding, ctx: &egui::Context) -> bool {
+        crate::run_trace::mark(
+            "binding",
+            format!("{} {}", binding.keys.chord(), binding.action.label()),
+        );
+        match binding.action {
+            Action::NextPane => {
+                self.move_pane_focus(true, ctx);
+                true
+            }
+            Action::PreviousPane => {
+                self.move_pane_focus(false, ctx);
+                true
+            }
+            Action::FocusPane(pane) => {
+                self.request_pane_focus(pane, ctx);
+                true
+            }
+            Action::WorkspaceResultView => {
+                self.inspector_open = false;
+                self.request_pane_focus(Pane::Workspace, ctx);
+                if let Some(id) = self.workspace_tab_ids[0] {
+                    ctx.memory_mut(|memory| memory.request_focus(id));
+                }
+                true
+            }
+            Action::WorkspaceInspectorView => {
+                self.inspector_open = true;
+                self.request_pane_focus(Pane::Workspace, ctx);
+                if let Some(id) = self.workspace_tab_ids[1] {
+                    ctx.memory_mut(|memory| memory.request_focus(id));
+                }
+                true
+            }
+            Action::WorkspaceFilterFocus => {
+                self.filter_focus = true;
+                self.request_pane_focus(Pane::Workspace, ctx);
+                true
+            }
+            Action::ClearVariables => {
+                if self.view.has_snapshot && !self.workbench.active_is_running() {
+                    self.workbench.clear_variables_active();
+                }
+                true
+            }
+            Action::PlotFit => {
+                self.plot.fit();
+                true
+            }
+            Action::PlotActualSize => {
+                self.plot.actual_size();
+                true
+            }
+            Action::PlotZoomIn => {
+                self.plot.zoom_step(plot::WHEEL_STEP);
+                true
+            }
+            Action::PlotZoomOut => {
+                self.plot.zoom_step(1.0 / plot::WHEEL_STEP);
+                true
+            }
+            Action::PlotExportPng => {
+                self.export_plot_png_beside_capture();
+                true
+            }
+            Action::ShortcutsHelp => {
+                self.open_shortcuts();
+                true
+            }
+            Action::ToggleUnicodeGlyphs => {
+                let enabled = !self.settings.unicode_glyphs;
+                self.set_unicode_glyphs(enabled, ctx);
+                true
+            }
+            // VIS-002 + A11Y-001: the theme switch is a command like any other, so it has a
+            // binding; `set_theme` is the same entry point the toolbar button uses.
+            Action::ToggleTheme => {
+                let next = self.theme.toggled();
+                self.set_theme(next, ctx);
+                true
+            }
+            Action::Quit => {
+                self.request_close(CloseTarget::Window, ctx);
+                true
+            }
+            // Executed by the window's dedicated table-driven blocks or by the editor.
+            Action::Workbench(_)
+            | Action::File(_)
+            | Action::Editor(_)
+            | Action::Undo
+            | Action::Redo
+            | Action::Completion
+            | Action::QuickEvalFocus
+            | Action::EditorSettings
+            | Action::JumpToDiagnostic => false,
+        }
+    }
+
+    /// The table's chord for `action` was pressed this frame.
+    ///
+    /// The dedicated blocks (quick-eval focus, editor settings, F8) ask this instead of matching
+    /// key constants, so changing a chord in [`keyboard::BINDINGS`] moves the behaviour and the
+    /// Help reference together.
+    fn pressed_action(&self, ui: &Ui, action: Action) -> bool {
+        ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(shortcut_of_event)
+                .any(|shortcut| keyboard::action_for(shortcut) == Some(action))
+        })
     }
 
     /// EDT-016: the active editor, for the `--measure-large` driver.
@@ -1612,6 +1893,29 @@ impl WorkbenchApp {
                     .monospace()
                     .color(theme::accent()),
                 );
+                ui.separator();
+                // A11Y-014: the ASCII/Unicode mathematical-notation setting. It applies to the
+                // committed values in place (no re-run) and is persisted immediately.
+                let mut unicode = self.settings.unicode_glyphs;
+                if ui
+                    .checkbox(&mut unicode, "Unicode mathematical glyphs (√ × π ≤)")
+                    .on_hover_text(format!(
+                        "Off: the engine's ASCII notation (sqrt, *, pi, <=). On: Unicode. A glyph \
+                         the font lacks falls back to its ASCII spelling ({}).",
+                        keyboard::chord_of(Action::ToggleUnicodeGlyphs)
+                    ))
+                    .changed()
+                {
+                    self.set_unicode_glyphs(unicode, ctx);
+                }
+                ui.label(
+                    RichText::new(format!(
+                        "Values render as {}",
+                        self.glyph_mode.label()
+                    ))
+                    .monospace()
+                    .color(theme::dim()),
+                );
             });
         self.editor_settings_open = open;
         if changed {
@@ -1632,7 +1936,7 @@ impl WorkbenchApp {
                 self.new_document();
             }
             if self.file_bar_button(ui, "Open...", "Open a Lovelace script from disk (Ctrl+O)") {
-                self.open_dialog();
+                self.open_dialog(&ctx);
             }
             if self.file_bar_button(
                 ui,
@@ -1655,7 +1959,7 @@ impl WorkbenchApp {
                     for path in &recent {
                         if ui.button(path).clicked() {
                             if let Ok(index) = self.workbench.open(std::path::Path::new(path)) {
-                                self.sync_after_tab_change(index);
+                                self.sync_after_tab_change(index, &ctx);
                             }
                             ui.close();
                         }
@@ -1762,6 +2066,9 @@ impl WorkbenchApp {
             self.last_stable_focus = current_focus;
         }
         self.focus_before_interaction = current_focus.or(self.last_stable_focus);
+        // A11Y-001: refresh the focus group from the real focus owner, so a pointer click or Tab
+        // inside a pane moves the F6 sequence on from where the user actually is.
+        self.focused_pane = self.current_pane(ui.ctx());
         // RUN-001 trace: the frame after the Running frame begins only once that frame has been
         // painted and presented, so its start bounds the paint time.
         if self.trace_after_paint {
@@ -1825,23 +2132,9 @@ impl WorkbenchApp {
 
         // LOG-003: Ctrl+Shift+E is the keyboard way into the quick-eval field. The field is also
         // focusable by clicking it (it is an ordinary egui `TextEdit`); this shortcut only moves
-        // keyboard focus, it never submits or edits. The editor's completion popup is dismissed
-        // so it cannot linger over a field it no longer owns.
-        if ui.input(|input| {
-            input.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Key {
-                        key: Key::E,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } if (modifiers.ctrl || modifiers.command)
-                        && modifiers.shift
-                        && !modifiers.alt
-                )
-            })
-        }) {
+        // keyboard focus, it never submits or edits. The chord comes from the binding table
+        // (A11Y-007), so the Help reference and this block cannot disagree.
+        if self.pressed_action(ui, Action::QuickEvalFocus) {
             for editor in &mut self.editors {
                 editor.completion.dismiss();
             }
@@ -1962,25 +2255,29 @@ impl WorkbenchApp {
         if let Some(command) = editor_shortcut {
             self.apply_editor_command(command, ui.ctx());
         }
-        // EDT-008: Ctrl+, opens the editor settings window, the keyboard route to the
-        // indent-width / tabs-vs-spaces / auto-close configuration.
-        if ui.input(|input| {
-            input.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Key {
-                        key: Key::Comma,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } if modifiers.command || modifiers.ctrl
-                )
-            })
-        }) {
+        // A11Y-001/A11Y-007: every remaining registered binding — pane focus (F6, Ctrl+1..5),
+        // the workspace and plot actions, the plot export, Help > Keyboard Shortcuts, the
+        // ASCII/Unicode toggle and Quit — is dispatched through the same table the Help dialog
+        // renders. The chords the window already executes at a point of its own come back as
+        // false from `dispatch_binding` and run exactly once, in their own block.
+        let window_bindings: Vec<&'static keyboard::Binding> = ui.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(shortcut_of_event)
+                .filter_map(keyboard::binding_for)
+                .collect()
+        });
+        for binding in window_bindings {
+            self.dispatch_binding(binding, ui.ctx());
+        }
+        // EDT-008: Ctrl+, opens the editor settings window. The chord is looked up in the
+        // binding table, never spelled here.
+        if self.pressed_action(ui, Action::EditorSettings) {
             self.editor_settings_open = true;
         }
 
-        self.sync();
+        self.sync(ui.ctx());
         // EDT-008: Tab belongs to the code editor (indent / outdent / accept a completion), not
         // to egui's focus traversal. Handling it here, before any toolbar widget registers as a
         // focus candidate, is what keeps the very first Tab from moving focus out of the editor
@@ -2038,8 +2335,9 @@ impl WorkbenchApp {
 
         // F8 is window-global keyboard navigation to the last failure: it works whether the
         // caret is in the editor or focus sits on the toolbar. The jump is revision-gated by the
-        // workbench, so it can never move the caret to a line that no longer exists.
-        if ui.input(|input| input.key_pressed(Key::F8)) {
+        // workbench, so it can never move the caret to a line that no longer exists. The chord is
+        // the table's (A11Y-007).
+        if self.pressed_action(ui, Action::JumpToDiagnostic) {
             let active = self.workbench.active();
             if self.editors[active].jump_to_diagnostic() {
                 ui.ctx()
@@ -2065,6 +2363,11 @@ impl WorkbenchApp {
         self.goto_line_window(ui.ctx());
         self.find_symbol_window(ui.ctx());
         self.editor_settings_window(ui.ctx());
+        // A11Y-007: Help > Keyboard Shortcuts, generated from the binding table.
+        self.shortcuts_window(ui.ctx());
+        // A11Y-003: the window's one keyboard-focus ring, painted last so it sits above every
+        // pane and dialog and around whatever widget really owns the keyboard.
+        paint_focus_ring(ui.ctx());
         // DOC-002: the native window title carries the active file name and its dirty marker.
         self.update_window_title(ui.ctx());
         // A queued focus request is cleared only once the editor actually holds the focus; while
@@ -2116,6 +2419,14 @@ impl WorkbenchApp {
                 .on_hover_text(
                     "Run (Ctrl+Enter): evaluate the active document on a worker (the window never blocks)",
                 );
+            // A11Y-001: the toolbar group's first control. Its id is remembered so F6 / Ctrl+1 can
+            // put the keyboard here, and a focus request that arrived before this pane painted is
+            // satisfied now.
+            self.run_button_id = Some(run.id);
+            if self.pane_focus == Some(Pane::Toolbar) {
+                self.pane_focus = None;
+                run.request_focus();
+            }
             if run.clicked() {
                 self.workbench.run_active();
             }
@@ -2220,6 +2531,38 @@ impl WorkbenchApp {
             }
             ui.separator();
 
+            // A11Y-007: Help > Keyboard Shortcuts. A menu (not only the F1 key) so the surface is
+            // discoverable by a user who does not know the shortcut yet; the menu's contents are
+            // the binding table, rendered by the same `reference_rows` the dialog uses.
+            ui.menu_button("Help", |ui| {
+                if ui
+                    .button(format!(
+                        "Keyboard Shortcuts ({})",
+                        keyboard::chord_of(Action::ShortcutsHelp)
+                    ))
+                    .clicked()
+                {
+                    self.open_shortcuts();
+                    ui.close();
+                }
+                ui.separator();
+                let mut unicode = self.settings.unicode_glyphs;
+                if ui
+                    .checkbox(&mut unicode, "Unicode mathematical glyphs")
+                    .on_hover_text(format!(
+                        "Render values as √ × π ≤ ∞ instead of the engine's ASCII notation \
+                         ({}). A glyph the font lacks falls back to its ASCII spelling.",
+                        keyboard::chord_of(Action::ToggleUnicodeGlyphs)
+                    ))
+                    .changed()
+                {
+                    self.set_unicode_glyphs(unicode, ui.ctx());
+                }
+            })
+            .response
+            .on_hover_text("Keyboard shortcuts and the mathematical-glyph setting");
+            ui.separator();
+
             // VIS-002: the runtime theme toggle. Its label carries the render state, so a UIA
             // capture names the control ("Theme: Dark") and the same name opens the next theme.
             let theme_response = ui
@@ -2316,6 +2659,17 @@ impl WorkbenchApp {
                 ui.separator();
                 ui.label(RichText::new("Cancel is available in the toolbar.").color(theme::warning()));
             }
+            // A11Y-001: the status strip names the focus group, so a keyboard-only user (and a
+            // UIA capture) can tell which pane F6 is in without reading the ring's position.
+            ui.separator();
+            ui.label(
+                RichText::new(format!("focus: {}", self.focused_pane.label()))
+                    .small()
+                    .color(theme::dim()),
+            )
+            .on_hover_text(
+                "The pane group the keyboard is in (F6 moves it; Ctrl+1..5 jump directly)",
+            );
         });
     }
 
@@ -2369,6 +2723,12 @@ impl WorkbenchApp {
     }
 
     fn editor_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
+        // A11Y-001: F6 / Ctrl+2 focus the editor surface. Requesting it before the editor paints
+        // means the ring and the caret are already in place when the keys are read.
+        if self.pane_focus == Some(Pane::Editor) {
+            self.pane_focus = None;
+            ui.ctx().memory_mut(|memory| memory.request_focus(surface_id()));
+        }
         let active = self.workbench.active();
         let (title, encoding) = match self.workbench.document(active) {
             Some(document) => (document.title.clone(), document.encoding_label()),
@@ -2686,11 +3046,16 @@ impl WorkbenchApp {
                 // point per logical screen pixel) and is a different view on a pane whose fit
                 // scale is not 1:1. Both are one click, and the wheel/drag handlers in
                 // `plot.rs` apply the same clamped transform.
-                if ui
+                // A11Y-001: Fit is the plot pane's first control, so F6 / Ctrl+3 lands here.
+                let fit = ui
                     .button("Fit")
-                    .on_hover_text("Show the whole plot in the pane")
-                    .clicked()
-                {
+                    .on_hover_text("Show the whole plot in the pane (Ctrl+0)");
+                self.plot_fit_id = Some(fit.id);
+                if self.pane_focus == Some(Pane::Plot) {
+                    self.pane_focus = None;
+                    fit.request_focus();
+                }
+                if fit.clicked() {
                     self.plot.fit();
                 }
                 if ui
@@ -2938,6 +3303,146 @@ impl WorkbenchApp {
         }
     }
 
+    /// A11Y-001: Ctrl+Shift+P writes a PNG next to the engine's SVG capture, without a dialog.
+    ///
+    /// A keyboard user cannot complete a native Save dialog with the keyboard alone on every
+    /// platform, so the plot pane gets one export that needs no dialog at all. The file lands in
+    /// the directory the engine chose for the capture (the same writable directory the dialog
+    /// opens in), and the result is reported in the plot header exactly like a dialog export.
+    fn export_plot_png_beside_capture(&mut self) {
+        if self.plot.is_empty() {
+            self.plot_export_status =
+                Some(("PNG export: no engine plot to export yet".to_string(), true));
+            return;
+        }
+        let Some(directory) = self.plot_export_dir() else {
+            self.plot_export_status = Some((
+                "PNG export: the engine plot capture has no writable directory".to_string(),
+                true,
+            ));
+            return;
+        };
+        let name = plot::export_file_name(self.plot_title().as_deref(), "png");
+        let path = directory.join(&name);
+        self.plot_export_status = Some(match self.plot.export_png_to(
+            &path,
+            2.0,
+            PngBackground::Opaque,
+        ) {
+            Ok([width, height]) => (
+                format!(
+                    "PNG: {width}x{height} px {} -> {}",
+                    PngBackground::Opaque.label(),
+                    name
+                ),
+                false,
+            ),
+            Err(error) => (error, true),
+        });
+    }
+
+    /// A11Y-007: the Help > Keyboard Shortcuts dialog.
+    ///
+    /// Every row is a projection of [`keyboard::BINDINGS`] (`reference_rows`), grouped by the
+    /// scope the binding declares, so the dialog cannot list a shortcut the window does not
+    /// register or omit one it does. The dialog is keyboard-complete: it opens with its Close
+    /// button focused and Esc closes it.
+    fn shortcuts_window(&mut self, ctx: &egui::Context) {
+        if !self.shortcuts_open {
+            return;
+        }
+        let mut open = self.shortcuts_open;
+        let mut close = false;
+        let grab_focus = self.shortcuts_focus;
+        self.shortcuts_focus = false;
+        let unicode_chord = keyboard::chord_of(Action::ToggleUnicodeGlyphs);
+        let mode = self.glyph_mode;
+        egui::Window::new("Keyboard shortcuts")
+            .id(Id::unique("a11y_shortcuts"))
+            .collapsible(false)
+            .resizable(true)
+            // The reference uses the window: two chord/description pairs per row and an explicit
+            // size, wide and tall enough that the whole table is on one screen (a reference that
+            // has to be scrolled to find a key is not a reference).
+            .default_size(vec2(
+                (ctx.content_rect().width() - 160.0).clamp(640.0, 1400.0),
+                (ctx.content_rect().height() - 120.0).clamp(360.0, 900.0),
+            ))
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Generated from the {} registered bindings in keyboard.rs. \
+                         Mathematical glyphs: {} ({}).",
+                        keyboard::BINDINGS.len(),
+                        mode.label(),
+                        unicode_chord
+                    ))
+                    .small()
+                    .color(theme::dim()),
+                );
+                egui::ScrollArea::vertical()
+                    .id_salt("a11y_shortcuts_scroll")
+                    // The reference is one table: the dialog asks for the height it needs and the
+                    // window's own scroll handles a screen too small to show it (no inner max
+                    // height, so a row is never culled from the painted tree by nesting).
+                    .max_height(f32::INFINITY)
+                    .show(ui, |ui| {
+                        for scope in keyboard::Scope::ALL {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(scope.label().to_uppercase())
+                                    .strong()
+                                    .color(theme::accent()),
+                            );
+                            let rows: Vec<keyboard::ReferenceRow> = keyboard::reference_rows()
+                                .into_iter()
+                                .filter(|row| row.scope == scope)
+                                .collect();
+                            // Two bindings per row: the whole reference fits on one screen, which
+                            // is what makes it readable (and wholly present in a UIA dump)
+                            // without scrolling.
+                            egui::Grid::new(("a11y_shortcuts_grid", scope.label()))
+                                .num_columns(4)
+                                .striped(true)
+                                .min_col_width(110.0)
+                                .show(ui, |ui| {
+                                    for pair in rows.chunks(2) {
+                                        for row in pair {
+                                            ui.label(
+                                                RichText::new(row.chord.clone())
+                                                    .monospace()
+                                                    .color(theme::text()),
+                                            );
+                                            ui.label(
+                                                RichText::new(row.description).color(theme::text()),
+                                            );
+                                        }
+                                        for _ in pair.len()..2 {
+                                            ui.label("");
+                                            ui.label("");
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                        }
+                    });
+                ui.separator();
+                let close_button = ui.button("Close");
+                if close_button.clicked() {
+                    close = true;
+                }
+                if grab_focus {
+                    close_button.request_focus();
+                }
+            });
+        if ctx.input(|input| input.key_pressed(Key::Escape)) {
+            close = true;
+        }
+        self.shortcuts_open = open && !close;
+    }
+
     fn workspace_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
         let has_snapshot = view.has_snapshot;
         // RUN-003: the pane states the revision and committed prefix it is showing, from the
@@ -2987,16 +3492,22 @@ impl WorkbenchApp {
         let mut inspector_open = self.inspector_open;
         let mut inspector_toggle_rects: Vec<(String, Rect)> = Vec::new();
         let mut workspace_view_tabs: [Option<Rect>; 2] = [None; 2];
+        let mut workspace_view_tab_ids: [Option<Id>; 2] = [None; 2];
+        let mut workspace_filter_id: Option<Id> = None;
         let mut result_toggle_rects: Vec<(String, Rect)> = Vec::new();
+        let pane_focus = self.pane_focus;
         with_pane(ui, rect, "Workspace", |ui, header, body| {
             ui.scope_builder(header_ui(header), |ui| {
                 let label = ui.label("Filter");
-                ui.add(
-                    egui::TextEdit::singleline(&mut filter)
-                        .hint_text("variable or function")
-                        .desired_width(130.0),
-                )
-                .labelled_by(label.id);
+                let filter_field = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut filter)
+                            .hint_text("variable or function")
+                            .desired_width(130.0),
+                    )
+                    .labelled_by(label.id)
+                    .on_hover_text("Filter the variables and functions by name (Ctrl+Alt+F)");
+                workspace_filter_id = Some(filter_field.id);
                 ui.label(
                     RichText::new(format!("{variable_count} vars · {function_count} funcs"))
                         .color(theme::dim()),
@@ -3022,11 +3533,13 @@ impl WorkbenchApp {
                     // only `view.result_inspection`, which came from the last commit.
                     ui.horizontal(|ui| {
                         let result_tab = ui.selectable_label(!inspector_open, "Result");
+                        workspace_view_tab_ids[0] = Some(result_tab.id);
                         if result_tab.clicked() {
                             inspector_open = false;
                         }
                         workspace_view_tabs[0] = Some(result_tab.rect);
                         let inspector_tab = ui.selectable_label(inspector_open, "Inspector");
+                        workspace_view_tab_ids[1] = Some(inspector_tab.id);
                         if inspector_tab.clicked() {
                             inspector_open = true;
                         }
@@ -3293,9 +3806,33 @@ impl WorkbenchApp {
         self.inspector_open = inspector_open;
         self.inspector_toggle_rects = inspector_toggle_rects;
         self.workspace_view_tabs = workspace_view_tabs;
+        // A11Y-001: the workspace group's first control is the Result tab; Ctrl+Alt+F targets the
+        // filter. Both requests are satisfied on the pass that painted the widget.
+        self.workspace_tab_ids = workspace_view_tab_ids;
+        self.workspace_filter_id = workspace_filter_id;
+        if pane_focus == Some(Pane::Workspace) {
+            if let Some(id) = self.workspace_tab_ids[0] {
+                self.pane_focus = None;
+                ui.ctx()
+                    .memory_mut(|memory| memory.request_focus(id));
+            }
+        }
+        if self.filter_focus {
+            if let Some(id) = self.workspace_filter_id {
+                self.filter_focus = false;
+                ui.ctx()
+                    .memory_mut(|memory| memory.request_focus(id));
+            }
+        }
     }
 
     fn logs_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
+        // A11Y-001: the logs group's first control is the quick-eval field.
+        if self.pane_focus == Some(Pane::Logs) {
+            self.pane_focus = None;
+            ui.ctx()
+                .memory_mut(|memory| memory.request_focus(quick_eval_id()));
+        }
         let active = self.workbench.active();
         let legend = log_kind_legend();
         with_pane(ui, rect, "Logs", |ui, header, body| {
@@ -4123,6 +4660,79 @@ fn paint_record_body(
     }
 }
 
+/// A11Y-001: the table's chord for one egui key event, if the event names a key the table knows.
+///
+/// The conversion is the only place the window's key names meet the table's platform-independent
+/// names, so every binding (old and new) is matched by the same rules.
+fn shortcut_of_event(event: &egui::Event) -> Option<Shortcut> {
+    let egui::Event::Key {
+        key,
+        pressed: true,
+        modifiers,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let key = match key {
+        Key::Enter => KeyName::Enter,
+        Key::Escape => KeyName::Escape,
+        Key::Tab => KeyName::Tab,
+        Key::Space => KeyName::Space,
+        Key::Comma => KeyName::Comma,
+        Key::F1 => KeyName::F1,
+        Key::F6 => KeyName::F6,
+        Key::F8 => KeyName::F8,
+        // Both the `=` key and the `+` key it shifts to are the registered "zoom in" chord.
+        Key::Equals | Key::Plus => KeyName::Plus,
+        Key::Minus => KeyName::Minus,
+        Key::Num0 => KeyName::Digit(0),
+        Key::Num1 => KeyName::Digit(1),
+        Key::Num2 => KeyName::Digit(2),
+        Key::Num3 => KeyName::Digit(3),
+        Key::Num4 => KeyName::Digit(4),
+        Key::Num5 => KeyName::Digit(5),
+        Key::A => KeyName::Char('a'),
+        Key::B => KeyName::Char('b'),
+        Key::C => KeyName::Char('c'),
+        Key::D => KeyName::Char('d'),
+        Key::E => KeyName::Char('e'),
+        Key::F => KeyName::Char('f'),
+        Key::G => KeyName::Char('g'),
+        Key::H => KeyName::Char('h'),
+        Key::I => KeyName::Char('i'),
+        Key::J => KeyName::Char('j'),
+        Key::K => KeyName::Char('k'),
+        Key::L => KeyName::Char('l'),
+        Key::M => KeyName::Char('m'),
+        Key::N => KeyName::Char('n'),
+        Key::O => KeyName::Char('o'),
+        Key::P => KeyName::Char('p'),
+        Key::Q => KeyName::Char('q'),
+        Key::R => KeyName::Char('r'),
+        Key::S => KeyName::Char('s'),
+        Key::T => KeyName::Char('t'),
+        Key::U => KeyName::Char('u'),
+        Key::V => KeyName::Char('v'),
+        Key::W => KeyName::Char('w'),
+        Key::X => KeyName::Char('x'),
+        Key::Y => KeyName::Char('y'),
+        Key::Z => KeyName::Char('z'),
+        _ => return None,
+    };
+    Some(Shortcut::new(
+        key,
+        modifiers.ctrl || modifiers.command,
+        modifiers.shift,
+        modifiers.alt,
+    ))
+}
+
+/// Paints one keyboard-focus ring for the whole window (A11Y-003).
+fn paint_focus_ring(ctx: &egui::Context) {
+    a11y::paint_focus_ring(ctx);
+}
+
 /// The fixed widths of the variables table's three columns, fitted to the pane.
 fn variable_column_widths(available: f32) -> [f32; 3] {
     let usable = (available - 16.0).max(96.0);
@@ -4387,6 +4997,7 @@ mod tests {
     use super::*;
     use crate::completion::CompletionKind;
     use crate::engine::{EngineFunction, EngineState, Evaluator};
+    use crate::glyphs;
     use crate::log_kind::LogLine;
     use crate::run_state::RunState;
     use crate::workbench::Workbench;
@@ -8319,5 +8930,903 @@ mod tests {
             "a saved document's recovery record is deleted"
         );
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    // ======================================================================================
+    // A11Y-001 / A11Y-003 / A11Y-007 / A11Y-014: accessibility acceptance.
+    // ======================================================================================
+
+    /// A scripted evaluator for the accessibility tests.
+    ///
+    /// It returns one fixed symbolic value for every statement, plus the structured projection,
+    /// the inspector payload, a variable, one print line and a plot capture whose path is a
+    /// scratch directory. The keyboard journey therefore asserts the *window's* keyboard path
+    /// (painting, focus, export) without touching the user profile and without depending on
+    /// engine arithmetic, which its own tests cover.
+    struct A11yEngine {
+        plot_dir: PathBuf,
+    }
+
+    impl A11yEngine {
+        fn new(plot_dir: PathBuf) -> A11yEngine {
+            let _ = std::fs::create_dir_all(&plot_dir);
+            A11yEngine { plot_dir }
+        }
+
+        fn structured() -> lovelace_json::Json {
+            use lovelace_json::Json;
+            Json::obj([
+                ("kind", Json::Str("Symbolic".to_string())),
+                ("pretty", Json::Str("sqrt(2)*pi".to_string())),
+                ("canonical", Json::Str("(mul (pow 2 1/2) pi)".to_string())),
+                ("freeSymbols", Json::str_array(["x"])),
+                ("nodeCount", Json::Num("3".to_string())),
+            ])
+        }
+
+        fn inspection() -> lovelace_json::Json {
+            use lovelace_json::Json;
+            Json::obj([
+                (
+                    "subject",
+                    Json::obj([
+                        ("kind", Json::Str("Symbolic".to_string())),
+                        ("path", Json::Str("result".to_string())),
+                    ]),
+                ),
+                (
+                    "sections",
+                    Json::obj([
+                        (
+                            "pretty",
+                            Json::obj([("text", Json::Str("sqrt(2)*pi".to_string()))]),
+                        ),
+                        (
+                            "tree",
+                            Json::obj([(
+                                "root",
+                                Json::obj([
+                                    ("kind", Json::Str("Mul".to_string())),
+                                    ("label", Json::Str("sqrt(2)*pi".to_string())),
+                                    ("children", Json::Arr(Vec::new())),
+                                ]),
+                            )]),
+                        ),
+                    ]),
+                ),
+            ])
+        }
+    }
+
+    impl Evaluator for A11yEngine {
+        fn eval(&mut self, _src: &str) -> Result<String, String> {
+            Ok("sqrt(2)*pi".to_string())
+        }
+
+        fn last_structured(&self) -> Option<lovelace_json::Json> {
+            Some(A11yEngine::structured())
+        }
+
+        fn last_inspection(&self) -> Option<lovelace_json::Json> {
+            Some(A11yEngine::inspection())
+        }
+
+        fn variables(&self) -> Vec<(String, String)> {
+            vec![("x".to_string(), "sqrt(2)*pi".to_string())]
+        }
+
+        fn state(&self) -> Option<EngineState> {
+            Some(EngineState {
+                variables: vec![crate::engine::EngineVariable {
+                    name: "x".to_string(),
+                    kind: "Symbolic".to_string(),
+                    display: "sqrt(2)*pi".to_string(),
+                    structured: Some(A11yEngine::structured()),
+                }],
+                functions: Vec::new(),
+            })
+        }
+
+        fn take_output(&mut self) -> Vec<String> {
+            vec!["printed sqrt(2)".to_string()]
+        }
+
+        fn last_plot(&self) -> Option<crate::engine::PlotCapture> {
+            Some(crate::engine::PlotCapture {
+                path: self.plot_dir.join("plot-1.svg").display().to_string(),
+                title: "a11y journey plot".to_string(),
+                svg: crate::svg::make_plot_svg("a11y journey plot", &[1, 3, 2]),
+            })
+        }
+    }
+
+    /// A scratch directory under the process temp directory for one accessibility test.
+    fn scratch_dir(label: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "lovelace-desktop-a11y-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+        directory
+    }
+
+    /// A window over the scripted evaluator, with no persisted settings or recovery journal.
+    fn a11y_app(plot_dir: PathBuf) -> WorkbenchApp {
+        let workbench = Workbench::with_factory(Box::new(move || {
+            Box::new(A11yEngine::new(plot_dir.clone()))
+        }));
+        WorkbenchApp::with_storage(workbench, AppStorage::default())
+    }
+
+    fn a11y_frame(
+        ctx: &egui::Context,
+        app: &mut WorkbenchApp,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        frame_capturing(ctx, app, vec2(1600.0, 1000.0), events, Default::default())
+    }
+
+    /// Pumps `frames` passes and returns the last pass's painted text.
+    fn pump_text(ctx: &egui::Context, app: &mut WorkbenchApp, frames: usize) -> Vec<String> {
+        let mut texts = Vec::new();
+        for _ in 0..frames.max(1) {
+            let output = a11y_frame(ctx, app, Vec::new());
+            texts.clear();
+            for clipped in &output.shapes {
+                collect_shape_text(&clipped.shape, &mut texts);
+            }
+        }
+        texts
+    }
+
+    /// The egui key for one table key name.
+    fn egui_key_of(name: KeyName) -> Key {
+        match name {
+            KeyName::Enter => Key::Enter,
+            KeyName::Escape => Key::Escape,
+            KeyName::Tab => Key::Tab,
+            KeyName::Space => Key::Space,
+            KeyName::Comma => Key::Comma,
+            KeyName::F1 => Key::F1,
+            KeyName::F6 => Key::F6,
+            KeyName::F8 => Key::F8,
+            KeyName::Plus => Key::Equals,
+            KeyName::Minus => Key::Minus,
+            KeyName::Digit(0) => Key::Num0,
+            KeyName::Digit(1) => Key::Num1,
+            KeyName::Digit(2) => Key::Num2,
+            KeyName::Digit(3) => Key::Num3,
+            KeyName::Digit(4) => Key::Num4,
+            KeyName::Digit(5) => Key::Num5,
+            KeyName::Digit(other) => panic!("no egui digit key for {other}"),
+            KeyName::Char('n') => Key::N,
+            KeyName::Char('q') => Key::Q,
+            KeyName::Char('u') => Key::U,
+            KeyName::Char('p') => Key::P,
+            KeyName::Char('c') => Key::C,
+            KeyName::Char('f') => Key::F,
+            KeyName::Char('t') => Key::T,
+            KeyName::Char('z') => Key::Z,
+            KeyName::Char(other) => panic!("no egui key for {other:?}"),
+        }
+    }
+
+    /// Sends one chord, then paints the pass in which its focus request takes effect.
+    fn press_chord(
+        ctx: &egui::Context,
+        app: &mut WorkbenchApp,
+        chord: keyboard::Shortcut,
+    ) -> Vec<String> {
+        let modifiers = egui::Modifiers {
+            ctrl: chord.ctrl,
+            shift: chord.shift,
+            alt: chord.alt,
+            ..Default::default()
+        };
+        let _ = a11y_frame(ctx, app, vec![key(egui_key_of(chord.key), modifiers)]);
+        // Two more passes: the pass that reads the chord and the pass that lays out whatever it
+        // opened (a dialog measures its content on the first pass that paints it).
+        pump_text(ctx, app, 2)
+    }
+
+    /// Sends the chord registered for `action` through the table.
+    fn press_action(ctx: &egui::Context, app: &mut WorkbenchApp, action: Action) -> Vec<String> {
+        let binding = keyboard::binding_record(action).expect("the action is registered");
+        press_chord(ctx, app, binding.keys)
+    }
+
+    /// Runs the document through Ctrl+Enter and waits for the terminal state, painting frames
+    /// exactly as the window does.
+    fn run_from_keyboard(ctx: &egui::Context, app: &mut WorkbenchApp) -> Vec<String> {
+        let mut texts = press_action(
+            ctx,
+            app,
+            Action::Workbench(keyboard::WorkbenchCommand::Run),
+        );
+        for _ in 0..600 {
+            if matches!(
+                app.view.run_state,
+                RunState::Finished | RunState::Failed | RunState::Cancelled
+            ) {
+                break;
+            }
+            texts = pump_text(ctx, app, 1);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            matches!(app.view.run_state, RunState::Finished),
+            "the run did not finish: {:?}",
+            app.view.run_state
+        );
+        texts
+    }
+
+    /// Collects the stroke colours of every rectangle shape in a pass.
+    fn rect_stroke_colors(shape: &egui::Shape, out: &mut Vec<(Color32, f32)>) {
+        match shape {
+            egui::Shape::Rect(rect) => {
+                if rect.stroke.width > 0.0 {
+                    out.push((rect.stroke.color, rect.stroke.width));
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    rect_stroke_colors(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A11Y-003: the ring is painted in the active theme's `focus_ring` token — in both themes.
+    ///
+    /// The assertion reads the painted `RectShape` stroke, so it proves what the window drew
+    /// rather than what a constant says it would draw.
+    #[test]
+    fn the_focus_ring_is_painted_in_the_theme_token_in_both_themes() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("focus");
+        let mut app = a11y_app(plot_dir.clone());
+        // The editor owns focus from the first pass, so there is always a focused control.
+        let mut output = a11y_frame(&ctx, &mut app, Vec::new());
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(surface_id()),
+            "the editor owns the keyboard at launch"
+        );
+        let mut strokes = Vec::new();
+        for clipped in &output.shapes {
+            rect_stroke_colors(&clipped.shape, &mut strokes);
+        }
+        let ring = theme::tokens_for(theme::ThemeId::Dark).focus_ring;
+        assert!(
+            strokes.iter().any(|(color, width)| *color == ring
+                && (*width - a11y::FOCUS_RING_WIDTH).abs() < f32::EPSILON),
+            "the dark frame must paint the focus ring in the dark token: {strokes:?}"
+        );
+
+        // Switch to the light theme through the window's own control and paint again.
+        app.set_theme(theme::ThemeId::Light, &ctx);
+        output = a11y_frame(&ctx, &mut app, Vec::new());
+        let mut strokes = Vec::new();
+        for clipped in &output.shapes {
+            rect_stroke_colors(&clipped.shape, &mut strokes);
+        }
+        let light_ring = theme::tokens_for(theme::ThemeId::Light).focus_ring;
+        assert_ne!(ring, light_ring);
+        assert!(
+            strokes.iter().any(|(color, width)| *color == light_ring
+                && (*width - a11y::FOCUS_RING_WIDTH).abs() < f32::EPSILON),
+            "the light frame must paint the focus ring in the light token: {strokes:?}"
+        );
+        assert!(
+            !strokes.iter().any(|(color, _)| *color == ring),
+            "the dark ring colour must not survive the theme switch"
+        );
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// A11Y-003: the ring follows keyboard focus from pane to pane, so a keyboard user can see
+    /// where they are. The ring's rectangle is the focused widget's rectangle.
+    #[test]
+    fn the_focus_ring_moves_with_the_keyboard_focus() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("ring-follow");
+        let mut app = a11y_app(plot_dir.clone());
+        a11y_frame(&ctx, &mut app, Vec::new());
+        // F6 from the editor: the plot pane's Fit button takes focus.
+        let _ = a11y_frame(&ctx, &mut app, vec![key(Key::F6, Default::default())]);
+        let output = a11y_frame(&ctx, &mut app, Vec::new());
+        assert_eq!(app.focused_pane, Pane::Plot);
+        let focus = ctx
+            .memory(|memory| memory.focused())
+            .expect("a focused control");
+        assert_eq!(
+            Some(focus),
+            app.plot_fit_id,
+            "the Fit button is the plot group's first control"
+        );
+        let ring_rect = ctx
+            .read_response(focus)
+            .map(|response| response.rect)
+            .expect("the focused widget was painted");
+        let mut strokes = Vec::new();
+        for clipped in &output.shapes {
+            if clipped.clip_rect.intersects(ring_rect.expand(a11y::FOCUS_RING_GAP + 4.0)) {
+                rect_stroke_colors(&clipped.shape, &mut strokes);
+            }
+        }
+        let ring = theme::tokens_for(theme::ThemeId::Dark).focus_ring;
+        assert!(
+            !strokes.is_empty(),
+            "the focused widget's area must carry painted strokes"
+        );
+        assert!(
+            strokes.iter().any(|(color, _)| *color == ring),
+            "the ring must be painted around the focused widget: {strokes:?}"
+        );
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// A11Y-007: the Help > Keyboard Shortcuts dialog lists every registered binding, by chord
+    /// and description, and Escape closes it.
+    #[test]
+    fn the_shortcut_reference_lists_every_registered_binding_and_closes_with_escape() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("shortcuts");
+        let mut app = a11y_app(plot_dir.clone());
+        pump_text(&ctx, &mut app, 2);
+        assert!(!app.shortcuts_open);
+
+        // F1 is the table's chord for the dialog; it is pressed as a key, not by calling the
+        // opener, so the binding itself is what is under test.
+        let binding = keyboard::binding_record(Action::ShortcutsHelp).expect("F1 is registered");
+        let texts = press_chord(&ctx, &mut app, binding.keys);
+        assert!(app.shortcuts_open, "F1 must open the reference");
+        assert!(
+            texts.iter().any(|text| text == "Keyboard shortcuts"),
+            "the window title is the surface's name: {texts:?}"
+        );
+        let rows = keyboard::reference_rows();
+        assert_eq!(rows.len(), keyboard::BINDINGS.len());
+        let mut missing = Vec::new();
+        for row in &rows {
+            if !texts.iter().any(|text| text == &row.chord) {
+                missing.push(format!("chord {}", row.chord));
+            }
+            if !texts.iter().any(|text| text == row.description) {
+                missing.push(format!("description for {}", row.chord));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "the reference is missing rows from the table: {missing:?}\npainted: {texts:?}"
+        );
+        // Global and editor sections are both present.
+        for scope in keyboard::Scope::ALL {
+            assert!(
+                texts.iter().any(|text| text == &scope.label().to_uppercase()),
+                "the reference is missing the {} section: {texts:?}",
+                scope.label()
+            );
+        }
+        // The dialog lists no chord that is not registered (no hand-written extra). A chord is the
+        // only painted text with no spaces that contains a modifier or is "Esc".
+        let registered: Vec<String> = rows.iter().map(|row| row.chord.clone()).collect();
+        for text in texts.iter().filter(|text| {
+            !text.contains(' ')
+                && (text.contains('+') || text.as_str() == "Esc")
+                // Section headings and the window title contain no '+' and are not "Esc".
+                && text.chars().next().is_some_and(|first| first.is_ascii_alphanumeric())
+        }) {
+            assert!(
+                registered.contains(text),
+                "the reference shows an unregistered chord {text:?}"
+            );
+        }
+
+        let _ = press_chord(&ctx, &mut app, keyboard::Shortcut::plain(KeyName::Escape));
+        assert!(!app.shortcuts_open, "Escape closes the reference");
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// A11Y-001: F6 / Shift+F6 and Ctrl+1..5 reach every pane group without a pointer.
+    #[test]
+    fn f6_and_ctrl_digits_move_keyboard_focus_between_every_pane_group() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("panes");
+        let mut app = a11y_app(plot_dir.clone());
+        pump_text(&ctx, &mut app, 2);
+        assert_eq!(app.focused_pane, Pane::Editor);
+
+        // F6 walks the groups in the order the status strip prints, wrapping at the end.
+        let mut seen = vec![app.focused_pane];
+        for _ in 0..Pane::ALL.len() {
+            let texts = press_action(&ctx, &mut app, Action::NextPane);
+            seen.push(app.focused_pane);
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text == &format!("focus: {}", app.focused_pane.label())),
+                "the status strip must name the focus group: {texts:?}"
+            );
+        }
+        assert_eq!(
+            seen,
+            vec![
+                Pane::Editor,
+                Pane::Plot,
+                Pane::Workspace,
+                Pane::Logs,
+                Pane::Toolbar,
+                Pane::Editor
+            ],
+            "F6 visits every group and wraps"
+        );
+
+        // Ctrl+1..5 jump directly; Shift+F6 walks backwards.
+        for (action, expected) in [
+            (Action::FocusPane(Pane::Toolbar), Pane::Toolbar),
+            (Action::FocusPane(Pane::Editor), Pane::Editor),
+            (Action::FocusPane(Pane::Plot), Pane::Plot),
+            (Action::FocusPane(Pane::Workspace), Pane::Workspace),
+            (Action::FocusPane(Pane::Logs), Pane::Logs),
+        ] {
+            press_action(&ctx, &mut app, action);
+            assert_eq!(app.focused_pane, expected, "{}", action.label());
+        }
+        press_action(&ctx, &mut app, Action::PreviousPane);
+        assert_eq!(app.focused_pane, Pane::Workspace, "Shift+F6 goes back one");
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// A11Y-001: the remaining window commands that used to be pointer-only are keyboard
+    /// commands, dispatched through the same table.
+    #[test]
+    fn the_theme_and_view_commands_are_keyboard_reachable() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("commands");
+        let mut app = a11y_app(plot_dir.clone());
+        pump_text(&ctx, &mut app, 2);
+        assert_eq!(app.theme, theme::ThemeId::Dark);
+
+        // Ctrl+Shift+T: the theme toggle, the one VIS-002 control that had no key.
+        press_action(&ctx, &mut app, Action::ToggleTheme);
+        assert_eq!(app.theme, theme::ThemeId::Light, "the theme switch is a binding");
+        press_action(&ctx, &mut app, Action::ToggleTheme);
+        assert_eq!(app.theme, theme::ThemeId::Dark);
+
+        // Ctrl+Alt+F: the workspace filter takes focus; Ctrl+Alt+C: the variables are cleared.
+        let _ = press_action(&ctx, &mut app, Action::FocusPane(Pane::Workspace));
+        let texts = press_action(&ctx, &mut app, Action::WorkspaceFilterFocus);
+        assert!(
+            ctx.memory(|memory| memory.focused()) == app.workspace_filter_id,
+            "Ctrl+Alt+F focuses the filter: {texts:?}"
+        );
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+    /// A11Y-001: from a pane group's first control, Tab walks the group's other controls (and
+    /// Enter/Space activates the focused button), so a button without a dedicated binding is
+    /// still reachable without a pointer.
+    #[test]
+    fn tab_walks_the_focused_group_and_shift_tab_returns() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("tab");
+        let mut app = a11y_app(plot_dir.clone());
+        pump_text(&ctx, &mut app, 2);
+        press_action(&ctx, &mut app, Action::FocusPane(Pane::Toolbar));
+        assert_eq!(ctx.memory(|memory| memory.focused()), app.run_button_id);
+
+        // Tab moves to another control painted in the window's chrome (file bar / toolbar rows).
+        let _ = a11y_frame(&ctx, &mut app, vec![key(Key::Tab, Default::default())]);
+        pump_text(&ctx, &mut app, 1);
+        let after = ctx
+            .memory(|memory| memory.focused())
+            .expect("Tab must focus a control");
+        assert_ne!(
+            Some(after),
+            app.run_button_id,
+            "Tab leaves the Run button for the next control"
+        );
+        let rect = ctx
+            .read_response(after)
+            .map(|response| response.rect)
+            .expect("the newly focused control is painted");
+        assert!(
+            rect.top() < 120.0,
+            "the next control is in the window chrome, above the panes: {rect:?}"
+        );
+
+        // Shift+Tab walks back (the exact widget is egui's focus order, which the window keeps
+        // as its registration order; the observable is that focus moves again and stays in the
+        // chrome).
+        let _ = a11y_frame(
+            &ctx,
+            &mut app,
+            vec![key(
+                Key::Tab,
+                egui::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            )],
+        );
+        pump_text(&ctx, &mut app, 1);
+        let back = ctx
+            .memory(|memory| memory.focused())
+            .expect("Shift+Tab must focus a control");
+        assert_ne!(back, after, "Shift+Tab moves focus back");
+        let rect = ctx
+            .read_response(back)
+            .map(|response| response.rect)
+            .expect("the control is painted");
+        assert!(rect.top() < 120.0, "focus stays in the chrome: {rect:?}");
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// A11Y-001: the whole keyboard journey — new tab, edit, run, inspect, switch panes, export —
+    /// with an observable asserted after every step.
+    ///
+    /// The transcript it prints is the one recorded in
+    /// `docs/goal-desktop-v4/round-42/accessibility.md`.
+    #[test]
+    fn the_keyboard_journey_opens_edits_runs_inspects_switches_panes_and_exports() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("journey");
+        let mut app = a11y_app(plot_dir.clone());
+        let mut transcript: Vec<String> = Vec::new();
+        macro_rules! step {
+            ($label:expr, $detail:expr) => {{
+                let line = format!("{}: {}", $label, $detail);
+                println!("{line}");
+                transcript.push(line);
+            }};
+        }
+
+        // 1. Launch: the editor owns the keyboard with no pointer input at all.
+        pump_text(&ctx, &mut app, 2);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(surface_id()));
+        let status = app.workbench.status_text(1, 1);
+        step!("launch", format!("focus=editor status={status:?}"));
+
+        // 2. Ctrl+N: a fresh tab.
+        let documents_before = app.workbench.documents().len();
+        press_action(&ctx, &mut app, Action::File(FileCommand::New));
+        assert_eq!(app.workbench.documents().len(), documents_before + 1);
+        assert!(
+            app.workbench.active_document().title.starts_with("untitled"),
+            "a fresh tab is untitled: {:?}",
+            app.workbench.active_document().title
+        );
+        step!(
+            "ctrl+n",
+            format!(
+                "documents={} active={:?}",
+                app.workbench.documents().len(),
+                app.workbench.active_document().title
+            )
+        );
+
+        // 3. Type the script with text events only.
+        let source = "sqrt(2)*pi";
+        let _ = a11y_frame(&ctx, &mut app, vec![egui::Event::Text(source.to_string())]);
+        pump_text(&ctx, &mut app, 1);
+        assert_eq!(app.editors[app.workbench.active()].source(), source);
+        step!("type", format!("buffer={source:?}"));
+
+        // 4. Ctrl+Enter: run, and wait for the terminal state.
+        let texts = run_from_keyboard(&ctx, &mut app);
+        assert!(
+            texts.iter().any(|text| text.contains("Finished")),
+            "the status strip must report the finished run: {texts:?}"
+        );
+        step!("ctrl+enter", format!("run_state={:?}", app.view.run_state));
+
+        // 5. Ctrl+4: the workspace pane, then Ctrl+Alt+2: the Inspector view.
+        press_action(&ctx, &mut app, Action::FocusPane(Pane::Workspace));
+        assert_eq!(app.focused_pane, Pane::Workspace);
+        let texts = press_action(&ctx, &mut app, Action::WorkspaceInspectorView);
+        assert!(app.inspector_open, "Ctrl+Alt+2 opens the Inspector view");
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "INSPECTOR · last committed result"),
+            "the inspector surface must be painted: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "sqrt(2)*pi"),
+            "the inspector shows the committed value: {texts:?}"
+        );
+        step!("inspect", "inspector=open value=sqrt(2)*pi".to_string());
+
+        // 6. Ctrl+Alt+1: back to the structured Result view; the tree and the variable table are
+        //    both observable.
+        let texts = press_action(&ctx, &mut app, Action::WorkspaceResultView);
+        assert!(!app.inspector_open);
+        assert!(
+            texts.iter().any(|text| text == "RESULT · structured projection"),
+            "the result surface must be painted: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "x"),
+            "the workspace variable table must paint the variable: {texts:?}"
+        );
+        step!("result-view", "result=open variable=x".to_string());
+
+        // 7. Ctrl+5: the logs pane; the value-bearing result line is painted.
+        let texts = press_action(&ctx, &mut app, Action::FocusPane(Pane::Logs));
+        assert_eq!(app.focused_pane, Pane::Logs);
+        assert!(
+            texts.iter().any(|text| text == "[result] = sqrt(2)*pi"),
+            "the logs pane must paint the result line: {texts:?}"
+        );
+        step!("logs", "result_line=[result] = sqrt(2)*pi".to_string());
+
+        // 8. Ctrl+3: the plot pane; the engine plot is loaded, zoom and fit work from keys.
+        let texts = press_action(&ctx, &mut app, Action::FocusPane(Pane::Plot));
+        assert_eq!(app.focused_pane, Pane::Plot);
+        assert!(
+            texts.iter().any(|text| text.contains("a11y journey plot")),
+            "the plot pane must name the engine plot: {texts:?}"
+        );
+        press_action(&ctx, &mut app, Action::PlotZoomIn);
+        assert!(
+            app.plot.view.zoom > 1.0,
+            "Ctrl+= zooms the plot in: {}",
+            app.plot.view.zoom
+        );
+        press_action(&ctx, &mut app, Action::PlotFit);
+        assert!(
+            (app.plot.view.zoom - 1.0).abs() < f32::EPSILON,
+            "Ctrl+0 fits"
+        );
+        step!(
+            "plot",
+            format!("plot={:?} zoom={:.2}", app.plot_title(), app.plot.view.zoom)
+        );
+
+        // 9. Ctrl+Shift+P: export the plot beside the engine capture, no dialog.
+        let texts = press_action(&ctx, &mut app, Action::PlotExportPng);
+        let exported: Vec<PathBuf> = std::fs::read_dir(&plot_dir)
+            .expect("the plot directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "png"))
+            .collect();
+        assert_eq!(exported.len(), 1, "one PNG is written: {exported:?}");
+        let bytes = std::fs::metadata(&exported[0])
+            .expect("the PNG exists")
+            .len();
+        assert!(bytes > 1000, "the PNG has content: {bytes} bytes");
+        assert!(
+            texts.iter().any(|text| text.starts_with("PNG:")),
+            "the plot header reports the export: {texts:?}"
+        );
+        step!(
+            "export",
+            format!(
+                "png={} bytes={bytes}",
+                exported[0]
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            )
+        );
+
+        // 10. Ctrl+1: the toolbar; Enter activates the focused Run button.
+        press_action(&ctx, &mut app, Action::FocusPane(Pane::Toolbar));
+        assert_eq!(app.focused_pane, Pane::Toolbar);
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            app.run_button_id,
+            "the Run button owns the keyboard"
+        );
+        let _ = a11y_frame(&ctx, &mut app, vec![key(Key::Enter, Default::default())]);
+        assert!(
+            app.workbench.is_running() || app.view.run_state == RunState::Queued,
+            "Enter on the focused Run button starts a run: {:?}",
+            app.view.run_state
+        );
+        step!(
+            "toolbar-enter",
+            format!(
+                "focused=run run_state={:?}",
+                app.view.run_state
+            )
+        );
+
+        // 11. Ctrl+Z: the editor's own history key, reached without the pointer.
+        press_action(&ctx, &mut app, Action::FocusPane(Pane::Editor));
+        let _ = press_chord(
+            &ctx,
+            &mut app,
+            keyboard::Shortcut::new(KeyName::Char('z'), true, false, false),
+        );
+        assert_eq!(app.editors[app.workbench.active()].source(), "");
+        step!("undo", "buffer=\"\"".to_string());
+
+        // 12. Type once more (so the tab is dirty), then Ctrl+Q: the Save/Discard/Cancel prompt
+        //     opens, and Escape cancels it without losing the buffer.
+        let _ = a11y_frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Text("unsaved".to_string())],
+        );
+        pump_text(&ctx, &mut app, 1);
+        assert_eq!(
+            app.editors[app.workbench.active()].source(),
+            "unsaved",
+            "the buffer is dirty before the quit request"
+        );
+        let texts = press_action(&ctx, &mut app, Action::Quit);
+        assert!(
+            app.close.is_some(),
+            "Ctrl+Q opens the Save/Discard/Cancel prompt"
+        );
+        assert!(
+            texts.iter().any(|text| text == "Save"),
+            "the prompt offers Save: {texts:?}"
+        );
+        let _ = press_chord(&ctx, &mut app, keyboard::Shortcut::plain(KeyName::Escape));
+        assert!(app.close.is_none(), "Escape cancels the close");
+        assert_eq!(
+            app.editors[app.workbench.active()].source(),
+            "unsaved",
+            "cancelling the close keeps the buffer"
+        );
+        step!("quit", "prompt=cancelled buffer=unsaved".to_string());
+
+        assert!(
+            transcript.len() >= 12,
+            "the journey records every step: {transcript:?}"
+        );
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// A11Y-014: Ctrl+Shift+U switches the notation and the same committed value is re-rendered
+    /// on all four surfaces without a re-run.
+    #[test]
+    fn the_unicode_setting_updates_the_result_workspace_logs_and_inspector_without_a_rerun() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("unicode");
+        let mut app = a11y_app(plot_dir.clone());
+        pump_text(&ctx, &mut app, 2);
+        run_from_keyboard(&ctx, &mut app);
+
+        // The shipped font decides what the Unicode form actually paints: a glyph the font lacks
+        // is replaced by its documented fallback, which is the point of the fallback rule.
+        let expected = glyphs::render("sqrt(2)*pi", GlyphMode::Unicode, &mut |c| {
+            a11y::font_has_glyph(&ctx, c)
+        });
+        assert_ne!(
+            expected, "sqrt(2)*pi",
+            "Unicode mode must change the notation: {expected:?}"
+        );
+
+        let ascii_texts = pump_text(&ctx, &mut app, 1);
+        assert!(ascii_texts
+            .iter()
+            .any(|text| text == "[result] = sqrt(2)*pi"));
+        assert!(
+            !ascii_texts.iter().any(|text| text.contains(&expected)),
+            "ASCII is the default mode: {ascii_texts:?}"
+        );
+
+        let texts = press_action(&ctx, &mut app, Action::ToggleUnicodeGlyphs);
+        assert_eq!(app.glyph_mode, GlyphMode::Unicode);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "[info] Mathematical glyphs: unicode notation"),
+            "the switch is logged: {texts:?}"
+        );
+        // Structured result caption.
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == &format!("display: {expected}")),
+            "the result caption must use the same notation: {texts:?}"
+        );
+        // Workspace variable display cell.
+        assert!(
+            texts.iter().any(|text| text == &expected),
+            "the workspace cell must use the same notation: {texts:?}"
+        );
+        // Logs result line.
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == &format!("[result] = {expected}")),
+            "the logs result line must use the same notation: {texts:?}"
+        );
+        // Inspector (switched open from the keyboard) paints the same value.
+        let texts = press_action(&ctx, &mut app, Action::WorkspaceInspectorView);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.ends_with(&format!("· {expected}")) || text == &expected),
+            "the inspector must use the same notation: {texts:?}"
+        );
+
+        // The switch is persisted: the settings file carries the Unicode choice.
+        let persisted = app.settings.to_json();
+        assert!(
+            persisted.contains("\"unicode_glyphs\": true"),
+            "the setting survives a restart: {persisted}"
+        );
+
+        // And back: the same value returns to the engine's ASCII notation.
+        let texts = press_action(&ctx, &mut app, Action::ToggleUnicodeGlyphs);
+        assert_eq!(app.glyph_mode, GlyphMode::Ascii);
+        assert!(texts.iter().any(|text| text == "[result] = sqrt(2)*pi"));
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// A11Y-014: the no-tofu check for the glyph set the *engine* emits.
+    ///
+    /// A real engine evaluates a symbolic expression, the named constants, a relation and a plot
+    /// with a Unicode title; every non-ASCII character in those display strings and in the plot's
+    /// SVG is measured against the shipped font stack. Each must be drawable or have a documented
+    /// fallback, and the rendered string must not contain a character that neither can draw.
+    #[test]
+    #[cfg(feature = "real-engine")]
+    fn the_engine_glyph_set_is_renderable_or_mapped_in_the_shipped_font() {
+        let mut engine = lovelace_lang::Engine::new();
+        let plot_dir = scratch_dir("glyphs");
+        engine.set_plot_dir(&plot_dir.display().to_string());
+        let mut sample = String::new();
+        for script in [
+            "x = symbol(\"x\")",
+            "3*x^2",
+            "inf",
+            "x <= 5",
+            "x != 0",
+            "sqrt(2)",
+            "pi(20)",
+            "plot([1, 4, 2], [4, 5, 6], \"\u{221a} \u{03c0} \u{2264} glyph check\")",
+        ] {
+            if let Ok(value) = engine.eval(script) {
+                sample.push_str(&engine.format(&value));
+                sample.push('\n');
+            }
+        }
+        if let Some(plot) = engine.last_plot() {
+            sample.push_str(&plot.svg);
+        }
+        // The window's Unicode additions plus one astral mathematical character.
+        sample.push_str(glyphs::SAMPLE_GLYPHS);
+        sample.push('\u{1D70B}');
+
+        let unicode = glyphs::to_unicode(&sample);
+        assert!(
+            unicode.contains('\u{00d7}') && unicode.contains('\u{2264}'),
+            "the sample must exercise × and ≤: {unicode:?}"
+        );
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        output.textures_delta.clear();
+        let report = a11y::glyph_report(&unicode, &mut |c| a11y::font_has_glyph(&ctx, c));
+        assert!(!report.is_empty(), "the engine sample must emit glyphs");
+        for (glyph, drawable, fallback) in &report {
+            assert!(
+                *drawable || fallback.is_some(),
+                "U+{:04X} {glyph:?} is neither drawable nor mapped",
+                *glyph as u32
+            );
+        }
+        // No tofu: every character of the rendered form is drawable (fallbacks already applied).
+        let rendered = glyphs::render(&unicode, GlyphMode::Unicode, &mut |c| {
+            a11y::font_has_glyph(&ctx, c)
+        });
+        for glyph in glyphs::non_ascii(&rendered) {
+            assert!(
+                a11y::font_has_glyph(&ctx, glyph),
+                "the rendered string still asks the font for U+{:04X}, which it cannot draw",
+                glyph as u32
+            );
+        }
+        assert!(!rendered.contains('\u{FFFD}'), "no replacement tofu");
+        let _ = std::fs::remove_dir_all(&plot_dir);
     }
 }

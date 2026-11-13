@@ -199,6 +199,9 @@ pub struct Settings {
     pub editor: EditorSettings,
     /// VIS-002: the colour theme the window paints; dark is the shipped default.
     pub theme: ThemePreference,
+    /// A11Y-014: render mathematical values in Unicode notation (`√(2)×π`) instead of the
+    /// engine's ASCII notation (`sqrt(2)*pi`). The default is ASCII, the engine's own default.
+    pub unicode_glyphs: bool,
     /// Most-recently used file paths, newest first.
     pub recent_files: Vec<String>,
     /// Display precision of the document that was active at exit.
@@ -217,6 +220,7 @@ impl Default for Settings {
             layout: LayoutFractions::default(),
             editor: EditorSettings::default(),
             theme: ThemePreference::default(),
+            unicode_glyphs: false,
             recent_files: Vec::new(),
             active_precision: DEFAULT_PRECISION,
             session: None,
@@ -280,6 +284,8 @@ impl Settings {
                 Json::Num(self.active_precision.to_string()),
             ),
             ("theme", Json::Str(self.theme.as_str().to_string())),
+            // A11Y-014: the ASCII/Unicode mathematical-notation choice survives a restart.
+            ("unicode_glyphs", Json::Bool(self.unicode_glyphs)),
             (
                 "session",
                 match &self.session {
@@ -452,6 +458,17 @@ impl Settings {
                 Some(preference) => settings.theme = preference,
                 None => warnings.push(
                     "theme is not \"dark\" or \"light\"; the dark theme is used.".to_string(),
+                ),
+            }
+        }
+        // A11Y-014: an absent `unicode_glyphs` is the ASCII default, not a problem: settings
+        // files written before the setting existed are still valid.
+        if let Some(unicode) = root.get("unicode_glyphs") {
+            match unicode {
+                Json::Bool(enabled) => settings.unicode_glyphs = *enabled,
+                _ => warnings.push(
+                    "unicode_glyphs is not a boolean; ASCII mathematical notation is used."
+                        .to_string(),
                 ),
             }
         }
@@ -1162,5 +1179,44 @@ mod tests {
         let loaded = Settings::load(&path);
         assert_eq!(loaded, Settings::new());
         assert!(loaded.warnings.is_empty());
+    }
+
+    /// A11Y-014: the ASCII/Unicode choice is persisted, and a settings file written before the
+    /// setting existed loads as the engine's own ASCII default without a warning.
+    #[test]
+    fn unicode_glyphs_round_trips_and_an_absent_key_is_the_ascii_default() {
+        let mut settings = Settings::new();
+        assert!(!settings.unicode_glyphs, "the engine's default is ASCII");
+        settings.unicode_glyphs = true;
+        let json = settings.to_json();
+        assert!(
+            json.contains("\"unicode_glyphs\": true"),
+            "the choice is serialised: {json}"
+        );
+        let loaded = Settings::from_json(&json);
+        assert!(loaded.unicode_glyphs);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        let older = Settings::from_json(r#"{"schema_version": 1}"#);
+        assert!(!older.unicode_glyphs, "an older file keeps the ASCII default");
+        assert!(
+            !older
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("unicode_glyphs")),
+            "an absent key is not a problem: {:?}",
+            older.warnings
+        );
+
+        let malformed = Settings::from_json(r#"{"schema_version": 1, "unicode_glyphs": "yes"}"#);
+        assert!(!malformed.unicode_glyphs);
+        assert!(
+            malformed
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("unicode_glyphs")),
+            "a malformed value is reported: {:?}",
+            malformed.warnings
+        );
     }
 }

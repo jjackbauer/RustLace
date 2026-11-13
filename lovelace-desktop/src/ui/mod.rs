@@ -4,7 +4,11 @@
 //! syntax, plot and layout code; this module adapts those pieces to the product's
 //! [`crate::workbench::Workbench`] instead of the spike's sample documents, sample variables
 //! and sample SVG.
+//!
+//! A11Y-003/A11Y-014: [`a11y`] owns the window's single keyboard-focus ring and the ASCII/Unicode
+//! localization of the frame's `DocumentView`, so both are defined once instead of per pane.
 
+pub(crate) mod a11y;
 mod app;
 pub(crate) mod editor;
 pub(crate) mod file_dialogs;

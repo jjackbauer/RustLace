@@ -689,6 +689,48 @@ fn exempt(
     out.push(check(theme, role, fg, bg, PairClass::Exempt(reason)));
 }
 
+/// Every surface a focused control can sit on, paired with the surface's name.
+///
+/// The window's focus ring is one 2 px outline drawn immediately outside the focused widget, so
+/// the colour the eye compares it with is the surface around that widget. This list is the
+/// adjacency reference for A11Y-003; the paint code decides the actual rectangle.
+pub fn focus_ring_surfaces(theme: ThemeId) -> [(&'static str, Color32); 11] {
+    let t = tokens_for(theme);
+    [
+        ("app", t.app_bg),
+        ("panel", t.panel_bg),
+        ("editor", t.editor_bg),
+        ("gutter", t.gutter_bg),
+        ("header", t.header_bg),
+        ("window", t.window_bg),
+        ("field", t.field_bg),
+        ("button", t.button_bg),
+        ("button-hover", t.button_hover_bg),
+        ("button-active", t.button_active_bg),
+        ("plot", t.plot_bg),
+    ]
+}
+
+/// A11Y-003: the focus ring's contrast pairs for one theme, measured from the rendered tokens.
+///
+/// Both themes are checked by `--contrast-check` and by the module's tests, and the ratios are
+/// printed in `docs/goal-desktop-v4/round-42/accessibility.md`.
+pub fn focus_ring_pairs(theme: ThemeId) -> Vec<PairResult> {
+    let ring = tokens_for(theme).focus_ring;
+    focus_ring_surfaces(theme)
+        .iter()
+        .map(|(surface, background)| {
+            check(
+                theme,
+                &format!("focus-ring on {surface}"),
+                ring,
+                *background,
+                PairClass::NonText,
+            )
+        })
+        .collect()
+}
+
 /// Every contrast pair the workbench can paint in `theme`, measured from the rendered tokens.
 ///
 /// The list is intentionally broad: each text role is checked against every surface it can
@@ -858,70 +900,11 @@ pub fn checks(theme: ThemeId) -> Vec<PairResult> {
     }
 
     // ---- non-text UI indicators ------------------------------------------------------------
-    non_text(&mut out, theme, "focus-ring on app", t.focus_ring, t.app_bg);
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on panel",
-        t.focus_ring,
-        t.panel_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on editor",
-        t.focus_ring,
-        t.editor_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on header",
-        t.focus_ring,
-        t.header_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on window",
-        t.focus_ring,
-        t.window_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on field",
-        t.focus_ring,
-        t.field_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on button",
-        t.focus_ring,
-        t.button_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on button-hover",
-        t.focus_ring,
-        t.button_hover_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on button-active",
-        t.focus_ring,
-        t.button_active_bg,
-    );
-    non_text(
-        &mut out,
-        theme,
-        "focus-ring on plot",
-        t.focus_ring,
-        t.plot_bg,
-    );
+    // A11Y-003: the focus ring is painted by the window itself (one ring around whatever widget
+    // holds keyboard focus), so its adjacent surfaces are every surface a focusable control can
+    // sit on. The pairs are built by `focus_ring_pairs` so the test that proves the ratio and the
+    // `--contrast-check` output measure the same list.
+    out.extend(focus_ring_pairs(theme));
     non_text(
         &mut out,
         theme,
@@ -1630,6 +1613,61 @@ mod tests {
             assert!(results
                 .iter()
                 .any(|result| result.class == PairClass::NonText));
+        }
+    }
+
+    #[test]
+    fn the_focus_ring_reaches_three_to_one_on_every_adjacent_surface_in_both_themes() {
+        // A11Y-003: the ratio is computed from the rendered `Color32` tokens, not from a table in
+        // the docs, and it is required in both themes.
+        for theme in [ThemeId::Dark, ThemeId::Light] {
+            let results = focus_ring_pairs(theme);
+            assert_eq!(
+                results.len(),
+                focus_ring_surfaces(theme).len(),
+                "{theme:?}: every adjacent surface must be measured"
+            );
+            for result in &results {
+                assert_eq!(result.class, PairClass::NonText);
+                assert_eq!(
+                    result.fg,
+                    tokens_for(theme).focus_ring,
+                    "{theme:?}: the ring must be the theme's focus_ring token"
+                );
+                assert!(
+                    result.ratio >= 3.0,
+                    "{theme:?}: {} is {:.3}:1, below the required 3:1",
+                    result.role,
+                    result.ratio
+                );
+                assert!(result.pass, "{theme:?}: {} did not pass", result.role);
+            }
+            let lowest = results
+                .iter()
+                .map(|result| result.ratio)
+                .fold(f64::INFINITY, f64::min);
+            assert!(lowest >= 3.0, "{theme:?}: lowest focus-ring ratio {lowest:.3}");
+        }
+        // A ring that were hard-coded would be the same colour in both themes; the token is not.
+        assert_ne!(
+            tokens_for(ThemeId::Dark).focus_ring,
+            tokens_for(ThemeId::Light).focus_ring,
+            "the focus ring must be a per-theme token"
+        );
+    }
+
+    #[test]
+    fn the_contrast_report_includes_the_focus_ring_pairs() {
+        for theme in [ThemeId::Dark, ThemeId::Light] {
+            let reported = checks(theme)
+                .into_iter()
+                .filter(|result| result.role.starts_with("focus-ring on "))
+                .count();
+            assert_eq!(
+                reported,
+                focus_ring_surfaces(theme).len(),
+                "{theme:?}: --contrast-check must print every focus-ring pair"
+            );
         }
     }
 

@@ -41,6 +41,7 @@ mod document_io;
 mod engine;
 mod execution;
 mod find;
+mod glyphs;
 mod gui_selftest;
 mod history;
 mod incremental;
@@ -82,6 +83,18 @@ fn main() {
     // normal-text pair is below 4.5:1 or a large-text/non-text pair is below 3:1.
     if args.iter().any(|arg| arg == "--contrast-check") {
         std::process::exit(ui::theme::contrast_cli());
+    }
+    // A11Y-014: the no-tofu report for the mathematical glyph set the engine emits. It measures
+    // every character against the shipped font stack and exits non-zero when one is neither
+    // drawable nor documented as a fallback.
+    if args.iter().any(|arg| arg == "--glyph-check") {
+        std::process::exit(ui::a11y::glyph_cli());
+    }
+    // A11Y-007: the keyboard map, printed from the one binding table the window and the
+    // Help > Keyboard Shortcuts dialog read. This is the documented map; it cannot drift from
+    // the registration because it is a projection of it.
+    if args.iter().any(|arg| arg == "--shortcuts") {
+        std::process::exit(shortcuts_cli());
     }
     if args.iter().any(|arg| arg == "--gui-selftest") {
         std::process::exit(gui_selftest::run());
@@ -146,8 +159,39 @@ fn main() {
     if args.iter().any(|arg| arg == "--selftest") {
         std::process::exit(selftest::run());
     }
+    // A11Y-007: the binding table and the reference are window-independent, so the map prints on
+    // every platform even where the native workbench is unavailable.
+    if args.iter().any(|arg| arg == "--shortcuts") {
+        std::process::exit(shortcuts_cli());
+    }
     eprintln!("this build targets Windows; the native workbench is unavailable");
     std::process::exit(2);
+}
+
+/// A11Y-007: prints the keyboard map, generated from [`keyboard::BINDINGS`].
+///
+/// The Help > Keyboard Shortcuts dialog renders the same `reference_rows()` projection, so this
+/// output and the dialog are two views of one registration; neither can list a chord the app does
+/// not dispatch or omit one it does.
+fn shortcuts_cli() -> i32 {
+    let rows = keyboard::reference_rows();
+    println!("lovelace-desktop --shortcuts (A11Y-007)");
+    println!(
+        "{} registered bindings, generated from src/keyboard.rs",
+        rows.len()
+    );
+    for scope in keyboard::Scope::ALL {
+        println!("\n{}", scope.label().to_uppercase());
+        for row in rows.iter().filter(|row| row.scope == scope) {
+            println!("  {:<12}  {}", row.chord, row.description);
+        }
+    }
+    println!(
+        "\nMathematical glyphs: {} switches between ASCII and Unicode rendering; a glyph the \
+         installed font lacks falls back to its ASCII spelling (never a tofu box).",
+        keyboard::chord_of(keyboard::Action::ToggleUnicodeGlyphs)
+    );
+    0
 }
 
 fn usage() -> String {
@@ -184,6 +228,15 @@ fn usage() -> String {
     text.push_str(
         "                                      (fails below 4.5:1 text / 3:1 large or non-text)\n",
     );
+    text.push_str(
+        "  lovelace-desktop --glyph-check      print the engine glyph set's font coverage and\n",
+    );
+    text.push_str(
+        "                                      fallbacks (fails on a glyph with neither)\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --shortcuts        print the keyboard map from the binding table\n",
+    );
     text.push_str("  lovelace-desktop --legacy-win32 [script.ls]\n");
     text.push_str(
         "                                      open the old Win32 shell (explicit fallback only)\n",
@@ -214,6 +267,26 @@ fn usage() -> String {
     text.push_str(
         "  F8                                  jump to the last failed run's diagnostic\n",
     );
+    text.push_str("  Ctrl+Q                              quit (asks about every unsaved document)\n");
+    text.push_str("  F6, Shift+F6                        next / previous pane group\n");
+    text.push_str(
+        "  Ctrl+1..Ctrl+5                      focus toolbar / editor / plot / workspace / logs\n",
+    );
+    text.push_str("  Ctrl+Alt+1, Ctrl+Alt+2              workspace Result / Inspector view\n");
+    text.push_str("  Ctrl+Alt+F                          focus the workspace filter\n");
+    text.push_str("  Ctrl+Alt+C                          clear the committed variables\n");
+    text.push_str("  Ctrl+0, Ctrl+Shift+0                fit the plot / natural size\n");
+    text.push_str("  Ctrl+=, Ctrl+-                      zoom the plot in / out\n");
+    text.push_str(
+        "  Ctrl+Shift+P                        export the plot as a PNG beside the engine capture\n",
+    );
+    text.push_str("  Ctrl+Shift+U                        ASCII / Unicode mathematical glyphs\n");
+    text.push_str("  Ctrl+Shift+T                        switch the dark / light theme\n");
+    text.push_str("  F1                                  Help > Keyboard Shortcuts\n");
+    text.push_str(
+        "  The Help menu shows the same table (generated from src/keyboard.rs, the one binding\n",
+    );
+    text.push_str("  registration).\n");
     text.push_str(
         "  The File bar has New, Open..., Save, Save As..., Recent, Close and Quit; closing a\n",
     );
