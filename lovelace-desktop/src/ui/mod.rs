@@ -17,6 +17,7 @@ pub(crate) mod editor;
 pub(crate) mod empty;
 pub(crate) mod file_dialogs;
 pub(crate) mod measure;
+pub(crate) mod measure_run;
 pub(crate) mod plot;
 pub(crate) mod semantic;
 mod syntax;

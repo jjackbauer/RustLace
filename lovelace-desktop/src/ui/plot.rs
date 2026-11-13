@@ -961,15 +961,7 @@ pub fn save_plot_dialog(
     suggested: &str,
     initial_dir: Option<&Path>,
 ) -> Option<PathBuf> {
-    let owner = crate::win32::ffi::foreground_window_of_this_process();
-    crate::win32::ffi::save_file_dialog_with(
-        owner,
-        suggested,
-        title,
-        &[filter],
-        extension,
-        initial_dir,
-    )
+    crate::platform_dialogs::save_file_dialog(suggested, title, &[filter], extension, initial_dir)
 }
 
 #[cfg(test)]

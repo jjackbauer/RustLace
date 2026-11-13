@@ -1212,6 +1212,110 @@ mod tests {
         assert_eq!(conditions.elements.len(), 1);
     }
 
+    /// TST-008: an exact fraction is published as an exact `Real`, not as a display string that
+    /// has to be parsed back. `1 / 3` folds to the rational 1/3, so the projection carries the
+    /// numerator and denominator the reference's StructuredProjection.Real rule publishes.
+    #[test]
+    #[cfg(feature = "real-engine")]
+    fn a_real_exact_fraction_projects_its_numerator_and_denominator() {
+        let (display, tree) = engine_tree("1 / 3");
+        assert_eq!(
+            display, "0.(3)",
+            "the engine renders the exact third as a repeating decimal"
+        );
+        let StructuredNode::Scalar(scalar) = tree else {
+            panic!("1 / 3 is a scalar, not {tree:?}");
+        };
+        assert_eq!(scalar.kind, "Real");
+        assert_eq!(
+            scalar.value, display,
+            "the projection carries the same digits"
+        );
+        assert_eq!(
+            scalar.details,
+            [
+                ("denominator".to_string(), "3".to_string()),
+                ("exact".to_string(), "true".to_string()),
+                ("numerator".to_string(), "1".to_string()),
+            ],
+            "the exact fraction publishes its numerator and denominator: {scalar:?}"
+        );
+        assert_eq!(scalar.headline(), "Real 0.(3)");
+    }
+
+    /// TST-008: a 1000-digit number is published digit for digit. The display is the precision
+    /// the run asked for and the structured projection stores the same 1000 fractional digits;
+    /// the first 49 digits are pinned literally so a silently shortened rendering fails here.
+    #[test]
+    #[cfg(feature = "real-engine")]
+    fn a_real_1000_digit_value_projects_every_digit_the_display_shows() {
+        let (display, tree) = engine_tree("setprecision(1000); sqrt(2)");
+        let fraction = display
+            .split_once('.')
+            .map(|(_integer, fraction)| fraction)
+            .unwrap_or("");
+        assert_eq!(
+            fraction.chars().filter(char::is_ascii_digit).count(),
+            1000,
+            "sqrt(2) at precision 1000 renders 1000 fractional digits: {}",
+            &display[..display.len().min(60)]
+        );
+        assert!(
+            display.starts_with("1.4142135623730950488016887242096980785696718753769"),
+            "the leading digits are the reference's: {}",
+            &display[..display.len().min(60)]
+        );
+        let StructuredNode::Scalar(scalar) = tree else {
+            panic!("sqrt(2) is a scalar, not {tree:?}");
+        };
+        assert_eq!(scalar.kind, "Real");
+        assert_eq!(
+            scalar.value, display,
+            "the structured projection publishes every digit the display does, not a shortened value"
+        );
+        assert_eq!(
+            scalar.details.first(),
+            Some(&("exact".to_string(), "false".to_string())),
+            "sqrt(2) is inexact and the projection says so: {scalar:?}"
+        );
+    }
+
+    /// TST-008: a print budget that shortened a symbolic rendering is published on the node, so
+    /// the pane can mark it and the user is never shown a truncated expression as if it were the
+    /// whole value. This is the exact JSON shape `print`'s budget outcome publishes.
+    #[test]
+    fn a_truncated_symbolic_projection_reports_its_reason_and_budget() {
+        let json = Json::obj([
+            ("kind", Json::Str("Symbolic".to_string())),
+            ("pretty", Json::Str("x + 1 + ...".to_string())),
+            ("canonical", Json::Str("Add(x, 1, ...)".to_string())),
+            ("freeSymbols", Json::str_array(["x"])),
+            ("nodeCount", Json::Num("4096".to_string())),
+            ("truncated", Json::Bool(true)),
+            ("truncationReason", Json::Str("nodeBudget".to_string())),
+            ("budget", Json::Num("64".to_string())),
+        ]);
+        let node = StructuredNode::from_structured(&json).expect("a symbolic projection");
+        let StructuredNode::Symbolic(symbolic) = node else {
+            panic!("the projection is symbolic");
+        };
+        assert!(symbolic.truncated, "the node carries the truncation flag");
+        assert_eq!(
+            symbolic.details,
+            [
+                ("truncationReason".to_string(), "nodeBudget".to_string()),
+                ("budget".to_string(), "64".to_string()),
+            ],
+            "the reason and the budget are published as text, not dropped: {symbolic:?}"
+        );
+        assert_eq!(symbolic.node_count.as_deref(), Some("4096"));
+        assert_eq!(
+            symbolic.headline(),
+            "Symbolic  x + 1 + ...",
+            "the shortened rendering is shown, and the truncation flag marks it"
+        );
+    }
+
     #[test]
     #[cfg(feature = "real-engine")]
     fn a_real_symbolic_diff_publishes_pretty_and_canonical_renderings() {

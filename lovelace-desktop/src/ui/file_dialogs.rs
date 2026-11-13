@@ -2,14 +2,13 @@
 //!
 //! The window talks to [`FileDialogs`], never to the Win32 wrappers directly, so a headless egui
 //! test can supply a scripted answer and exercise New / Open / Save As / Close without a real
-//! dialog. The shipped implementation is [`NativeFileDialogs`], which calls the same comdlg32
-//! wrappers the plot export uses ([`crate::win32::ffi::open_file_dialog_with`] and
-//! [`crate::win32::ffi::save_file_dialog_with`]) with the workbench window as the owner.
+//! dialog. The shipped implementation is [`NativeFileDialogs`], which asks the root
+//! `platform_dialogs` adapter to open the OS dialog; that keeps `src/ui/**` free of any Win32
+//! window handle (ARC-003).
 //!
-//! Dialogs are owned by the workbench window. The egui/eframe integration owns that window on
-//! this thread, so the process's active window is the one that should parent the dialog; the
-//! ownership test in `foreground_window_of_this_process` is what keeps an unrelated foreground
-//! window from becoming the owner.
+//! Dialogs are owned by the workbench window. The adapter resolves the process's active window as
+//! the owner; the ownership test in `foreground_window_of_this_process` is what keeps an unrelated
+//! foreground window from becoming the owner.
 
 use std::path::{Path, PathBuf};
 
@@ -43,14 +42,11 @@ pub struct NativeFileDialogs;
 
 impl FileDialogs for NativeFileDialogs {
     fn open(&mut self) -> Option<PathBuf> {
-        let owner = crate::win32::ffi::foreground_window_of_this_process();
-        crate::win32::ffi::open_file_dialog_with(owner, "Open Lovelace script", OPEN_FILTERS, None)
+        crate::platform_dialogs::open_file_dialog("Open Lovelace script", OPEN_FILTERS, None)
     }
 
     fn save_as(&mut self, suggested: &str, initial_dir: Option<&Path>) -> Option<PathBuf> {
-        let owner = crate::win32::ffi::foreground_window_of_this_process();
-        crate::win32::ffi::save_file_dialog_with(
-            owner,
+        crate::platform_dialogs::save_file_dialog(
             suggested,
             "Save Lovelace script",
             SAVE_FILTERS,

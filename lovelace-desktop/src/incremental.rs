@@ -1743,15 +1743,19 @@ mod engine_tests {
         }
     }
 
-    /// The statements random edits draw from: pure definitions, dependent arithmetic, effects
-    /// and a user-function call chain, so a random script exercises every dependency shape.
-    const CATALOGUE: [&str; 14] = [
+    /// The statements random edits draw from: pure definitions, dependent arithmetic, effects,
+    /// a user-function call chain and precision changes, so a random script exercises every
+    /// dependency shape TST-006 names (precision included: a change must invalidate the cache
+    /// exactly as the fresh reference recomputes it, and it must never be reused as a value).
+    const CATALOGUE: [&str; 16] = [
         "a = 2",
         "a = 7",
         "b = a + 1",
         "b = a * 3",
         "c = pi(60)",
         "d = b + c",
+        "setprecision(120)",
+        "setprecision(40)",
         "func f(x) = x + 1",
         "func f(x) = x + 10",
         "func g(x) = f(x) * 2",

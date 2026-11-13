@@ -403,13 +403,33 @@ pub fn scan(root: &Path) -> RecoveryScan {
         }
         match read_record(&path) {
             Ok(record) => scan.records.push(record),
-            Err(message) => scan
-                .warnings
-                .push(format!("skipped a corrupt recovery record: {message}")),
+            Err(message) => {
+                // PERF-010: "warning/default/backup". The record is not used (default), the
+                // warning names it, and its bytes are copied aside before a later journal write
+                // for the same document identity can replace the file.
+                let backup = corrupt_backup_path(&path);
+                let preserved = match std::fs::copy(&path, &backup) {
+                    Ok(bytes) => format!(" (preserved as {} ({bytes} bytes))", backup.display()),
+                    Err(error) => format!(" (could not preserve the bytes: {error})"),
+                };
+                scan.warnings.push(format!(
+                    "skipped a corrupt recovery record: {message}{preserved}"
+                ));
+            }
         }
     }
     scan.records.sort_by_key(|record| record.document_id);
     scan
+}
+
+/// The sibling file a corrupt recovery record is preserved as.
+fn corrupt_backup_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| "record.lvrec".into());
+    name.push(".bak");
+    path.with_file_name(name)
 }
 
 /// Deletes one document's record file, if it exists.
@@ -823,6 +843,17 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("declares"))
         );
+        // PERF-010: every skipped file's bytes are preserved beside it before the next journal
+        // write for that document identity can replace the record.
+        for id in [8u64, 9, 10] {
+            let path = record_path(&directory, id);
+            let backup = corrupt_backup_path(&path);
+            assert_eq!(
+                std::fs::read(&backup).expect("corrupt record backup"),
+                std::fs::read(&path).expect("original corrupt record"),
+                "the backup must be a byte-for-byte copy of doc-{id}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&directory);
     }
 

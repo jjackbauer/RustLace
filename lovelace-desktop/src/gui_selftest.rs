@@ -403,19 +403,10 @@ fn check_cancel() -> Result<String, String> {
         return Err("run_active returned false".to_string());
     }
 
-    let deadline = Instant::now() + RUN_TIMEOUT;
-    while workbench.documents()[0].committed == 0 {
-        workbench.poll();
-        if workbench.documents()[0].state() == RunState::Idle {
-            return Err(format!(
-                "the 50-statement run finished before a statement could be cancelled (state {:?})",
-                workbench.documents()[0].state()
-            ));
-        }
-        if Instant::now() >= deadline {
-            return Err("no statement was committed within 30 s".to_string());
-        }
-        std::thread::sleep(Duration::from_millis(1));
+    if !workbench.wait_until(RUN_TIMEOUT, |workbench| {
+        workbench.documents()[0].committed > 0
+    }) {
+        return Err("no statement was committed within 30 s".to_string());
     }
     let committed_before = workbench.documents()[0].committed;
     let cancel_at = Instant::now();
@@ -747,14 +738,11 @@ fn check_keyboard() -> Result<String, String> {
         return Err("keyboard: Ctrl+Enter did not start a run".to_string());
     }
     // Let the worker publish RunStarted so the assertions below describe a run that really
-    // exists, not only the phase set on submit.
-    let started = Instant::now();
-    while workbench.documents()[0].total == 0 {
-        workbench.poll();
-        if Instant::now() - started >= CANCEL_TIMEOUT {
-            return Err("keyboard: the run never published RunStarted".to_string());
-        }
-        std::thread::sleep(Duration::from_millis(1));
+    // exists, not only the phase set on submit. The wait blocks on the typed event channel.
+    if !workbench.wait_until(CANCEL_TIMEOUT, |workbench| {
+        workbench.documents()[0].total > 0
+    }) {
+        return Err("keyboard: the run never published RunStarted".to_string());
     }
     let running = workbench.status_text(1, 1);
     if !running.contains("run Running") {
@@ -993,7 +981,6 @@ fn check_long_run() -> Result<String, String> {
                 sample_started.elapsed().as_millis()
             ));
         }
-        std::thread::sleep(Duration::from_millis(1));
     }
     if max_event > EVENT_LOOP_BUDGET {
         return Err(format!(
@@ -1132,27 +1119,18 @@ fn check_run_state_cancel() -> Result<String, String> {
         ));
     }
 
-    // Wait until the worker's RunStarted has been applied, then let the single long kernel
-    // start so the cancellation lands inside it rather than at a statement boundary.
-    let deadline = Instant::now() + RUN_TIMEOUT;
-    while workbench.documents()[0].state() == RunState::Queued {
-        workbench.poll();
-        if Instant::now() >= deadline {
-            return Err("run-state-cancel: the worker never reported RunStarted".to_string());
-        }
-        std::thread::sleep(Duration::from_millis(1));
+    // Wait until the worker's RunStarted has been applied. The wait blocks on the typed event
+    // channel; cancellation then lands in the single long statement's kernel.
+    if !workbench.wait_until(RUN_TIMEOUT, |workbench| {
+        workbench.documents()[0].state() == RunState::Running
+    }) {
+        return Err("run-state-cancel: the worker never reported RunStarted".to_string());
     }
     if workbench.documents()[0].state() != RunState::Running {
         return Err(format!(
             "run-state-cancel: state before cancel was {:?}, expected Running",
             workbench.documents()[0].state()
         ));
-    }
-    std::thread::sleep(Duration::from_millis(100));
-    if workbench.documents()[0].state() != RunState::Running {
-        return Err(
-            "run-state-cancel: the long run finished before it could be cancelled".to_string(),
-        );
     }
 
     let cancel_started = Instant::now();

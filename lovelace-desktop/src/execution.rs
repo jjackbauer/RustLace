@@ -243,6 +243,42 @@ impl DesktopEvent {
             | DesktopEvent::Failed { run, .. } => *run,
         }
     }
+
+    /// ARC-004: the event's typed kind name.
+    ///
+    /// This match is deliberately exhaustive and the enum is deliberately not `#[non_exhaustive]`:
+    /// adding a variant makes this method (and the variant-enumeration test) fail to compile
+    /// until the new event has a name and a consumer. No stringly-typed `kind` field exists on
+    /// the wire; the kind is a method over the enum.
+    #[allow(dead_code)] // used by the ARC-004 variant test; the window matches variants directly
+    pub fn kind(&self) -> &'static str {
+        match self {
+            DesktopEvent::RunStarted { .. } => "RunStarted",
+            DesktopEvent::StepStarted { .. } => "StepStarted",
+            DesktopEvent::StepCommitted { .. } => "StepCommitted",
+            DesktopEvent::Output { .. } => "Output",
+            DesktopEvent::SubProgress { .. } => "SubProgress",
+            DesktopEvent::Finished { .. } => "Finished",
+            DesktopEvent::Cancelled { .. } => "Cancelled",
+            DesktopEvent::Failed { .. } => "Failed",
+        }
+    }
+
+    /// ARC-004: every variant name, in declaration order.
+    ///
+    /// A test constructs one of each variant and asserts this list has no duplicate and that
+    /// each event's [`Self::kind`] is in it, so the variant set and its consumers cannot drift.
+    #[allow(dead_code)] // used by the ARC-004 variant test
+    pub const KIND_NAMES: [&'static str; 8] = [
+        "RunStarted",
+        "StepStarted",
+        "StepCommitted",
+        "Output",
+        "SubProgress",
+        "Finished",
+        "Cancelled",
+        "Failed",
+    ];
 }
 
 /// An event with the delivery-order sequence number and the revision it was produced for.
@@ -447,7 +483,16 @@ impl RunControl {
 
 #[derive(Default)]
 struct HostState {
-    active: HashMap<DocumentId, (RunId, Arc<RunControl>)>,
+    active: HashMap<DocumentId, ActiveRun>,
+}
+
+/// One document's in-flight run, with both cancellation seams the host owns.
+struct ActiveRun {
+    run: RunId,
+    control: Arc<RunControl>,
+    /// The live flag handed to the engine for this run. `cancel` and `shutdown` set it from the
+    /// caller's thread while the kernel is running.
+    cancel_flag: Arc<AtomicBool>,
 }
 
 /// A submitted run: its identity, its revision and its cancellation token.
@@ -460,10 +505,10 @@ pub struct RunHandle {
     #[allow(dead_code)]
     revision: SourceRevision,
     control: Arc<RunControl>,
-    /// The live flag this run's engine polls inside a long kernel. [`ExecutionHost::cancel`] sets
-    /// it together with the statement-boundary token, so one kernel that never reaches a
-    /// statement boundary still stops.
-    cancel_flag: Arc<AtomicBool>,
+    /// The OS thread the worker was spawned on. ARC-005: a host can prove evaluation happened on
+    /// this thread and not on the thread that owns the window.
+    #[allow(dead_code)] // read through the host-facing accessor and the ARC-005 test
+    worker_thread: std::thread::ThreadId,
 }
 
 impl RunHandle {
@@ -476,6 +521,12 @@ impl RunHandle {
     /// The run's identity.
     pub fn run(&self) -> RunId {
         self.run
+    }
+
+    /// ARC-005: the identity of the worker thread that owns this run's engine.
+    #[allow(dead_code)] // host-facing proof accessor used by the ARC-005 test
+    pub fn worker_thread(&self) -> std::thread::ThreadId {
+        self.worker_thread
     }
 
     /// The source revision the run was submitted for.
@@ -506,6 +557,10 @@ pub struct ExecutionHost {
     /// [`ExecutionHost::clear_cache`] during a run installs a fresh empty slot instead; the
     /// finishing worker then leaves that slot alone, so "Run All Fresh" always wins.
     caches: Arc<Mutex<HashMap<DocumentId, DocumentCache>>>,
+    /// ARC-008: every worker `JoinHandle`, keyed by run. `next_event` joins handles that have
+    /// already finished; [`ExecutionHost::shutdown`] joins all remaining ones after cancelling
+    /// their runs, and `Drop` calls it. No handle is dropped unjoined.
+    workers: Mutex<HashMap<RunId, thread::JoinHandle<()>>>,
 }
 
 impl ExecutionHost {
@@ -521,6 +576,7 @@ impl ExecutionHost {
             next_run: AtomicU64::new(0),
             snapshots: Arc::new(Mutex::new(HashMap::new())),
             caches: Arc::new(Mutex::new(HashMap::new())),
+            workers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -546,7 +602,14 @@ impl ExecutionHost {
         // One live flag per run: the worker gives it to its engine, the handle keeps a clone so
         // `cancel()` can set it from the UI thread while the kernel is running.
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        state.active.insert(document, (run, Arc::clone(&control)));
+        state.active.insert(
+            document,
+            ActiveRun {
+                run,
+                control: Arc::clone(&control),
+                cancel_flag: Arc::clone(&cancel_flag),
+            },
+        );
         drop(state);
 
         let statements = crate::statements::slice(&source);
@@ -569,7 +632,14 @@ impl ExecutionHost {
             .name(format!("lovelace-run-{}-{}", document.0, run.0))
             .spawn(move || worker.run());
         match spawned {
-            Ok(_detached) => {
+            Ok(handle) => {
+                let worker_thread = handle.thread().id();
+                // ARC-008: the handle is retained until `shutdown` (or a non-blocking reap after
+                // the thread has finished). Dropping it here would detach the worker.
+                self.workers
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(run, handle);
                 crate::run_trace::mark(
                     "submit_exit",
                     format!("document={} run={}", document.0, run.0),
@@ -579,13 +649,13 @@ impl ExecutionHost {
                     run,
                     revision,
                     control,
-                    cancel_flag,
+                    worker_thread,
                 })
             }
             Err(error) => {
                 let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-                if let Some((active_run, _)) = state.active.get(&document) {
-                    if *active_run == run {
+                if let Some(active) = state.active.get(&document) {
+                    if active.run == run {
                         state.active.remove(&document);
                     }
                 }
@@ -606,11 +676,13 @@ impl ExecutionHost {
         }
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         match state.active.get(&handle.document) {
-            Some((run, control))
-                if *run == handle.run && !control.is_finished() && !control.is_cancelled() =>
+            Some(active)
+                if active.run == handle.run
+                    && !active.control.is_finished()
+                    && !active.control.is_cancelled() =>
             {
-                control.cancelled.store(true, Ordering::Release);
-                handle.cancel_flag.store(true, Ordering::Release);
+                active.control.cancelled.store(true, Ordering::Release);
+                active.cancel_flag.store(true, Ordering::Release);
                 true
             }
             _ => false,
@@ -619,6 +691,9 @@ impl ExecutionHost {
 
     /// Waits up to `timeout` for the next event and assigns it a delivery sequence number.
     pub fn next_event(&self, timeout: Duration) -> Option<SequencedEvent> {
+        // ARC-008: a finished worker's handle is joined here without blocking; it is never
+        // detached. A still-running worker is left in the table for `shutdown`.
+        self.reap_finished_workers();
         let receiver = self
             .receiver
             .lock()
@@ -634,6 +709,65 @@ impl ExecutionHost {
             }
             Err(_) => None,
         }
+    }
+
+    /// Joins every worker whose OS thread has already finished, without waiting for a live one.
+    fn reap_finished_workers(&self) {
+        let mut workers = self
+            .workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let finished: Vec<RunId> = workers
+            .iter()
+            .filter(|(_, handle)| handle.is_finished())
+            .map(|(run, _)| *run)
+            .collect();
+        for run in finished {
+            if let Some(handle) = workers.remove(&run) {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    /// ARC-008: cancels every active run and joins every worker the host ever spawned.
+    ///
+    /// Returns how many workers this call joined. The call is idempotent: a second call after the
+    /// table is empty returns 0. `Drop for ExecutionHost` calls it, so a closed window or a
+    /// dropped [`crate::workbench::Workbench`] never leaves a run thread behind.
+    ///
+    /// A worker whose engine ignores the cancellation flag and never returns from one kernel
+    /// delays this join; that case is the documented uninterruptible-kernel budget (RUN-008),
+    /// not a detached thread.
+    pub fn shutdown(&self) -> usize {
+        {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            for active in state.active.values() {
+                active.control.cancelled.store(true, Ordering::Release);
+                active.cancel_flag.store(true, Ordering::Release);
+            }
+        }
+        self.reap_finished_workers();
+        let handles: Vec<thread::JoinHandle<()>> = {
+            let mut workers = self
+                .workers
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            workers.drain().map(|(_, handle)| handle).collect()
+        };
+        let joined = handles.len();
+        for handle in handles {
+            let _ = handle.join();
+        }
+        joined
+    }
+
+    /// ARC-008: workers not yet joined. Used by the shutdown tests to prove the join path.
+    #[allow(dead_code)] // test-facing invariant accessor
+    pub fn live_worker_count(&self) -> usize {
+        self.workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .len()
     }
 
     /// The last snapshot published for a document, if any.
@@ -673,6 +807,12 @@ impl ExecutionHost {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         caches.get(&document).map(DocumentCache::len).unwrap_or(0)
+    }
+}
+
+impl Drop for ExecutionHost {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -1198,8 +1338,8 @@ impl RunWorker {
     /// Removes the run from the host's active map and marks its handle inactive.
     fn retire(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some((run, _)) = state.active.get(&self.document) {
-            if *run == self.run {
+        if let Some(active) = state.active.get(&self.document) {
+            if active.run == self.run {
                 state.active.remove(&self.document);
             }
         }
@@ -2416,5 +2556,429 @@ mod tests {
             sub_progress[0].1,
             sub_progress[0].0
         );
+    }
+
+    /// A snapshot with all fields explicit, for the ARC-004 variant-enumeration test.
+    fn sample_snapshot() -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            result: "42".to_string(),
+            result_structured: None,
+            result_inspection: None,
+            variables: vec![("x".to_string(), "42".to_string())],
+            functions: Vec::new(),
+            state: EngineState::default(),
+            plot: None,
+            output: Vec::new(),
+            revision: SourceRevision(9),
+            committed_steps: 1,
+            total: 1,
+            precision: DEFAULT_PRECISION,
+            diagnostic: None,
+        }
+    }
+
+    /// A minimal typed diagnostic for the `Failed` variant.
+    fn sample_diagnostic() -> Diagnostic {
+        Diagnostic {
+            message: "boom".to_string(),
+            code: Some("E_TEST".to_string()),
+            category: Some("TestError".to_string()),
+            suggestions: Vec::new(),
+            statement_index: 0,
+            statement_line: 1,
+            byte_offset: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    /// ARC-004: every variant is constructed, named, given ids, and matched without a wildcard.
+    ///
+    /// The `match` below has no `_` arm on purpose. Adding a variant to `DesktopEvent` fails this
+    /// test at compile time until the variant is named in [`DesktopEvent::kind`], listed in
+    /// [`DesktopEvent::KIND_NAMES`] and given a document/run id and a consumer. There is no
+    /// `#[non_exhaustive]` escape hatch on the enum.
+    #[test]
+    fn every_desktop_event_variant_is_constructed_named_and_id_bound() {
+        let document = DocumentId(11);
+        let run = RunId(22);
+        let snapshot = sample_snapshot();
+        let events = vec![
+            DesktopEvent::RunStarted {
+                document,
+                run,
+                revision: SourceRevision(9),
+                total: 3,
+            },
+            DesktopEvent::StepStarted {
+                document,
+                run,
+                index: 0,
+                label: "a = 1".to_string(),
+            },
+            DesktopEvent::StepCommitted {
+                document,
+                run,
+                index: 0,
+                reused: true,
+                snapshot: snapshot.clone(),
+            },
+            DesktopEvent::Output {
+                document,
+                run,
+                text: "hello".to_string(),
+            },
+            DesktopEvent::SubProgress {
+                document,
+                run,
+                fraction: 1.0 / 3.0,
+                label: "1/3".to_string(),
+            },
+            DesktopEvent::Finished {
+                document,
+                run,
+                snapshot: snapshot.clone(),
+            },
+            DesktopEvent::Cancelled {
+                document,
+                run,
+                committed_steps: 1,
+                snapshot: snapshot.clone(),
+            },
+            DesktopEvent::Failed {
+                document,
+                run,
+                diagnostic: sample_diagnostic(),
+                snapshot,
+            },
+        ];
+        let observed: Vec<&'static str> = events.iter().map(DesktopEvent::kind).collect();
+        println!(
+            "ARC-004 variants ({}): {}",
+            observed.len(),
+            observed.join(", ")
+        );
+        assert_eq!(observed, DesktopEvent::KIND_NAMES);
+        let mut unique = observed.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            DesktopEvent::KIND_NAMES.len(),
+            "kind names must be distinct: {observed:?}"
+        );
+        for event in &events {
+            assert_eq!(event.document(), document, "event {event:?} lost its document id");
+            assert_eq!(event.run(), run, "event {event:?} lost its run id");
+            // Exhaustive, wildcard-free match: the compile-time tripwire for a new variant.
+            match event {
+                DesktopEvent::RunStarted { document: d, run: r, .. }
+                | DesktopEvent::StepStarted { document: d, run: r, .. }
+                | DesktopEvent::StepCommitted { document: d, run: r, .. }
+                | DesktopEvent::Output { document: d, run: r, .. }
+                | DesktopEvent::SubProgress { document: d, run: r, .. }
+                | DesktopEvent::Finished { document: d, run: r, .. }
+                | DesktopEvent::Cancelled { document: d, run: r, .. }
+                | DesktopEvent::Failed { document: d, run: r, .. } => {
+                    assert_eq!((*d, *r), (document, run));
+                }
+            }
+        }
+    }
+
+    /// ARC-004: the event enum's source shape is typed — no `serde_json::Value`, no stringly
+    /// `kind`, no `#[non_exhaustive]` hole.
+    #[test]
+    fn the_event_enum_has_no_json_or_stringly_kind_and_is_not_non_exhaustive() {
+        let source = include_str!("execution.rs");
+        let start = source
+            .find("pub enum DesktopEvent {")
+            .expect("DesktopEvent declaration");
+        let end = source[start..]
+            .find("impl DesktopEvent {")
+            .map(|offset| start + offset)
+            .expect("impl DesktopEvent follows the enum");
+        let declaration = &source[start..end];
+        assert!(
+            !declaration.contains("#[non_exhaustive]"),
+            "DesktopEvent must stay exhaustively matched"
+        );
+        assert!(
+            !declaration.contains("serde_json") && !declaration.contains("Value"),
+            "the UI boundary event must not carry an untyped JSON value: {declaration}"
+        );
+        assert!(
+            !declaration.contains("kind: String") && !declaration.contains("kind: &'static str"),
+            "the event must not carry a stringly-typed kind field: {declaration}"
+        );
+        for name in DesktopEvent::KIND_NAMES {
+            assert!(
+                declaration.contains(name),
+                "variant {name} is missing from the enum declaration"
+            );
+        }
+        println!(
+            "ARC-004 enum shape: variants={} declaration_bytes={} non_exhaustive=false serde_json_value=false stringly_kind=false typed_ids_and_payloads=true",
+            DesktopEvent::KIND_NAMES.len(),
+            declaration.len()
+        );
+    }
+
+    /// ARC-004: one run's stream is sequenced without gaps, bound to one run and one revision.
+    #[test]
+    fn the_event_stream_is_gap_free_and_bound_to_the_submitted_run_and_revision() {
+        let host = ExecutionHost::new(Box::new(|| {
+            Box::new(crate::engine::FakeEngine::new())
+        }));
+        let document = DocumentId(3);
+        let revision = SourceRevision(7);
+        let handle = host
+            .submit(
+                document,
+                revision,
+                "a = 1\nb = a + 1\nb\n".to_string(),
+                DEFAULT_PRECISION,
+            )
+            .expect("submit");
+        let run = handle.run();
+        let mut events = Vec::new();
+        loop {
+            let event = host
+                .next_event(Duration::from_secs(10))
+                .expect("the run delivered no terminal event");
+            let terminal = matches!(
+                event.event,
+                DesktopEvent::Finished { .. }
+                    | DesktopEvent::Cancelled { .. }
+                    | DesktopEvent::Failed { .. }
+            );
+            events.push(event);
+            if terminal {
+                break;
+            }
+        }
+        assert_eq!(
+            events.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            (1..=events.len() as u64).collect::<Vec<_>>(),
+            "sequence numbers must be gap-free and monotonic"
+        );
+        for event in &events {
+            assert_eq!(event.revision, revision, "event {event:?} lost its revision");
+            assert_eq!(event.event.run(), run, "event {event:?} names another run");
+            assert_eq!(
+                event.event.document(),
+                document,
+                "event {event:?} names another document"
+            );
+        }
+        assert!(matches!(events.first().map(|e| &e.event), Some(DesktopEvent::RunStarted { .. })));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    DesktopEvent::Finished { .. }
+                        | DesktopEvent::Cancelled { .. }
+                        | DesktopEvent::Failed { .. }
+                ))
+                .count(),
+            1,
+            "exactly one terminal event"
+        );
+        assert!(matches!(events.last().map(|e| &e.event), Some(DesktopEvent::Finished { .. })));
+        println!(
+            "ARC-004 stream: document={} run={} revision={} events={} sequence={}..{} kinds={:?}",
+            document.0,
+            run.0,
+            revision.0,
+            events.len(),
+            events.first().map(|event| event.sequence).unwrap_or(0),
+            events.last().map(|event| event.sequence).unwrap_or(0),
+            events
+                .iter()
+                .map(|event| event.event.kind())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            events.len(),
+            1 + 3 * 3 + 1,
+            "one started, per statement start+commit+progress, one finished"
+        );
+    }
+
+    /// ARC-005: the engine records its calling thread; it is the named worker, never the caller.
+    struct ThreadRecordingEngine {
+        threads: Arc<Mutex<Vec<(std::thread::ThreadId, Option<String>)>>>,
+    }
+
+    impl Evaluator for ThreadRecordingEngine {
+        fn eval(&mut self, _src: &str) -> Result<String, String> {
+            self.threads.lock().unwrap().push((
+                std::thread::current().id(),
+                std::thread::current().name().map(str::to_string),
+            ));
+            Ok("ok".to_string())
+        }
+    }
+
+    #[test]
+    fn evaluation_records_the_worker_thread_not_the_caller_ui_thread() {
+        let threads = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&threads);
+        let host = ExecutionHost::new(Box::new(move || {
+            Box::new(ThreadRecordingEngine {
+                threads: Arc::clone(&recorded),
+            })
+        }));
+        let ui_thread = std::thread::current().id();
+        let handle = host
+            .submit(
+                DocumentId(5),
+                SourceRevision(1),
+                "1 + 1".to_string(),
+                DEFAULT_PRECISION,
+            )
+            .expect("submit");
+        assert_ne!(
+            handle.worker_thread(),
+            ui_thread,
+            "the worker was spawned on the UI thread"
+        );
+        loop {
+            let event = host
+                .next_event(Duration::from_secs(5))
+                .expect("no terminal event");
+            if matches!(event.event, DesktopEvent::Finished { .. }) {
+                break;
+            }
+        }
+        let observed = threads.lock().unwrap().clone();
+        assert_eq!(
+            observed.len(),
+            1,
+            "one statement must have been evaluated once: {observed:?}"
+        );
+        assert_eq!(
+            observed[0].0,
+            handle.worker_thread(),
+            "the engine evaluated on a thread other than the worker the handle names"
+        );
+        assert_ne!(observed[0].0, ui_thread, "the engine evaluated on the UI thread");
+        let name = observed[0].1.as_deref().unwrap_or_default();
+        println!(
+            "ARC-005 caller_ui_thread={:?} engine_thread={:?} engine_thread_name={:?} worker_handle_thread={:?}",
+            ui_thread,
+            observed[0].0,
+            observed[0].1,
+            handle.worker_thread()
+        );
+        assert!(
+            name.starts_with("lovelace-run-"),
+            "the worker thread was not named: {name:?}"
+        );
+    }
+
+    /// ARC-008: a cancellable engine that records when its run really started and when it is
+    /// dropped. The worker thread is the only place either side effect can happen.
+    struct CancelProbeEngine {
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+        cancel: Arc<AtomicBool>,
+    }
+
+    impl Evaluator for CancelProbeEngine {
+        fn eval(&mut self, _src: &str) -> Result<String, String> {
+            self.started.store(true, Ordering::SeqCst);
+            while !self.cancel.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err("cancelled by the shutdown probe".to_string())
+        }
+
+        fn set_cancel_flag(&mut self, flag: Option<Arc<AtomicBool>>) {
+            if let Some(flag) = flag {
+                self.cancel = flag;
+            }
+        }
+    }
+
+    impl Drop for CancelProbeEngine {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn shutdown_cancels_and_joins_a_live_worker_and_joins_a_finished_one() {
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let host = ExecutionHost::new(Box::new({
+            let started = Arc::clone(&started);
+            let dropped = Arc::clone(&dropped);
+            let cancel = Arc::clone(&cancel);
+            move || {
+                Box::new(CancelProbeEngine {
+                    started: Arc::clone(&started),
+                    dropped: Arc::clone(&dropped),
+                    cancel: Arc::clone(&cancel),
+                })
+            }
+        }));
+        let _handle = host
+            .submit(
+                DocumentId(8),
+                SourceRevision(1),
+                "long_kernel()".to_string(),
+                DEFAULT_PRECISION,
+            )
+            .expect("submit");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !started.load(Ordering::SeqCst) {
+            assert!(Instant::now() < deadline, "the worker never entered eval");
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(host.live_worker_count(), 1);
+        let joined = host.shutdown();
+        println!(
+            "ARC-008 shutdown: joined={joined} dropped={} live_after={}",
+            dropped.load(Ordering::SeqCst),
+            host.live_worker_count()
+        );
+        assert_eq!(joined, 1, "shutdown must join the live worker");
+        assert!(dropped.load(Ordering::SeqCst), "the worker was not joined to completion");
+        assert_eq!(host.live_worker_count(), 0);
+        assert_eq!(host.shutdown(), 0, "shutdown must be idempotent");
+
+        // A run that finished before shutdown is joined too, not leaked.
+        let host = ExecutionHost::new(Box::new(|| {
+            Box::new(crate::engine::FakeEngine::new())
+        }));
+        let _handle = host
+            .submit(
+                DocumentId(9),
+                SourceRevision(1),
+                "1 + 1".to_string(),
+                DEFAULT_PRECISION,
+            )
+            .expect("submit");
+        loop {
+            let event = host
+                .next_event(Duration::from_secs(5))
+                .expect("no terminal event");
+            if matches!(
+                event.event,
+                DesktopEvent::Finished { .. }
+                    | DesktopEvent::Cancelled { .. }
+                    | DesktopEvent::Failed { .. }
+            ) {
+                break;
+            }
+        }
+        assert!(
+            host.shutdown() <= 1,
+            "a completed worker must either have been reaped or be joined now"
+        );
+        assert_eq!(host.live_worker_count(), 0);
     }
 }

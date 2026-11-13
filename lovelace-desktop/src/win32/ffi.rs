@@ -27,6 +27,8 @@ use std::path::PathBuf;
 
 /// A window handle.
 pub type HWND = isize;
+/// A process handle.
+pub type HANDLE = isize;
 /// A module instance handle.
 pub type HINSTANCE = isize;
 /// A menu handle.
@@ -597,6 +599,41 @@ unsafe extern "system" {
     pub fn GetModuleHandleW(name: *const u16) -> HINSTANCE;
     /// Returns the process id of the calling process.
     pub fn GetCurrentProcessId() -> u32;
+    /// Returns the pseudo-handle of the calling process (always -1; never closed).
+    pub fn GetCurrentProcess() -> HANDLE;
+    /// Fills `counters` with the calling process's memory counters (psapi.h's
+    /// `K32GetProcessMemoryInfo`, exported by kernel32 since Windows 7).
+    pub fn K32GetProcessMemoryInfo(
+        process: HANDLE,
+        counters: *mut PROCESS_MEMORY_COUNTERS,
+        cb: u32,
+    ) -> i32;
+}
+
+/// `PROCESS_MEMORY_COUNTERS` from psapi.h, field for field.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PROCESS_MEMORY_COUNTERS {
+    /// Size of this structure, set by the caller.
+    pub cb: u32,
+    /// Page faults.
+    pub PageFaultCount: u32,
+    /// Peak working set, bytes.
+    pub PeakWorkingSetSize: usize,
+    /// Current working set, bytes.
+    pub WorkingSetSize: usize,
+    /// Peak paged pool usage, bytes.
+    pub QuotaPeakPagedPoolUsage: usize,
+    /// Current paged pool usage, bytes.
+    pub QuotaPagedPoolUsage: usize,
+    /// Peak non-paged pool usage, bytes.
+    pub QuotaPeakNonPagedPoolUsage: usize,
+    /// Current non-paged pool usage, bytes.
+    pub QuotaNonPagedPoolUsage: usize,
+    /// Pagefile usage, bytes.
+    pub PagefileUsage: usize,
+    /// Peak pagefile usage, bytes.
+    pub PeakPagefileUsage: usize,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -617,6 +654,27 @@ pub fn from_wide(buffer: &[u16]) -> String {
         .position(|unit| *unit == 0)
         .unwrap_or(buffer.len());
     String::from_utf16_lossy(&buffer[..end])
+}
+
+/// The calling process's current and peak working set, in bytes.
+///
+/// PERF-009 uses this to measure the memory a 10 000-character typing run actually costs. The
+/// query is a read-only kernel call; a failure returns `None` rather than a fabricated number.
+pub fn process_memory_bytes() -> Option<(usize, usize)> {
+    use std::mem::size_of;
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..PROCESS_MEMORY_COUNTERS::default()
+    };
+    // SAFETY: `counters` is a live, correctly sized PROCESS_MEMORY_COUNTERS and the pseudo-handle
+    // -1 from GetCurrentProcess is valid for this process and needs no closing. The callee writes
+    // at most `cb` bytes into the structure.
+    let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counters.cb) };
+    if ok == 0 {
+        None
+    } else {
+        Some((counters.WorkingSetSize, counters.PeakWorkingSetSize))
+    }
 }
 
 /// Shows a message box and returns the pressed button identifier.

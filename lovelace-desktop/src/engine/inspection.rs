@@ -279,6 +279,9 @@ fn tree_node(expression: &Expr) -> Json {
         ("kind", Json::Str(kind.to_string())),
         ("detail", detail.map(Json::Str).unwrap_or(Json::Null)),
         ("label", Json::Str(expression.to_string())),
+        // SYM-003: the engine's own canonical form of this very sub-expression, so the pane can
+        // copy one node's canonical rendering without re-parsing the pretty text.
+        ("canonical", Json::Str(expression.canonical())),
         ("children", Json::Arr(children)),
     ])
 }
@@ -547,11 +550,20 @@ mod tests {
             .and_then(|section| section.get("root"))
             .expect("tree root");
         assert_eq!(tree.get("kind").and_then(Json::as_str), Some("Mul"));
+        // SYM-003: every node of the engine tree carries that node's canonical form.
+        assert_eq!(
+            tree.get("canonical").and_then(Json::as_str),
+            Some("(mul (rat 3 1) (pow (sym x) (rat 2 1)))")
+        );
         let children = tree
             .get("children")
             .and_then(Json::as_arr)
             .expect("children");
         assert_eq!(children.len(), 2);
+        assert_eq!(
+            children[1].get("canonical").and_then(Json::as_str),
+            Some("(pow (sym x) (rat 2 1))")
+        );
         let mathir = sections
             .get("mathir")
             .and_then(|section| section.get("text"))

@@ -910,9 +910,31 @@ impl Settings {
     }
 
     /// Reads a settings file, returning defaults when it is missing or unreadable.
+    ///
+    /// PERF-010: when the file exists but has to be discarded as a whole (invalid JSON, not an
+    /// object, missing/newer schema), its bytes are first copied to a sibling `.bak` file. The
+    /// application then runs on the defaults and later saves over the original, so without that
+    /// copy a corrupt file and whatever the user had configured would be lost with no trace.
+    /// A field-level warning does not trigger a backup: those settings are still usable.
     pub fn load(path: &Path) -> Settings {
         match std::fs::read_to_string(path) {
-            Ok(text) => Settings::from_json(&text),
+            Ok(text) => {
+                let mut settings = Settings::from_json(&text);
+                if settings_were_discarded(&settings) {
+                    let backup = corrupt_backup_path(path);
+                    match std::fs::copy(path, &backup) {
+                        Ok(bytes) => settings.warnings.push(format!(
+                            "the unreadable settings file was preserved as {} ({bytes} bytes) before defaults were used.",
+                            backup.display()
+                        )),
+                        Err(error) => settings.warnings.push(format!(
+                            "the unreadable settings file could not be backed up to {}: {error}",
+                            backup.display()
+                        )),
+                    }
+                }
+                settings
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Settings::new(),
             Err(error) => {
                 let mut settings = Settings::new();
@@ -969,6 +991,29 @@ impl Settings {
     pub fn take_warnings(&mut self) -> Vec<String> {
         std::mem::take(&mut self.warnings)
     }
+}
+
+/// The sibling file a settings document that had to be discarded is preserved as.
+fn corrupt_backup_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| "desktop.json".into());
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// True when `from_json` had to discard the whole document rather than one field.
+///
+/// These are exactly the warnings `from_json` emits before it returns the defaults without
+/// reading a single setting; an older schema is still read field by field and is not discarded.
+fn settings_were_discarded(settings: &Settings) -> bool {
+    settings.warnings.iter().any(|warning| {
+        warning.contains("not valid JSON")
+            || warning.contains("root is not a JSON object")
+            || warning.contains("schema_version is missing or not a number")
+            || warning.contains("is newer than supported")
+    })
 }
 
 /// Reads a persisted session (DOC-004).
@@ -1779,5 +1824,73 @@ mod tests {
             too_small.ui_scale_percent, MIN_UI_SCALE_PERCENT,
             "below the range is the 100% floor"
         );
+    }
+
+    /// PERF-010: a corrupt file is discarded *and* preserved, so running on the defaults cannot
+    /// destroy the only copy of the user's settings.
+    #[test]
+    fn a_corrupt_settings_file_is_backed_up_before_defaults_are_used() {
+        let directory = std::env::temp_dir().join(format!(
+            "lovelace-settings-backup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+        let path = directory.join("desktop.json");
+        let corrupt = b"{ this is not json";
+        std::fs::write(&path, corrupt).expect("corrupt settings");
+
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.active_precision, DEFAULT_PRECISION, "defaults used");
+        assert!(
+            loaded.warnings.iter().any(|warning| warning.contains("not valid JSON")),
+            "warning: {:?}",
+            loaded.warnings
+        );
+        let backup = corrupt_backup_path(&path);
+        assert_eq!(
+            std::fs::read(&backup).expect("backup exists"),
+            corrupt,
+            "the corrupt bytes must survive byte-for-byte"
+        );
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("preserved as")),
+            "the warning names the backup: {:?}",
+            loaded.warnings
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A file with one unreadable field is still usable, so it is not backed up or discarded.
+    #[test]
+    fn a_field_level_warning_does_not_trigger_a_backup() {
+        let directory = std::env::temp_dir().join(format!(
+            "lovelace-settings-nobackup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&directory).expect("scratch directory");
+        let path = directory.join("desktop.json");
+        std::fs::write(
+            &path,
+            br#"{"schema_version": 1, "active_precision": "not a number"}"#,
+        )
+        .expect("settings");
+        let loaded = Settings::load(&path);
+        assert!(!loaded.warnings.is_empty());
+        assert!(
+            !corrupt_backup_path(&path).exists(),
+            "a field-level warning is not document loss"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

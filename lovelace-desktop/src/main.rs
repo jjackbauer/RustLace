@@ -41,6 +41,8 @@ mod document_io;
 mod engine;
 mod execution;
 mod find;
+#[cfg(windows)]
+mod glyph_audit;
 mod glyphs;
 mod gui_selftest;
 mod history;
@@ -52,8 +54,12 @@ mod keyboard;
 mod language;
 mod log_kind;
 mod netcheck;
+#[cfg(windows)]
+mod perf_probe;
 #[cfg(test)]
 mod precision_default;
+#[cfg(windows)]
+mod platform_dialogs;
 mod quick_eval;
 mod recovery;
 mod regex_lite;
@@ -64,8 +70,11 @@ mod selftest;
 mod settings;
 mod statements;
 mod svg;
+mod symbolic_status;
+mod thread_audit;
 #[cfg(windows)]
 mod ui;
+mod ui_audit;
 #[cfg(windows)]
 mod win32;
 mod workbench;
@@ -101,7 +110,17 @@ fn main() {
     // every character against the shipped font stack and exits non-zero when one is neither
     // drawable nor documented as a fallback.
     if args.iter().any(|arg| arg == "--glyph-check") {
-        std::process::exit(ui::a11y::glyph_cli());
+        std::process::exit(glyph_audit::run());
+    }
+    // ARC-003: the source audit over src/ui. It prints every file, its imports and the exact
+    // separation rule, and exits non-zero when a UI file evaluates, constructs an engine or
+    // names the compiler directly.
+    if args.iter().any(|arg| arg == "--ui-audit") {
+        std::process::exit(ui_audit::run());
+    }
+    // ARC-008: the source audit over every thread spawn, sleep and synchronisation primitive.
+    if args.iter().any(|arg| arg == "--thread-audit") {
+        std::process::exit(thread_audit::run());
     }
     // A11Y-007: the keyboard map, printed from the one binding table the window and the
     // Help > Keyboard Shortcuts dialog read. This is the documented map; it cannot drift from
@@ -130,6 +149,59 @@ fn main() {
             .map(std::path::PathBuf::from);
         std::process::exit(ui::measure::run(script, out, started));
     }
+    if let Some(index) = args.iter().position(|arg| arg == "--measure-run") {
+        let script = args
+            .get(index + 1)
+            .filter(|arg| !arg.starts_with("--"))
+            .map(std::path::PathBuf::from);
+        let out = args
+            .iter()
+            .position(|arg| arg == "--measure-out")
+            .and_then(|index| args.get(index + 1))
+            .map(std::path::PathBuf::from);
+        std::process::exit(ui::measure_run::run(script, out));
+    }
+    // PERF-001: one real-window launch measured from process entry to the first completed pass.
+    // The perf-check harness runs this once per cold and per warm sample.
+    if let Some(index) = args.iter().position(|arg| arg == "--measure-startup") {
+        let script = args
+            .get(index + 1)
+            .filter(|arg| !arg.starts_with("--"))
+            .map(std::path::PathBuf::from);
+        let out = args
+            .iter()
+            .position(|arg| arg == "--measure-out")
+            .and_then(|index| args.get(index + 1))
+            .map(std::path::PathBuf::from);
+        std::process::exit(ui::measure::run_startup(script, out, started));
+    }
+    // PERF-009: 10 000 typed characters through the shipped editor buffer, in release.
+    if let Some(index) = args.iter().position(|arg| arg == "--measure-edit-scale") {
+        let script = args
+            .get(index + 1)
+            .filter(|arg| !arg.starts_with("--"))
+            .map(std::path::PathBuf::from);
+        let out = args
+            .iter()
+            .position(|arg| arg == "--measure-out")
+            .and_then(|index| args.get(index + 1))
+            .map(std::path::PathBuf::from);
+        let chars = args
+            .iter()
+            .position(|arg| arg == "--chars")
+            .and_then(|index| args.get(index + 1))
+            .and_then(|value| value.parse::<usize>().ok());
+        std::process::exit(perf_probe::edit_scale_cli(script, out, chars));
+    }
+    // PERF-012: an invalid plot must not corrupt the document/engine; the next run must work.
+    if args.iter().any(|arg| arg == "--perf-paint-failure") {
+        std::process::exit(perf_probe::paint_failure_cli());
+    }
+    // PERF-011: what the product does with an extreme precision request. Exits non-zero when no
+    // estimate/warning/refusal exists, which is the capability the row requires.
+    if args.iter().any(|arg| arg == "--perf-precision-probe") {
+        std::process::exit(perf_probe::precision_probe_cli());
+    }
     if args.iter().any(|arg| arg == "--selftest") {
         std::process::exit(selftest::run());
     }
@@ -152,6 +224,12 @@ fn main() {
         std::process::exit(2);
     }
     let initial = args.iter().find(|arg| !arg.starts_with("--")).cloned();
+    // Printed at startup so a launch with redirected stderr shows where the engine will write.
+    // It lives here rather than in the UI module so `src/ui/**` names no engine function at all.
+    eprintln!(
+        "lovelace-desktop: plot directory {}",
+        engine::default_plot_dir().display()
+    );
     std::process::exit(ui::run(initial.map(std::path::PathBuf::from)));
 }
 
@@ -171,6 +249,14 @@ fn main() {
     }
     if args.iter().any(|arg| arg == "--selftest") {
         std::process::exit(selftest::run());
+    }
+    // ARC-003 / ARC-008: the two source audits are platform-independent and read the shipped
+    // source tree, so they print on every build.
+    if args.iter().any(|arg| arg == "--ui-audit") {
+        std::process::exit(ui_audit::run());
+    }
+    if args.iter().any(|arg| arg == "--thread-audit") {
+        std::process::exit(thread_audit::run());
     }
     // A11Y-007: the binding table and the reference are window-independent, so the map prints on
     // every platform even where the native workbench is unavailable.
@@ -236,6 +322,55 @@ fn usage() -> String {
     );
     text.push_str(
         "                                      typing and scroll-frame budgets, write <report>\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --measure-run <script> --measure-out <report>\n",
+    );
+    text.push_str(
+        "                                      run <script> (>=2 s of engine work) in the real\n",
+    );
+    text.push_str(
+        "                                      window and measure frame/input responsiveness\n",
+    );
+    text.push_str("  lovelace-desktop --measure-startup [script] --measure-out <report>\n");
+    text.push_str(
+        "                                      one real-window launch: process entry to the first\n",
+    );
+    text.push_str(
+        "                                      completed frame, plus the launch's setting/recovery\n",
+    );
+    text.push_str("                                      warnings (PERF-001)\n");
+    text.push_str(
+        "  lovelace-desktop --measure-edit-scale <script> --measure-out <report> [--chars N]\n",
+    );
+    text.push_str(
+        "                                      type N characters (default 10000) through the\n",
+    );
+    text.push_str(
+        "                                      shipped editor buffer and report latency/memory\n",
+    );
+    text.push_str("                                      scaling (PERF-009)\n");
+    text.push_str("  lovelace-desktop --perf-paint-failure\n");
+    text.push_str(
+        "                                      feed an invalid plot into the shipped pane, then run\n",
+    );
+    text.push_str("                                      again (PERF-012; exits non-zero on failure)\n");
+    text.push_str("  lovelace-desktop --perf-precision-probe\n");
+    text.push_str(
+        "                                      report what an extreme precision request does\n",
+    );
+    text.push_str("                                      (PERF-011; exits non-zero when nothing warns)\n");
+    text.push_str(
+        "  lovelace-desktop --ui-audit         audit src/ui for ARC-003 separation (no eval,\n",
+    );
+    text.push_str(
+        "                                      no engine construction, imports allowlisted)\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --thread-audit     audit every thread spawn, join path, sleep and\n",
+    );
+    text.push_str(
+        "                                      synchronisation primitive (ARC-008)\n",
     );
     text.push_str("  lovelace-desktop --contrast-check   print every theme pair's WCAG ratio\n");
     text.push_str(

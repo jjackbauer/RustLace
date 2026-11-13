@@ -287,6 +287,21 @@ pub struct PollReport {
     pub next_event_max: Duration,
 }
 
+/// A prior run whose terminal result was replaced by a newer run.
+///
+/// ARC-006: the workbench records the supersession by run id, not merely by clearing the old
+/// handle. The transition log still holds the old run's one terminal event; this record says
+/// which later run superseded it and what its terminal state was. No event of the old run can
+/// commit after the new run starts (`Workbench::apply_event` compares the typed event's run id
+/// with the currently tracked handle before any pane is touched).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupersededRun {
+    /// The replaced run's identity.
+    pub run: RunId,
+    /// Its terminal state when the newer run was submitted.
+    pub terminal: RunState,
+}
+
 /// One document tab: its source, its run identity and the state published by its last run.
 pub struct WorkbenchDocument {
     /// The document's stable identity, and the id every event carries.
@@ -406,6 +421,8 @@ pub struct WorkbenchDocument {
     /// Wall-clock time from submit to terminal, in milliseconds.
     pub elapsed_ms: u64,
     run: Option<RunHandle>,
+    /// ARC-006: the previous run this document's newest run superseded, recorded by run id.
+    pub superseded: Option<SupersededRun>,
     /// The in-flight run was submitted by the quick-eval input rather than by Run.
     ///
     /// The run uses the same document identity, revision and precision, but its source is the
@@ -665,6 +682,14 @@ pub struct Workbench {
 impl Default for Workbench {
     fn default() -> Workbench {
         Workbench::new()
+    }
+}
+
+impl Drop for Workbench {
+    fn drop(&mut self) {
+        // ARC-008: the execution host retains every worker JoinHandle; closing the workbench
+        // cancels any live run and joins all of them before the process can exit.
+        self.shutdown();
     }
 }
 
@@ -2087,6 +2112,12 @@ impl Workbench {
         index: usize,
         source: String,
     ) -> Result<(RunId, SourceRevision), SubmitError> {
+        let previous = {
+            let doc = &self.docs[index];
+            doc.run_state
+                .run()
+                .map(|run| (run, doc.state()))
+        };
         let doc = &self.docs[index];
         let revision = SourceRevision(doc.revision);
         let precision = doc.precision;
@@ -2108,6 +2139,13 @@ impl Workbench {
             doc.reused = 0;
             doc.elapsed_ms = 0;
             doc.started = Some(Instant::now());
+            // ARC-006: record the replaced terminal run by id. Only a terminal run can be
+            // superseded; a submit while one is in flight is refused before this method runs.
+            doc.superseded = previous
+                .filter(|(previous_run, terminal)| {
+                    *previous_run != run_id && terminal.is_terminal()
+                })
+                .map(|(run, terminal)| SupersededRun { run, terminal });
             let queued = doc.run_state.begin(run_id, "submit accepted");
             debug_assert!(queued, "a submit must enter Queued");
             if crate::run_trace::enabled() {
@@ -2164,6 +2202,15 @@ impl Workbench {
         self.docs[self.active].state().is_in_flight()
     }
 
+    /// ARC-008: cancels every active run and joins every execution worker.
+    ///
+    /// The window reaches this through `Drop for Workbench`; `--gui-selftest`, journeys and tests
+    /// call it explicitly when they want the measured join count. Returns the number of worker
+    /// threads joined by this call.
+    pub fn shutdown(&self) -> usize {
+        self.host.shutdown()
+    }
+
     /// Drains every queued event without blocking and applies it to its document.
     ///
     /// Returns true when at least one event was applied, so the window knows to repaint. The
@@ -2197,17 +2244,36 @@ impl Workbench {
 
     /// Polls until no run is in flight or `timeout` elapses. Returns true when the workbench
     /// became idle. `--gui-selftest` uses this; the window polls once per frame instead.
+    ///
+    /// ARC-008: the wait blocks on the execution host's native channel with `recv_timeout`; it
+    /// does not sleep in a polling loop. The predicate is checked after each applied event.
     pub fn wait_until_idle(&mut self, timeout: Duration) -> bool {
+        self.wait_until(timeout, |workbench| !workbench.is_running())
+    }
+
+    /// Wait until `done` holds, applying typed events as they arrive, or until `timeout` elapses.
+    ///
+    /// This is the blocking form of [`Workbench::poll`] for headless acceptance modes: the wait
+    /// is a `Receiver::recv_timeout` on the host's event channel (a native primitive), never a
+    /// `thread::sleep` poll. It returns true when `done` held before the deadline.
+    pub fn wait_until(
+        &mut self,
+        timeout: Duration,
+        mut done: impl FnMut(&Workbench) -> bool,
+    ) -> bool {
         let deadline = Instant::now() + timeout;
         loop {
             self.poll();
-            if !self.is_running() {
+            if done(self) {
                 return true;
             }
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 return false;
             }
-            std::thread::sleep(Duration::from_millis(1));
+            if let Some(sequenced) = self.host.next_event(remaining) {
+                self.apply_event(&sequenced);
+            }
         }
     }
 
@@ -2843,6 +2909,7 @@ impl WorkbenchDocument {
             reused: 0,
             elapsed_ms: 0,
             run: None,
+            superseded: None,
             quick_eval_run: None,
             started: None,
             saved_source: source.to_string(),
@@ -7370,6 +7437,194 @@ mod tests {
             snapshot.diagnostic, 
             Some(diagnostic.render_fully()),
             "the committed snapshot names the same diagnostic the editor decorates"
+        );
+    }
+
+    /// ARC-006: a cancellable engine whose long statement polls the run's live flag.
+    struct SupersedeEngine {
+        cancel: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl crate::engine::Evaluator for SupersedeEngine {
+        fn eval(&mut self, src: &str) -> Result<String, String> {
+            if src.contains("SLOW") {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while Instant::now() < deadline {
+                    if self
+                        .cancel
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        return Err("cancelled inside the slow statement".to_string());
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                return Ok("slow-result".to_string());
+            }
+            Ok("b-result".to_string())
+        }
+
+        fn set_cancel_flag(
+            &mut self,
+            flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+        ) {
+            if let Some(flag) = flag {
+                self.cancel = flag;
+            }
+        }
+    }
+
+    /// ARC-006: cancel A, start B, and prove only B's results are presented.
+    ///
+    /// The assertions are by run id, not by a boolean: A's id is recorded as superseded, A's one
+    /// terminal transition is still in the log, B's id is the tracked/displayed run, and a
+    /// fabricated late `StepCommitted` for A with a distinctive result cannot reach the panes or
+    /// the log after B has started.
+    #[test]
+    fn a_superseded_run_cannot_commit_or_publish_after_the_new_run_starts() {
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let factory_cancel = Arc::clone(&cancel);
+        let mut workbench = Workbench::with_named_factory(
+            Box::new(move || {
+                Box::new(SupersedeEngine {
+                    cancel: Arc::clone(&factory_cancel),
+                })
+            }),
+            "supersede-probe",
+        );
+        workbench.set_source(0, "a = SLOW_ONE\n".to_string());
+
+        // A starts. A second Run request is refused by the serialized per-document policy and
+        // allocates no second run id while A is in flight.
+        assert!(workbench.run_active(), "run A must be accepted");
+        let run_a = workbench.documents()[0]
+            .run_id()
+            .expect("run A has an id");
+        assert!(
+            !workbench.run_active(),
+            "a second run while A is in flight must be refused"
+        );
+        assert_eq!(
+            workbench.documents()[0].run_id(),
+            Some(run_a),
+            "the refused request must not replace A"
+        );
+        assert!(
+            workbench.documents()[0]
+                .run_refusal
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Run refused"),
+            "the refusal must be visible to the status strip"
+        );
+
+        // Wait until A is actually running, then cancel it and wait for its one terminal event.
+        assert!(
+            workbench.wait_until(Duration::from_secs(5), |workbench| {
+                workbench.documents()[0].state() == RunState::Running
+            }),
+            "A never reached Running"
+        );
+        assert!(workbench.cancel_active(), "A must accept the cancel request");
+        assert!(
+            workbench.wait_until_idle(Duration::from_secs(5)),
+            "A never reached a terminal state"
+        );
+        assert_eq!(
+            workbench.documents()[0].state(),
+            RunState::Cancelled,
+            "A must end Cancelled"
+        );
+        let a_terminal = workbench.documents()[0]
+            .transitions()
+            .iter()
+            .filter(|transition| {
+                transition.run == Some(run_a) && transition.to.is_terminal_run_event()
+            })
+            .count();
+        assert_eq!(a_terminal, 1, "A must have exactly one terminal transition");
+
+        // Start B on the same document. B gets a newer run id and records A as superseded.
+        workbench.set_source(0, "b = B_RESULT\n".to_string());
+        assert!(workbench.run_active(), "run B must be accepted");
+        let run_b = workbench.documents()[0]
+            .run_id()
+            .expect("run B has an id");
+        assert!(
+            run_b > run_a,
+            "run B must receive a newer id than A (A={run_a:?}, B={run_b:?})"
+        );
+        assert_eq!(
+            workbench.documents()[0].superseded,
+            Some(SupersededRun {
+                run: run_a,
+                terminal: RunState::Cancelled,
+            }),
+            "the workbench must record A as superseded by run id"
+        );
+        assert!(
+            workbench.wait_until_idle(Duration::from_secs(5)),
+            "B never reached a terminal state"
+        );
+        assert_eq!(workbench.documents()[0].state(), RunState::Finished);
+        assert_eq!(workbench.documents()[0].run_id(), Some(run_b));
+        let b_result = workbench.documents()[0]
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.result.clone())
+            .expect("B published a snapshot");
+        assert_eq!(b_result, "b-result", "the pane must show B's result");
+
+        // A late commit for A, delivered after B started, must be ignored by run id before it
+        // can reach any pane or the log. The revision it carries is A's old revision.
+        let document_id = workbench.documents()[0].id;
+        let mut stale_snapshot = workbench.documents()[0]
+            .snapshot
+            .clone()
+            .expect("B's snapshot");
+        stale_snapshot.result = "STALE-A-RESULT".to_string();
+        stale_snapshot.committed_steps = 1;
+        let late = SequencedEvent {
+            sequence: workbench.documents()[0].last_sequence + 1,
+            revision: SourceRevision(workbench.documents()[0].revision.saturating_sub(1)),
+            event: DesktopEvent::StepCommitted {
+                document: document_id,
+                run: run_a,
+                index: 0,
+                reused: false,
+                snapshot: stale_snapshot,
+            },
+        };
+        assert!(
+            !workbench.apply_event(&late),
+            "the late A commit must be rejected as belonging to an untracked run"
+        );
+        let final_result = workbench.documents()[0]
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.result.as_str())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            final_result, "b-result",
+            "A's late result reached the pane: {final_result:?}"
+        );
+        assert!(
+            !workbench.documents()[0]
+                .logs
+                .iter()
+                .any(|line| line.text.contains("STALE-A-RESULT")),
+            "A's late commit reached the log"
+        );
+        assert_eq!(workbench.documents()[0].run_id(), Some(run_b));
+        println!(
+            "ARC-006 run_a={} run_b={} superseded={:?} a_terminal_transitions={} state_after_b={:?} displayed_run={:?} result={:?} late_a_rejected=true stale_log_present=false",
+            run_a.0,
+            run_b.0,
+            workbench.documents()[0].superseded,
+            a_terminal,
+            workbench.documents()[0].state(),
+            workbench.documents()[0].run_id(),
+            final_result
         );
     }
 }

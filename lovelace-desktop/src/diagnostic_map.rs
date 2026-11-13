@@ -364,6 +364,74 @@ mod tests {
         assert_eq!(lines(source)[2], "1 / 0\r");
     }
 
+    /// TST-007 nested scopes: a top-level statement may stay open across lines inside nested
+    /// parentheses. The engine's position is inside that statement, and the diagnostic must land
+    /// on the physical line and column of the inner token (not on the statement's first line),
+    /// with the emoji on the previous line contributing two UTF-16 units but no column shift to
+    /// this line.
+    #[test]
+    fn a_nested_multiline_statement_maps_the_failure_to_its_inner_line() {
+        let source = "s = \"\u{1f600}\"\nvalue = (1 +\n  * 2)\n";
+        let statements = crate::statements::slice(source);
+        assert_eq!(statements.len(), 2, "{statements:?}");
+        assert_eq!(
+            statements[1].text(),
+            "value = (1 +\n  * 2)",
+            "the statement spans lines 2-3"
+        );
+        assert_eq!(statements[1].start_line(), 2);
+        assert_eq!(
+            statements[1].byte_offset(),
+            11,
+            "line 2 starts after the emoji line's 11 UTF-8 bytes"
+        );
+
+        // The engine's `*` is position 15 in the statement's own text (0-based UTF-16 units).
+        let diagnostic = crate::execution::Diagnostic::for_statement(
+            &statements[1],
+            source,
+            "Unexpected token '*' at position 15.",
+        );
+        assert_eq!(
+            (
+                diagnostic.statement_line,
+                diagnostic.line,
+                diagnostic.column
+            ),
+            (2, 3, 3),
+            "the failure is on the statement's second physical line, column 3"
+        );
+        assert_eq!(
+            diagnostic.byte_offset, 26,
+            "11-byte statement start + 15-byte inner offset"
+        );
+
+        let all = lines(source);
+        let range = range_for(&all, diagnostic.line, diagnostic.column).expect("line 3 exists");
+        assert_eq!(
+            (
+                range.line,
+                range.start_char,
+                range.end_char,
+                range.start_byte,
+                range.end_byte,
+            ),
+            (3, 2, 6, 2, 6),
+            "the underline covers the inner token line, not the statement's first line"
+        );
+        assert_eq!(
+            &source[diagnostic.byte_offset..diagnostic.byte_offset + 3],
+            "* 2"
+        );
+        // The statement's first line still maps when the engine reports no position (fallback).
+        let fallback = crate::execution::Diagnostic::for_statement(
+            &statements[1],
+            source,
+            "Cannot divide by zero.",
+        );
+        assert_eq!((fallback.line, fallback.column), (2, 1));
+    }
+
     /// A column past the end of the line yields an empty range at end-of-line (the painter gives
     /// it one cell of width), and the line is still marked.
     #[test]

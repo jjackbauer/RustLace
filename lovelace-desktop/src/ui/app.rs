@@ -5,18 +5,22 @@
 //! value in the panes comes from the snapshot or the engine's plot capture. Panes with nothing
 //! to show render their empty state instead of sample data.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{
     Align, Align2, Color32, CursorIcon, Id, Key, Layout, Rect, Response, RichText, Sense,
     Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
 };
+use egui::text::LayoutJob;
+use egui::{FontId, TextFormat, TextStyle};
 
 use crate::engine::FunctionOrigin;
 use crate::execution::{Diagnostic, DocumentId};
 use crate::glyphs::GlyphMode;
-use crate::inspector::{Inspection, InspectorExpansion, Section, TREE_ROOT_PATH, tree_path};
+use crate::inspector::{
+    Inspection, InspectorExpansion, Section, TREE_LEVELS_STEP, TreeNode, tree_rows,
+};
 use crate::keyboard::{self, Action, FileCommand, KeyName, Pane, Shortcut};
 use crate::log_kind::LogKind;
 use crate::quick_eval::QuickEval;
@@ -27,6 +31,7 @@ use crate::results_tree::{
 use crate::settings::{
     self, CompactPaneSetting, MAX_PRECISION, MIN_PRECISION, Settings, WorkbenchLayout,
 };
+use crate::symbolic_status::{self, StatusBadge, Tone};
 use crate::workbench::{DocumentView, FileConflict, SaveOutcome, Workbench};
 use crate::workspace_table::{
     FunctionColumn, FunctionTable, VariableColumn, VariableTable, cell_text, ordered_functions,
@@ -497,6 +502,21 @@ impl AppStorage {
     }
 }
 
+/// SYM-001 / SYM-003: one painted expression-tree row's seam.
+///
+/// The path names the node, the rectangle is where the header was painted (the pointer tests
+/// click its centre) and the id is the header widget's own id, so a keyboard move can focus the
+/// same control a click would.
+#[derive(Clone, Debug)]
+struct TreeRowSeam {
+    /// The node's path in the tree (`inspect.tree`, `inspect.tree.0`).
+    path: String,
+    /// The painted header's rectangle.
+    rect: Rect,
+    /// The header widget's id.
+    id: Id,
+}
+
 /// What pressing a button in the DOC-005 recovery prompt means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RecoveryAnswer {
@@ -733,13 +753,20 @@ pub struct WorkbenchApp {
     inspector_open: bool,
     /// SYM-001: the expression tree's per-path collapse state, scoped to the inspection payload.
     inspector_expansion: InspectorExpansion,
-    /// SYM-001: expression-tree headers painted in the last pass (path and rectangle), the same
-    /// test seam as `result_toggle_rects`.
-    inspector_toggle_rects: Vec<(String, Rect)>,
+    /// SYM-001: expression-tree headers painted in the last pass, the same test seam as
+    /// `result_toggle_rects`. Each entry carries the header's widget id, which is what a keyboard
+    /// move focuses.
+    inspector_toggle_rects: Vec<TreeRowSeam>,
     /// LAY-002: expression-tree headers painted by the dedicated Symbolic Inspector pane in the
     /// last pass. Kept apart from the Workspace Inspector view's seam so a capture or test can
     /// address the pane's own tree.
-    symbolic_inspector_toggle_rects: Vec<(String, Rect)>,
+    symbolic_inspector_toggle_rects: Vec<TreeRowSeam>,
+    /// SYM-003 / SYM-007: the copy/export controls the Workspace Inspector view painted in the
+    /// last pass (key and rectangle), the same pointer-test seam as `inspector_toggle_rects`.
+    inspector_control_rects: Vec<(String, Rect)>,
+    /// SYM-003 / SYM-007: the copy/export controls the dedicated Symbolic Inspector pane painted
+    /// in the last pass.
+    symbolic_inspector_control_rects: Vec<(String, Rect)>,
     /// SYM-001: the Result and Inspector tab rectangles painted in the last pass. The pointer
     /// tests click these centres; UIA reaches the same buttons by their names.
     workspace_view_tabs: [Option<Rect>; 2],
@@ -996,6 +1023,8 @@ impl WorkbenchApp {
             inspector_open: false,
             inspector_expansion: InspectorExpansion::new(),
             inspector_toggle_rects: Vec::new(),
+            inspector_control_rects: Vec::new(),
+            symbolic_inspector_control_rects: Vec::new(),
             symbolic_inspector_toggle_rects: Vec::new(),
             workspace_view_tabs: [None; 2],
             result_toggle_rects: Vec::new(),
@@ -2522,6 +2551,35 @@ impl WorkbenchApp {
     pub(crate) fn measure_editor(&mut self) -> &mut TextEditor {
         let active = self.workbench.active();
         &mut self.editors[active]
+    }
+
+    /// ARC-007: submit the active document's run through the same path the Run button uses.
+    pub(crate) fn measure_begin_run(&mut self) -> bool {
+        self.workbench.run_active()
+    }
+
+    /// ARC-007: the active document's run state, read from the workbench.
+    pub(crate) fn measure_run_state(&self) -> crate::run_state::RunState {
+        self.workbench.active_document().state()
+    }
+
+    /// ARC-007: the active run id, so a capture can name the run that produced it.
+    pub(crate) fn measure_run_id(&self) -> Option<crate::execution::RunId> {
+        self.workbench.active_document().run_id()
+    }
+
+    /// ARC-007: the committed result shown by the panes, when one exists.
+    pub(crate) fn measure_result(&self) -> Option<String> {
+        self.workbench
+            .active_document()
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.result.clone())
+    }
+
+    /// ARC-007: the keyboard focus group currently active, read after an injected F6.
+    pub(crate) fn measure_focused_pane(&self) -> Pane {
+        self.focused_pane
     }
 
     /// EDT-010: the go-to-line prompt.
@@ -5131,6 +5189,19 @@ impl WorkbenchApp {
             .filter(|directory| directory.is_dir())
     }
 
+    /// SYM-007: the folder an inspector export is written to: `exports/` beside the settings file.
+    ///
+    /// A test or headless window whose storage has no settings path returns `None`, and the
+    /// inspector's export control says so instead of writing into the process directory. The
+    /// directory is created on the first export, so a fresh profile just works.
+    fn inspector_export_dir(&self) -> Option<PathBuf> {
+        self.storage
+            .settings_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|root| root.join("exports"))
+    }
+
     /// PLT-006: the PNG export options window, drawn over the workbench.
     fn plot_export_window(&mut self, ctx: &egui::Context) {
         let Some(mut options) = self.plot_export else {
@@ -5356,6 +5427,9 @@ impl WorkbenchApp {
 
     fn workspace_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
         let has_snapshot = view.has_snapshot;
+        // SYM-007: where an inspector copy or export goes, resolved before the pane borrows the
+        // tree's interaction state.
+        let export_dir = self.inspector_export_dir();
         // RUN-003: the pane states the revision and committed prefix it is showing, from the
         // same DocumentView as the variables below it. The status strip reports the live buffer
         // revision; this line reports the committed snapshot's revision. RUN-012: a snapshot
@@ -5401,7 +5475,8 @@ impl WorkbenchApp {
         let expansion = &mut self.expansion;
         let inspector_expansion = &mut self.inspector_expansion;
         let mut inspector_open = self.inspector_open;
-        let mut inspector_toggle_rects: Vec<(String, Rect)> = Vec::new();
+        let mut inspector_toggle_rects: Vec<TreeRowSeam> = Vec::new();
+        let mut inspector_control_rects: Vec<(String, Rect)> = Vec::new();
         let mut workspace_view_tabs: [Option<Rect>; 2] = [None; 2];
         let mut workspace_view_tab_ids: [Option<Id>; 2] = [None; 2];
         let mut workspace_filter_id: Option<Id> = None;
@@ -5485,6 +5560,8 @@ impl WorkbenchApp {
                                     result_width,
                                     inspector_expansion,
                                     &mut inspector_toggle_rects,
+                                    &mut inspector_control_rects,
+                                    export_dir.as_deref(),
                                 );
                                 if inspector_action == Some(empty::EmptyAction::Run) {
                                     self.workbench.run_active();
@@ -5892,6 +5969,7 @@ impl WorkbenchApp {
         self.result_toggle_rects = result_toggle_rects;
         self.inspector_open = inspector_open;
         self.inspector_toggle_rects = inspector_toggle_rects;
+        self.inspector_control_rects = inspector_control_rects;
         self.workspace_view_tabs = workspace_view_tabs;
         // A11Y-001: the workspace group's first control is the Result tab; Ctrl+Alt+F targets the
         // filter. Both requests are satisfied on the pass that painted the widget.
@@ -6009,8 +6087,12 @@ impl WorkbenchApp {
         };
         let header_hint =
             header_text_width("Symbolic Inspector") + header_text_width(&state_line) + 16.0;
+        // SYM-007: computed before the pane borrows the tree's interaction state, so a copy or
+        // export performed inside the paint has a destination to name.
+        let export_dir = self.inspector_export_dir();
         let expansion = &mut self.inspector_expansion;
-        let mut toggles: Vec<(String, Rect)> = Vec::new();
+        let mut toggles: Vec<TreeRowSeam> = Vec::new();
+        let mut controls: Vec<(String, Rect)> = Vec::new();
         with_pane(ui, rect, "Symbolic Inspector", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 ui.label(
@@ -6040,7 +6122,15 @@ impl WorkbenchApp {
                         .min_scrolled_width(0.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let inspector_action = paint_inspector(ui, view, width, expansion, &mut toggles);
+                            let inspector_action = paint_inspector(
+                                ui,
+                                view,
+                                width,
+                                expansion,
+                                &mut toggles,
+                                &mut controls,
+                                export_dir.as_deref(),
+                            );
                             if inspector_action == Some(empty::EmptyAction::Run) {
                                 self.workbench.run_active();
                             }
@@ -6049,6 +6139,7 @@ impl WorkbenchApp {
             );
         });
         self.symbolic_inspector_toggle_rects = toggles;
+        self.symbolic_inspector_control_rects = controls;
     }
 
     /// The one-line quick-eval field and its keyboard contract (RUN-002 / LOG-003).
@@ -6160,12 +6251,18 @@ impl eframe::App for WorkbenchApp {
 /// captured beside the result when it was committed. The editor buffer is not read, and no
 /// section is reconstructed from a display string. A section the engine did not supply paints
 /// the engine's (or the adapter's) specific reason instead of an empty box.
+///
+/// `export_dir` is where a MathIR export is written (SYM-007); `None` disables the export control
+/// instead of writing somewhere the user cannot find. `controls` receives every copy/export
+/// control's key and rectangle, so the pointer tests address the same controls a user clicks.
 fn paint_inspector(
     ui: &mut Ui,
     view: &DocumentView,
     width: f32,
     expansion: &mut InspectorExpansion,
-    toggles: &mut Vec<(String, Rect)>,
+    toggles: &mut Vec<TreeRowSeam>,
+    controls: &mut Vec<(String, Rect)>,
+    export_dir: Option<&Path>,
 ) -> Option<empty::EmptyAction> {
     // LAY-011: the caller already reserves the indent and scrollbar; do not floor this back up to
     // a width the narrow pane cannot hold.
@@ -6233,6 +6330,8 @@ fn paint_inspector(
         )
         .wrap(),
     );
+    // SYM-006: the engine's own status for this result, right where the result is inspected.
+    paint_result_status(ui, view);
 
     paint_inspector_heading(ui, "Pretty", "");
     match &inspection.pretty {
@@ -6253,7 +6352,7 @@ fn paint_inspector(
                 "Expression tree",
                 &count_label(tree.count(), "node", "nodes"),
             );
-            paint_inspector_node(ui, tree, TREE_ROOT_PATH, expansion, toggles);
+            paint_inspector_tree(ui, tree, expansion, toggles, controls);
         }
         Section::Missing(reason) => {
             paint_inspector_heading(ui, "Expression tree", "");
@@ -6315,6 +6414,20 @@ fn paint_inspector(
                     RichText::new(format!("classification  {}", step.classification))
                         .small()
                         .color(theme::dim()),
+                );
+                // SYM-005: applicability is the one part of the row the engine does not publish
+                // for a recorded step. The pane states that absence instead of implying the step
+                // was unconditional.
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "applicability  not published: a RewriteStep carries the rule id, \
+                             classification, before/after and required conditions only",
+                        )
+                        .small()
+                        .color(theme::warning()),
+                    )
+                    .wrap(),
                 );
                 ui.label(
                     RichText::new(format!("before  {}", step.before))
@@ -6378,19 +6491,7 @@ fn paint_inspector(
                     mathir.parameters.join(", ")
                 ),
             );
-            // SYM-007 groundwork: monospaced, selectable, and scrollable both ways. The outer
-            // pane scrolls vertically; this inner area bounds the IR's own height and width.
-            egui::ScrollArea::both()
-                .id_salt("inspector_mathir")
-                .max_height(240.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(RichText::new(&mathir.text).monospace().color(theme::text()))
-                            .selectable(true)
-                            .extend(),
-                    );
-                });
+            paint_mathir_body(ui, view, mathir, controls, export_dir);
         }
         Section::Missing(reason) => {
             paint_inspector_heading(ui, "MathIR", "");
@@ -6451,55 +6552,565 @@ fn paint_inspector_assumption(ui: &mut Ui, assumption: &crate::inspector::Assump
     }
 }
 
-/// Paints one expression-tree node. A node with children is a collapsible button header whose
-/// accessible name carries the node kind, the engine pretty rendering, the node path and the
-/// state; a leaf is a single indented row. Child order is the engine's child order.
-fn paint_inspector_node(
-    ui: &mut Ui,
-    node: &crate::inspector::TreeNode,
-    path: &str,
-    expansion: &mut InspectorExpansion,
-    toggles: &mut Vec<(String, Rect)>,
-) {
-    let label = node.header();
-    if node.children.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            ui.add_space(8.0);
-            ui.label(RichText::new(label).monospace().color(theme::text()));
-        });
+// ---------------------------------------------------------------------------------------------
+// SYM-006: the status badge painted beside the result.
+// ---------------------------------------------------------------------------------------------
+
+/// The engine-published status badges for this committed result.
+fn result_status_badges(view: &DocumentView) -> Vec<StatusBadge> {
+    symbolic_status::badges(
+        view.result_structured.as_ref(),
+        view.result_inspection.as_ref(),
+    )
+}
+
+/// Paints the status badges from the engine's own fields (SYM-006).
+///
+/// The badge is the engine's claim, not the pane's: a `Partial`, `Unevaluated` or conditional
+/// result can never reach the completion colours, because `StatusBadge::claims_completion` is what
+/// selects them.
+fn paint_result_status(ui: &mut Ui, view: &DocumentView) {
+    let badges = result_status_badges(view);
+    if badges.is_empty() {
         return;
     }
-    let visible = format!("{} {}", expansion.glyph(path), label);
-    let response = ui
-        .push_id(path, |ui| {
-            ui.add(egui::Button::new(RichText::new(visible).monospace().color(theme::accent())).frame(false))
-        })
-        .inner;
-    if response.clicked() {
-        expansion.toggle(path);
-        ui.memory_mut(|memory| memory.request_focus(response.id));
+    ui.horizontal_wrapped(|ui| {
+        for badge in &badges {
+            let color = if badge.claims_completion() {
+                theme::positive()
+            } else {
+                match badge.tone {
+                    Tone::Complete => theme::positive(),
+                    Tone::Conditional => theme::warning(),
+                    Tone::Incomplete => theme::warning(),
+                }
+            };
+            ui.add(
+                egui::Label::new(
+                    RichText::new(&badge.word)
+                        .small()
+                        .strong()
+                        .monospace()
+                        .color(color),
+                )
+                .wrap(),
+            )
+            .on_hover_text(format!("{}: {}", badge.tone.label(), badge.detail));
+            ui.add(
+                egui::Label::new(RichText::new(&badge.detail).small().color(theme::dim()))
+                    .wrap(),
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------------------------
+// SYM-003 / SYM-011: the expression tree.
+// ---------------------------------------------------------------------------------------------
+
+/// SYM-011: the tree paints inside its own bounded, scrolled body, so a deep expression cannot
+/// push the assumptions, trace and MathIR sections below the pane.
+const TREE_VIEWPORT_HEIGHT: f32 = 260.0;
+/// SYM-003: the indentation one tree level adds, in points.
+const TREE_INDENT: f32 = 14.0;
+
+/// The widget id of one row's header. It is derived from the node path, so a keyboard move can
+/// name the row it wants focused without the row having to be painted first.
+fn tree_row_id(path: &str) -> Id {
+    Id::unique(("inspector_tree_row", path))
+}
+
+/// The parent path of a tree row, or `None` for the root.
+fn parent_tree_path(path: &str) -> Option<&str> {
+    let (parent, _) = path.rsplit_once('.')?;
+    Some(parent)
+}
+
+/// Paints the expression tree: the rows the current level bound paints, inside a scrolled body
+/// that lays out only the rows in view (SYM-011).
+///
+/// Each row is one focusable control whose accessible name carries the node kind, the engine
+/// rendering, the node path and the expand/collapse state, plus a `copy` control that puts that
+/// node's engine canonical form on the clipboard (SYM-003). Arrow Up/Down move between rows,
+/// Left/Right collapse and expand, Home/End jump to the ends.
+fn paint_inspector_tree(
+    ui: &mut Ui,
+    root: &TreeNode,
+    expansion: &mut InspectorExpansion,
+    toggles: &mut Vec<TreeRowSeam>,
+    controls: &mut Vec<(String, Rect)>,
+) {
+    let rows = tree_rows(root, expansion);
+    let deepest = root.depth();
+    let row_height = ui.text_style_height(&TextStyle::Monospace) + 8.0;
+    ui.label(
+        RichText::new(format!(
+            "{} rows · levels {}/{} · {} nodes",
+            rows.len(),
+            expansion.levels().min(deepest),
+            deepest,
+            root.count()
+        ))
+        .small()
+        .color(theme::dim()),
+    );
+    let pending = expansion.pending_focus().map(str::to_string);
+    let mut scroll_to = pending
+        .as_deref()
+        .and_then(|path| rows.iter().position(|row| row.path == path))
+        .map(|index| index as f32 * row_height);
+    let mut focused: Option<usize> = None;
+    let mut painted: Vec<(usize, Id)> = Vec::new();
+    let mut copy_request: Option<(String, String)> = None;
+    let mut toggle_request: Option<String> = None;
+    let mut area = egui::ScrollArea::vertical()
+        .id_salt("inspector_tree")
+        .max_height(TREE_VIEWPORT_HEIGHT)
+        .auto_shrink([false, false]);
+    if let Some(offset) = scroll_to.take() {
+        area = area.vertical_scroll_offset(offset);
+    }
+    area.show_rows(ui, row_height, rows.len(), |ui, range| {
+        for index in range {
+            let row = &rows[index];
+            let width = ui.available_width().max(60.0);
+            ui.allocate_ui_with_layout(
+                vec2(width, row_height),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.add_space(2.0 + row.level as f32 * TREE_INDENT);
+                    let glyph = row.glyph();
+                    let visible = format!("{glyph} {}", row.header());
+                    let color = if row.has_children {
+                        theme::accent()
+                    } else {
+                        theme::text()
+                    };
+                    let response = ui
+                        .push_id(&row.path, |ui| {
+                            ui.add(
+                                egui::Button::new(RichText::new(visible).monospace().color(color))
+                                    .frame(false),
+                            )
+                        })
+                        .inner;
+                    let accessible = row.accessible_name();
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, accessible.clone())
+                    });
+                    painted.push((index, response.id));
+                    if response.has_focus() {
+                        focused = Some(index);
+                        // SYM-003: the tree owns arrow-key traversal, so a focused row keeps
+                        // both arrow axes instead of letting egui move the focus spatially.
+                        ui.memory_mut(|memory| {
+                            memory.set_focus_lock_filter(
+                                response.id,
+                                egui::EventFilter {
+                                    tab: true,
+                                    horizontal_arrows: true,
+                                    vertical_arrows: true,
+                                    escape: false,
+                                },
+                            )
+                        });
+                    }
+                    if response.clicked() {
+                        if row.has_children {
+                            toggle_request = Some(row.path.clone());
+                        }
+                        ui.memory_mut(|memory| memory.request_focus(response.id));
+                        ui.ctx().request_repaint();
+                    }
+                    let state = row.state_word();
+                    response.clone().on_hover_text(format!(
+                        "{} · {state} — click or press Space/Enter to {}",
+                        row.path,
+                        if row.collapsed { "expand" } else { "collapse" }
+                    ));
+                    toggles.push(TreeRowSeam { path: row.path.clone(), rect: response.rect, id: response.id });
+
+                    // SYM-003: copy this node's engine canonical form.
+                    let enabled = !row.canonical.is_empty();
+                    let copy = ui.add_enabled(
+                        enabled,
+                        egui::Button::new(
+                            RichText::new("copy").small().monospace().color(theme::dim()),
+                        )
+                        .frame(false),
+                    );
+                    let copy_name = format!("Copy canonical of {}", row.header());
+                    copy.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Button, true, copy_name.clone())
+                    });
+                    let hint = if enabled {
+                        format!("Copy {} -> {}", row.path, row.canonical)
+                    } else {
+                        format!("{} carries no canonical form", row.path)
+                    };
+                    let copy = copy.on_hover_text(hint);
+                    controls.push((format!("copy {}", row.path), copy.rect));
+                    if copy.clicked() {
+                        copy_request = Some((row.accessible_name(), row.canonical.clone()));
+                    }
+                },
+            );
+        }
+    });
+    if let Some((name, canonical)) = copy_request {
+        copy_to_clipboard(ui, &name, &canonical);
+    }
+    if let Some(path) = toggle_request {
+        expansion.toggle(&path);
+        ui.memory_mut(|memory| memory.request_focus(tree_row_id(&path)));
         ui.ctx().request_repaint();
     }
-    let accessible = expansion.accessible_name(path, &label);
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, accessible.clone()));
-    let action = if expansion.is_collapsed(path) {
-        "expand"
-    } else {
-        "collapse"
-    };
-    response.clone().on_hover_text(format!(
-        "{path} · {} — click, or press Space/Enter, to {action}",
-        expansion.state_word(path)
-    ));
-    toggles.push((path.to_string(), response.rect));
-    if !expansion.is_collapsed(path) {
-        ui.indent(path, |ui| {
-            for (index, child) in node.children.iter().enumerate() {
-                paint_inspector_node(ui, child, &tree_path(path, index), expansion, toggles);
-            }
-        });
+    if let Some(index) = pending
+        .as_deref()
+        .and_then(|path| rows.iter().position(|row| row.path == path))
+    {
+        if let Some((_, id)) = painted.iter().find(|(row, _)| *row == index) {
+            ui.memory_mut(|memory| memory.request_focus(*id));
+        }
+        expansion.clear_pending_focus();
     }
+
+    // SYM-003: keyboard traversal of the rows.
+    if let Some(index) = focused {
+        let row = &rows[index];
+        let (up, down, left, right, home, end) = ui.input(|input| {
+            (
+                input.key_pressed(Key::ArrowUp),
+                input.key_pressed(Key::ArrowDown),
+                input.key_pressed(Key::ArrowLeft),
+                input.key_pressed(Key::ArrowRight),
+                input.key_pressed(Key::Home),
+                input.key_pressed(Key::End),
+            )
+        });
+        let mut target: Option<usize> = None;
+        if down && index + 1 < rows.len() {
+            target = Some(index + 1);
+        }
+        if up && index > 0 {
+            target = Some(index - 1);
+        }
+        if home {
+            target = Some(0);
+        }
+        if end {
+            target = Some(rows.len().saturating_sub(1));
+        }
+        if right && row.has_children && row.collapsed {
+            expansion.set_collapsed(&row.path, false);
+            ui.ctx().request_repaint();
+        } else if right && row.has_children {
+            target = Some(index + 1);
+        }
+        if left && row.has_children && !row.collapsed {
+            expansion.set_collapsed(&row.path, true);
+            ui.ctx().request_repaint();
+        } else if left {
+            if let Some(parent) = parent_tree_path(&row.path) {
+                target = rows.iter().position(|candidate| candidate.path == parent);
+            }
+        }
+        if let Some(target) = target {
+            match painted.iter().find(|(row, _)| *row == target) {
+                Some((_, id)) => {
+                    ui.memory_mut(|memory| memory.request_focus(*id));
+                    ui.ctx().request_repaint();
+                }
+                // The row is outside the painted range: ask the next pass to scroll to it.
+                None => {
+                    expansion.set_pending_focus(&rows[target].path);
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
+
+    // SYM-011: the level bound, with what it is hiding.
+    let hidden: usize = rows.iter().map(|row| row.deeper_nodes).sum();
+    if expansion.has_deeper(deepest) && hidden > 0 {
+        let label = format!("Load {TREE_LEVELS_STEP} more levels ({hidden} nodes hidden)");
+        let button = ui.add(egui::Button::new(RichText::new(&label).small()));
+        let name = label.clone();
+        button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.clone()));
+        if button.clicked() {
+            expansion.load_deeper(deepest);
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// SYM-007: the MathIR body.
+// ---------------------------------------------------------------------------------------------
+
+/// The transient status line an inspector copy/export leaves under its controls.
+fn inspector_status_id() -> Id {
+    Id::unique("inspector_transient_status")
+}
+
+/// Puts `text` on the platform clipboard through egui, and reports it in the pane.
+///
+/// `ui.ctx().copy_text` is the window's one clipboard path: eframe forwards it to the platform
+/// clipboard, so the bytes a user pastes are the bytes the pane reports here.
+fn copy_to_clipboard(ui: &mut Ui, what: &str, text: &str) {
+    ui.ctx().copy_text(text.to_string());
+    let message = format!("Copied {what} ({} bytes)", text.len());
+    ui.data_mut(|data| data.insert_temp(inspector_status_id(), (message, false)));
+    ui.ctx().request_repaint();
+}
+
+/// SYM-007: writes the engine's IR text, byte for byte, and reports the file in the pane.
+fn export_mathir(ui: &mut Ui, view: &DocumentView, text: &str, dir: Option<&Path>) {
+    let Some(dir) = dir else {
+        ui.data_mut(|data| {
+            data.insert_temp(
+                inspector_status_id(),
+                (
+                    "Export MathIR: this window has no writable application directory"
+                        .to_string(),
+                    true,
+                ),
+            )
+        });
+        return;
+    };
+    let path = dir.join(format!("mathir-rev-{}.ir", view.revision.0));
+    let status = match write_mathir_export(&path, text) {
+        Ok(bytes) => {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            (format!("Exported MathIR: {bytes} bytes -> {name}"), false)
+        }
+        Err(error) => (format!("Export MathIR failed: {error}"), true),
+    };
+    ui.data_mut(|data| data.insert_temp(inspector_status_id(), status));
+    ui.ctx().request_repaint();
+}
+
+/// SYM-007: writes the IR text unchanged to `path`, creating its directory.
+fn write_mathir_export(path: &Path, text: &str) -> std::io::Result<usize> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, text.as_bytes())?;
+    Ok(text.len())
+}
+
+/// One class of MathIR text, so the IR is highlighted like an assembly listing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IrClass {
+    /// The `#!mathir <version>` format line.
+    Directive,
+    /// The `param` / `const` directives.
+    Keyword,
+    /// An instruction opcode (`PowInt`, `Mul`, ...).
+    Opcode,
+    /// An operand index or the constant-name text.
+    Operand,
+    /// A separator.
+    Delimiter,
+    /// Anything the format does not classify.
+    Plain,
+}
+
+/// One highlighted run of one MathIR line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IrToken {
+    text: String,
+    class: IrClass,
+}
+
+/// Splits one line of the engine's IR text into its syntax classes.
+///
+/// The grammar is the engine's published line format (`mathir` `IrProgram::serialize`): a
+/// `#!mathir <version>` header, `param <name>` and `const <name>` directives, then one
+/// `<Opcode> <aux> <operands>` instruction per line. Nothing is added, renamed or reordered.
+fn ir_line_tokens(line: &str) -> Vec<IrToken> {
+    let plain = |text: &str| IrToken {
+        text: text.to_string(),
+        class: IrClass::Plain,
+    };
+    if line.is_empty() {
+        return vec![plain(" ")];
+    }
+    if line.starts_with('#') {
+        return vec![IrToken {
+            text: line.to_string(),
+            class: IrClass::Directive,
+        }];
+    }
+    let (head, rest) = match line.split_once(' ') {
+        Some((head, rest)) => (head, rest),
+        None => (line, ""),
+    };
+    if head == "param" || head == "const" {
+        let mut tokens = vec![IrToken {
+            text: head.to_string(),
+            class: IrClass::Keyword,
+        }];
+        if !rest.is_empty() {
+            tokens.push(plain(" "));
+            tokens.push(IrToken {
+                text: rest.to_string(),
+                class: IrClass::Operand,
+            });
+        }
+        return tokens;
+    }
+    let mut tokens = vec![IrToken {
+        text: head.to_string(),
+        class: IrClass::Opcode,
+    }];
+    if rest.is_empty() {
+        return tokens;
+    }
+    tokens.push(plain(" "));
+    let (aux, operands) = match rest.split_once(' ') {
+        Some((aux, operands)) => (aux, operands),
+        None => (rest, ""),
+    };
+    tokens.push(IrToken {
+        text: aux.to_string(),
+        class: IrClass::Operand,
+    });
+    if !operands.is_empty() {
+        tokens.push(plain(" "));
+        for (index, operand) in operands.split(',').enumerate() {
+            if index > 0 {
+                tokens.push(IrToken {
+                    text: ",".to_string(),
+                    class: IrClass::Delimiter,
+                });
+            }
+            tokens.push(IrToken {
+                text: operand.to_string(),
+                class: IrClass::Operand,
+            });
+        }
+    }
+    tokens
+}
+
+/// The layout job one MathIR line paints with, per-token colours from the syntax palette.
+fn ir_layout_job(text: &str, font: FontId) -> LayoutJob {
+    let palette = theme::syntax();
+    let mut job = LayoutJob::default();
+    // The IR is a listing: it scrolls horizontally instead of wrapping a line mid-instruction.
+    job.wrap.max_width = f32::INFINITY;
+    let mut first = true;
+    for line in text.split('\n') {
+        if !first {
+            job.append(
+                "\n",
+                0.0,
+                TextFormat {
+                    font_id: font.clone(),
+                    color: palette.plain,
+                    ..Default::default()
+                },
+            );
+        }
+        first = false;
+        for token in ir_line_tokens(line) {
+            let color = match token.class {
+                IrClass::Directive | IrClass::Keyword => palette.keyword,
+                IrClass::Opcode => palette.builtin,
+                IrClass::Operand => palette.number,
+                IrClass::Delimiter => palette.delimiter,
+                IrClass::Plain => palette.plain,
+            };
+            job.append(
+                &token.text,
+                0.0,
+                TextFormat {
+                    font_id: font.clone(),
+                    color,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    job
+}
+
+/// Paints the MathIR section's body: the highlighted, monospaced, selectable, scrollable IR text,
+/// with the copy and export controls beside it (SYM-007).
+fn paint_mathir_body(
+    ui: &mut Ui,
+    view: &DocumentView,
+    mathir: &crate::inspector::MathIr,
+    controls: &mut Vec<(String, Rect)>,
+    export_dir: Option<&Path>,
+) {
+    let font = TextStyle::Monospace.resolve(ui.style());
+    let mut copied = false;
+    let mut exported = false;
+    ui.horizontal_wrapped(|ui| {
+        let copy = ui.add(egui::Button::new(RichText::new("Copy MathIR").small()));
+        let copy_name = "Copy MathIR".to_string();
+        copy.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, copy_name.clone()));
+        controls.push(("copy mathir".to_string(), copy.rect));
+        if copy.clicked() {
+            copied = true;
+        }
+        let export = ui.add_enabled(
+            export_dir.is_some(),
+            egui::Button::new(RichText::new("Export MathIR").small()),
+        );
+        let export_name = "Export MathIR".to_string();
+        export
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, export_name.clone()));
+        let export = export.on_hover_text(match export_dir {
+            Some(dir) => format!("Write the IR unchanged to {}", dir.display()),
+            None => "This window has no writable application directory".to_string(),
+        });
+        controls.push(("export mathir".to_string(), export.rect));
+        if export.clicked() {
+            exported = true;
+        }
+        ui.label(
+            RichText::new(format!("{} bytes · {} lines", mathir.text.len(), mathir.text.lines().count()))
+                .small()
+                .color(theme::dim()),
+        );
+    });
+    if copied {
+        copy_to_clipboard(ui, "MathIR", &mathir.text);
+    }
+    if exported {
+        export_mathir(ui, view, &mathir.text, export_dir);
+    }
+    if let Some((message, error)) = ui.data(|data| data.get_temp::<(String, bool)>(inspector_status_id()))
+    {
+        ui.add(
+            egui::Label::new(
+                RichText::new(message)
+                    .small()
+                    .color(if error { theme::warning() } else { theme::positive() }),
+            )
+            .wrap(),
+        );
+    }
+    // SYM-007 groundwork: monospaced, selectable, and scrollable both ways. The outer pane
+    // scrolls vertically; this inner area bounds the IR's own height and width.
+    egui::ScrollArea::both()
+        .id_salt("inspector_mathir")
+        .max_height(240.0)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add(
+                egui::Label::new(ir_layout_job(&mathir.text, font))
+                    .selectable(true)
+                    .wrap_mode(egui::TextWrapMode::Extend),
+            );
+        });
 }
 
 /// The RESULT section: the engine's display text and the typed tree beside it.
@@ -6539,6 +7150,8 @@ fn paint_result_section(
             .small()
             .color(theme::dim()),
     );
+    // SYM-006: the engine's own status for this result, beside the result it describes.
+    paint_result_status(ui, view);
     let projection = ResultProjection::new(view.result.clone(), view.result_structured.clone());
     // RES-004: the one place the expansion map is scoped to its result. A repaint of the same
     // committed snapshot returns false and keeps every path; a commit that publishes a different
@@ -7321,11 +7934,6 @@ pub(crate) fn native_options() -> eframe::NativeOptions {
 
 /// Opens the native workbench window and runs it until the user closes it.
 pub fn run(initial_path: Option<PathBuf>) -> i32 {
-    // Printed at startup so a launch with redirected stderr shows where the engine will write.
-    eprintln!(
-        "lovelace-desktop: plot directory {}",
-        crate::engine::default_plot_dir().display()
-    );
     let options = native_options();
     match eframe::run_native(
         "Lovelace Desktop",
@@ -9986,9 +10594,16 @@ mod tests {
             ("canonical", Json::Str("(gt (sym x) (rat 0 1))".to_string())),
         ]);
         let leaf = |kind: &str, label: &str| {
+            let canonical = if kind == "Sym" {
+                format!("(sym {label})")
+            } else {
+                format!("(rat {label} 1)")
+            };
             Json::obj([
                 ("kind", Json::Str(kind.to_string())),
                 ("label", Json::Str(label.to_string())),
+                // SYM-003: the engine publishes one canonical form per node.
+                ("canonical", Json::Str(canonical)),
                 ("children", Json::Arr(Vec::new())),
             ])
         };
@@ -10032,12 +10647,25 @@ mod tests {
                                     ("kind", Json::Str("Mul".to_string())),
                                     ("label", Json::Str("3*x^2".to_string())),
                                     (
+                                        "canonical",
+                                        Json::Str(
+                                            "(mul (rat 3 1) (pow (sym x) (rat 2 1)))"
+                                                .to_string(),
+                                        ),
+                                    ),
+                                    (
                                         "children",
                                         Json::Arr(vec![
                                             leaf("Num", "3"),
                                             Json::obj([
                                                 ("kind", Json::Str("Pow".to_string())),
                                                 ("label", Json::Str("x^2".to_string())),
+                                                (
+                                                    "canonical",
+                                                    Json::Str(
+                                                        "(pow (sym x) (rat 2 1))".to_string(),
+                                                    ),
+                                                ),
                                                 (
                                                     "children",
                                                     Json::Arr(vec![
@@ -10132,18 +10760,40 @@ mod tests {
         ctx: &egui::Context,
         view: &DocumentView,
         expansion: &mut InspectorExpansion,
-        toggles: &mut Vec<(String, Rect)>,
+        toggles: &mut Vec<TreeRowSeam>,
         events: Vec<egui::Event>,
     ) -> Vec<String> {
+        paint_inspector_pass(ctx, view, expansion, toggles, events, None).0
+    }
+
+    /// One inspector pass with its text and the platform output (the clipboard commands a copy
+    /// leaves behind), so a test can assert what the window would put on the clipboard.
+    fn paint_inspector_pass(
+        ctx: &egui::Context,
+        view: &DocumentView,
+        expansion: &mut InspectorExpansion,
+        toggles: &mut Vec<TreeRowSeam>,
+        events: Vec<egui::Event>,
+        export_dir: Option<&std::path::Path>,
+    ) -> (Vec<String>, egui::PlatformOutput, Vec<(String, Rect)>) {
         toggles.clear();
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(460.0, 1200.0))),
             events,
             ..Default::default()
         };
+        let mut controls: Vec<(String, Rect)> = Vec::new();
         let mut output = ctx.run_ui(input, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                let _ = paint_inspector(ui, view, 420.0, expansion, toggles);
+                let _ = paint_inspector(
+                    ui,
+                    view,
+                    420.0,
+                    expansion,
+                    toggles,
+                    &mut controls,
+                    export_dir,
+                );
             });
         });
         output.textures_delta.clear();
@@ -10151,7 +10801,7 @@ mod tests {
         for clipped in &output.shapes {
             collect_shape_text(&clipped.shape, &mut texts);
         }
-        texts
+        (texts, output.platform_output, controls)
     }
 
     /// SYM-001 at the paint layer: all six sections come from the payload, not from the display.
@@ -10190,7 +10840,7 @@ mod tests {
             "the tree root's node kind and engine rendering: {texts:?}"
         );
         assert!(
-            texts.iter().any(|text| text == "Num · 3"),
+            texts.iter().any(|text| text.ends_with("Num · 3")),
             "a leaf child in engine child order: {texts:?}"
         );
         assert!(texts.iter().any(|text| text == "Assumptions"), "{texts:?}");
@@ -10270,12 +10920,631 @@ mod tests {
         );
     }
 
+    /// The widget id of the painted header for one tree path (the seam a click or an arrow key
+    /// focuses).
+    fn row_id(rows: &[TreeRowSeam], path: &str) -> Id {
+        rows.iter()
+            .find(|row| row.path == path)
+            .map(|row| row.id)
+            .unwrap_or_else(|| panic!("no painted row for {path}: {rows:?}"))
+    }
+
+    /// The rectangle of one painted inspector control (the pointer-test seam).
+    fn control_rect(controls: &[(String, Rect)], key: &str) -> Rect {
+        controls
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_else(|| panic!("no painted inspector control {key:?}: {controls:?}"))
+    }
+
+    /// Every text this pass would put on the platform clipboard.
+    fn copied_texts(output: &egui::PlatformOutput) -> Vec<String> {
+        output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// One key press as the window receives it.
+    fn key_press(key: Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// Clicks one painted control with real pointer events and returns the pass that released the
+    /// button, whose output carries the click's effect (the clipboard command or the export).
+    fn click_control(
+        ctx: &egui::Context,
+        view: &DocumentView,
+        expansion: &mut InspectorExpansion,
+        toggles: &mut Vec<TreeRowSeam>,
+        controls: &mut Vec<(String, Rect)>,
+        key: &str,
+        export_dir: Option<&std::path::Path>,
+    ) -> (Vec<String>, egui::PlatformOutput) {
+        let pos = control_rect(controls, key).center();
+        let _ = paint_inspector_pass(
+            ctx,
+            view,
+            expansion,
+            toggles,
+            vec![egui::Event::PointerMoved(pos)],
+            export_dir,
+        );
+        let _ = paint_inspector_pass(
+            ctx,
+            view,
+            expansion,
+            toggles,
+            vec![pointer_button(pos, true)],
+            export_dir,
+        );
+        let (texts, output, painted) = paint_inspector_pass(
+            ctx,
+            view,
+            expansion,
+            toggles,
+            vec![pointer_button(pos, false)],
+            export_dir,
+        );
+        *controls = painted;
+        (texts, output)
+    }
+
+    /// Every painted galley and the colour of each of its sections, in paint order.
+    fn collect_shape_colors(shape: &egui::Shape, out: &mut Vec<(String, Vec<Color32>)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let colors = text
+                    .galley
+                    .job
+                    .sections
+                    .iter()
+                    .map(|section| section.format.color)
+                    .collect();
+                out.push((text.galley.text().to_string(), colors));
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_shape_colors(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The exact IR text the engine's compile path emits for `3*x^2`.
+    fn supplied_ir_text() -> String {
+        "#!mathir 2\nparam x\nParameter 0 0\nPowInt 0 0,1\nMul 0 0,2".to_string()
+    }
+
+    /// An inspection payload whose tree is one root with `children` leaves: the wide expression
+    /// that must not be painted eagerly.
+    fn wide_tree_view(children: usize) -> DocumentView {
+        use lovelace_json::Json;
+        let leaf = |index: usize| {
+            Json::obj([
+                ("kind", Json::Str("Sym".to_string())),
+                ("label", Json::Str(format!("x{index}"))),
+                ("canonical", Json::Str(format!("(sym x{index})"))),
+                ("children", Json::Arr(Vec::new())),
+            ])
+        };
+        let root = Json::obj([
+            ("kind", Json::Str("Add".to_string())),
+            ("label", Json::Str("sum".to_string())),
+            ("canonical", Json::Str("(add ...)".to_string())),
+            (
+                "children",
+                Json::Arr((0..children).map(leaf).collect()),
+            ),
+        ]);
+        let mut view = result_view("Symbolic sum");
+        view.result_inspection = Some(Json::obj([
+            (
+                "subject",
+                Json::obj([
+                    ("kind", Json::Str("Symbolic".to_string())),
+                    ("path", Json::Str("result".to_string())),
+                ]),
+            ),
+            (
+                "sections",
+                Json::obj([
+                    (
+                        "pretty",
+                        Json::obj([("text", Json::Str("sum".to_string()))]),
+                    ),
+                    (
+                        "tree",
+                        Json::obj([
+                            ("nodes", Json::Num((children + 1).to_string())),
+                            ("root", root),
+                        ]),
+                    ),
+                ]),
+            ),
+        ]));
+        view
+    }
+
+    /// An inspection payload whose tree is a balanced binary expression of `2^(level+1) - 1`
+    /// nodes, so the level bound has something deep to cut.
+    fn deep_tree_view(level: usize) -> DocumentView {
+        use lovelace_json::Json;
+        fn node(level: usize) -> lovelace_json::Json {
+            use lovelace_json::Json;
+            if level == 0 {
+                return Json::obj([
+                    ("kind", Json::Str("Sym".to_string())),
+                    ("label", Json::Str("x".to_string())),
+                    ("canonical", Json::Str("(sym x)".to_string())),
+                    ("children", Json::Arr(Vec::new())),
+                ]);
+            }
+            Json::obj([
+                ("kind", Json::Str("Add".to_string())),
+                ("label", Json::Str(format!("d{level}"))),
+                ("canonical", Json::Str(format!("(add d{level})"))),
+                ("children", Json::Arr(vec![node(level - 1), node(level - 1)])),
+            ])
+        }
+        let mut view = result_view("Symbolic d");
+        view.result_inspection = Some(Json::obj([
+            (
+                "subject",
+                Json::obj([
+                    ("kind", Json::Str("Symbolic".to_string())),
+                    ("path", Json::Str("result".to_string())),
+                ]),
+            ),
+            (
+                "sections",
+                Json::obj([
+                    (
+                        "pretty",
+                        Json::obj([("text", Json::Str("d".to_string()))]),
+                    ),
+                    (
+                        "tree",
+                        Json::obj([
+                            ("nodes", Json::Num(((1u64 << (level + 1)) - 1).to_string())),
+                            ("root", node(level)),
+                        ]),
+                    ),
+                ]),
+            ),
+        ]));
+        view
+    }
+
+    /// SYM-003: every painted row has a control that copies THAT node's engine canonical form,
+    /// and the clipboard receives exactly that string.
+    #[test]
+    fn sym_003_a_tree_row_copies_its_engine_canonical_form_to_the_clipboard() {
+        let ctx = egui::Context::default();
+        let view = inspector_view(supplied_mathir());
+        let mut expansion = InspectorExpansion::new();
+        let mut toggles = Vec::new();
+        let (_texts, _output, controls) =
+            paint_inspector_pass(&ctx, &view, &mut expansion, &mut toggles, Vec::new(), None);
+        for path in [
+            "inspect.tree",
+            "inspect.tree.0",
+            "inspect.tree.1",
+            "inspect.tree.1.0",
+            "inspect.tree.1.1",
+        ] {
+            assert!(
+                controls
+                    .iter()
+                    .any(|(key, _)| key == &format!("copy {path}")),
+                "every row paints its copy control ({path}): {controls:?}"
+            );
+        }
+        let mut controls = controls;
+        let (texts, output) = click_control(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            &mut controls,
+            "copy inspect.tree.1",
+            None,
+        );
+        assert_eq!(
+            copied_texts(&output),
+            vec!["(pow (sym x) (rat 2 1))".to_string()],
+            "the clipboard carries the engine canonical form of that node only"
+        );
+        assert!(
+            texts.iter().any(|text| text
+                .starts_with("Copied Pow · x^2 [inspect.tree.1] expanded (23 bytes)")),
+            "the pane reports the copy with its size: {texts:?}"
+        );
+    }
+
+    /// SYM-003: arrow keys traverse the expression tree. Down/Up move between rows in engine
+    /// child order, Left collapses and Right expands the focused node, Home/End jump to the ends.
+    #[test]
+    fn sym_003_arrow_keys_traverse_the_tree_and_left_right_collapse_and_expand() {
+        let ctx = egui::Context::default();
+        let view = inspector_view(supplied_mathir());
+        let mut expansion = InspectorExpansion::new();
+        let mut toggles = Vec::new();
+        let _ = paint_inspector_pass(&ctx, &view, &mut expansion, &mut toggles, Vec::new(), None);
+        // A pointer user reaches a row by clicking it; request the same focus the click would.
+        let root = row_id(&toggles, "inspect.tree");
+        ctx.memory_mut(|memory| memory.request_focus(root));
+        let _ = paint_inspector_pass(&ctx, &view, &mut expansion, &mut toggles, Vec::new(), None);
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(row_id(&toggles, "inspect.tree")),
+            "the root row takes keyboard focus"
+        );
+        for (expected, key) in [
+            ("inspect.tree.0", Key::ArrowDown),
+            ("inspect.tree.1", Key::ArrowDown),
+            ("inspect.tree.0", Key::ArrowUp),
+            ("inspect.tree.1.1", Key::End),
+            ("inspect.tree", Key::Home),
+        ] {
+            let _ = paint_inspector_pass(
+                &ctx,
+                &view,
+                &mut expansion,
+                &mut toggles,
+                vec![key_press(key)],
+                None,
+            );
+            let _ = paint_inspector_pass(&ctx, &view, &mut expansion, &mut toggles, Vec::new(), None);
+            let focused = ctx.memory(|memory| memory.focused());
+            let named = toggles
+                .iter()
+                .find(|row| Some(row.id) == focused)
+                .map(|row| row.path.clone());
+            assert_eq!(
+                named.as_deref(),
+                Some(expected),
+                "{key:?} must move the focus to {expected} (focused id {focused:?})"
+            );
+            assert_eq!(focused, Some(row_id(&toggles, expected)), "stable ids");
+        }
+        // Left collapses the focused (expanded) node; Right expands it again.
+        let _ = paint_inspector_pass(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            vec![key_press(Key::ArrowLeft)],
+            None,
+        );
+        assert!(
+            expansion.is_collapsed("inspect.tree"),
+            "ArrowLeft on an expanded node collapses it"
+        );
+        let collapsed = paint_inspector_frame(&ctx, &view, &mut expansion, &mut toggles, Vec::new());
+        assert_eq!(
+            collapsed.iter().filter(|text| text.starts_with('\u{25be}')).count(),
+            0,
+            "the collapsed tree paints no expanded row: {collapsed:?}"
+        );
+        let _ = paint_inspector_pass(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            vec![key_press(Key::ArrowRight)],
+            None,
+        );
+        assert!(
+            !expansion.is_collapsed("inspect.tree"),
+            "ArrowRight on a collapsed node expands it"
+        );
+        // A pointer click on the same header collapses it: the seam carries the painted rectangle.
+        let pos = toggles
+            .iter()
+            .find(|row| row.path == "inspect.tree")
+            .map(|row| row.rect.center())
+            .expect("the root header was painted");
+        let _ = paint_inspector_pass(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            vec![egui::Event::PointerMoved(pos)],
+            None,
+        );
+        let _ = paint_inspector_pass(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            vec![pointer_button(pos, true)],
+            None,
+        );
+        let _ = paint_inspector_pass(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            vec![pointer_button(pos, false)],
+            None,
+        );
+        assert!(
+            expansion.is_collapsed("inspect.tree"),
+            "a pointer click on the painted header collapses the node"
+        );
+    }
+
+    /// SYM-006: the status the engine publishes is painted where the result is, and a partial
+    /// result never wears a completion word.
+    #[test]
+    fn sym_006_a_partial_result_is_labelled_partial_beside_the_result_and_in_the_inspector() {
+        use lovelace_json::Json;
+        let ctx = egui::Context::default();
+        let enum_value = |variant: &str| {
+            Json::obj([
+                ("kind", Json::Str("Enum".to_string())),
+                ("type", Json::Str("SolveStatus".to_string())),
+                ("value", Json::Str(variant.to_string())),
+            ])
+        };
+        let boolean = |value: bool| {
+            Json::obj([
+                ("kind", Json::Str("Boolean".to_string())),
+                ("value", Json::Str(if value { "true" } else { "false" }.to_string())),
+            ])
+        };
+        let solve_view = |variant: &str, complete: bool| {
+            let mut view = inspector_view(supplied_mathir());
+            view.result_structured = Some(Json::obj([
+                ("kind", Json::Str("Record".to_string())),
+                ("type", Json::Str("SolveResult".to_string())),
+                (
+                    "fields",
+                    Json::Arr(vec![
+                        Json::obj([
+                            ("name", Json::Str("status".to_string())),
+                            ("value", enum_value(variant)),
+                        ]),
+                        Json::obj([
+                            ("name", Json::Str("complete".to_string())),
+                            ("value", boolean(complete)),
+                        ]),
+                    ]),
+                ),
+            ]));
+            view
+        };
+
+        let partial = solve_view("Partial", false);
+        let mut expansion = ExpansionState::new();
+        let mut toggles = Vec::new();
+        let result_texts =
+            paint_result_frame(&ctx, &partial, &mut expansion, &mut toggles, Vec::new());
+        assert!(
+            result_texts.iter().any(|text| text == "PARTIAL"),
+            "the result pane labels the partial result: {result_texts:?}"
+        );
+        assert!(
+            result_texts
+                .iter()
+                .any(|text| text == "SolveResult.status = Partial · complete: false"),
+            "the badge names the engine field it read: {result_texts:?}"
+        );
+        for claim in ["SOLVED", "EXACT"] {
+            assert!(
+                !result_texts.iter().any(|text| text == claim),
+                "a partial result must not claim {claim}: {result_texts:?}"
+            );
+        }
+        let mut inspector_expansion = InspectorExpansion::new();
+        let mut inspector_rows = Vec::new();
+        let inspector_texts = paint_inspector_frame(
+            &ctx,
+            &partial,
+            &mut inspector_expansion,
+            &mut inspector_rows,
+            Vec::new(),
+        );
+        assert!(
+            inspector_texts.iter().any(|text| text == "PARTIAL"),
+            "the inspector carries the same status: {inspector_texts:?}"
+        );
+
+        // The same record with the engine's completion flag is the one case that may read SOLVED.
+        let solved = solve_view("Solved", true);
+        let mut expansion = ExpansionState::new();
+        let solved_texts =
+            paint_result_frame(&ctx, &solved, &mut expansion, &mut toggles, Vec::new());
+        assert!(
+            solved_texts.iter().any(|text| text == "SOLVED"),
+            "a solved, complete result is labelled SOLVED: {solved_texts:?}"
+        );
+        assert!(
+            !solved_texts.iter().any(|text| text == "PARTIAL"),
+            "a complete result is not labelled PARTIAL: {solved_texts:?}"
+        );
+    }
+
+    /// SYM-007: the MathIR view highlights its instructions, copies the exact IR bytes to the
+    /// clipboard, and exports those same bytes to a file.
+    #[test]
+    fn sym_007_the_mathir_view_highlights_instructions_and_copies_and_exports_its_bytes() {
+        let ctx = egui::Context::default();
+        let view = inspector_view(supplied_mathir());
+        let export_dir = scratch_dir("sym-007");
+        let mut expansion = InspectorExpansion::new();
+        let mut toggles = Vec::new();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(460.0, 1200.0))),
+            ..Default::default()
+        };
+        let mut controls: Vec<(String, Rect)> = Vec::new();
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let _ = paint_inspector(
+                    ui,
+                    &view,
+                    420.0,
+                    &mut expansion,
+                    &mut toggles,
+                    &mut controls,
+                    Some(&export_dir),
+                );
+            });
+        });
+        output.textures_delta.clear();
+        let mut galleys: Vec<(String, Vec<Color32>)> = Vec::new();
+        for clipped in &output.shapes {
+            collect_shape_colors(&clipped.shape, &mut galleys);
+        }
+
+        let palette = theme::syntax();
+        let (ir_text, colors) = galleys
+            .iter()
+            .find(|(text, _)| text.starts_with("#!mathir 2"))
+            .expect("the IR galley is painted");
+        assert_eq!(
+            ir_text,
+            &supplied_ir_text(),
+            "the painted IR is the engine's text, byte for byte"
+        );
+        for (class, color) in [
+            ("the #!mathir directive", palette.keyword),
+            ("an instruction opcode", palette.builtin),
+            ("an operand", palette.number),
+        ] {
+            assert!(
+                colors.contains(&color),
+                "{class} must carry its own syntax colour: {colors:?}"
+            );
+        }
+        let distinct = colors.iter().fold(Vec::new(), |mut seen: Vec<Color32>, color| {
+            if !seen.contains(color) {
+                seen.push(*color);
+            }
+            seen
+        });
+        assert!(
+            distinct.len() >= 3,
+            "the IR view is highlighted, not one flat colour: {distinct:?}"
+        );
+
+        // Copy: the clipboard command carries the whole IR text.
+        let (texts, output) = click_control(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            &mut controls,
+            "copy mathir",
+            Some(&export_dir),
+        );
+        assert_eq!(
+            copied_texts(&output),
+            vec![supplied_ir_text()],
+            "Copy MathIR puts the engine's IR on the clipboard"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == &format!("Copied MathIR ({} bytes)", supplied_ir_text().len())),
+            "the pane reports the copy: {texts:?}"
+        );
+
+        // Export: the file's bytes are the same IR text, unchanged.
+        let (_texts, _output) = click_control(
+            &ctx,
+            &view,
+            &mut expansion,
+            &mut toggles,
+            &mut controls,
+            "export mathir",
+            Some(&export_dir),
+        );
+        let path = export_dir.join(format!("mathir-rev-{}.ir", view.revision.0));
+        let written = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("the exported IR file {}: {error}", path.display()));
+        assert_eq!(written, supplied_ir_text(), "the exported IR is unchanged");
+        let _ = std::fs::remove_dir_all(&export_dir);
+    }
+
+    /// SYM-011: a 10k-node expression paints only the rows in view, and a deep one paints the
+    /// level bound's own control instead of the whole tree.
+    #[test]
+    fn sym_011_a_ten_thousand_node_tree_paints_only_the_rows_in_view() {
+        let ctx = egui::Context::default();
+        let view = wide_tree_view(10_000);
+        let mut expansion = InspectorExpansion::new();
+        let mut toggles = Vec::new();
+        let started = std::time::Instant::now();
+        let (texts, _output, controls) =
+            paint_inspector_pass(&ctx, &view, &mut expansion, &mut toggles, Vec::new(), None);
+        let elapsed = started.elapsed();
+        let painted = texts
+            .iter()
+            .filter(|text| text.starts_with('\u{25be}') || text.starts_with('\u{25b8}'))
+            .count();
+        assert!(
+            painted + 1 >= toggles.len(),
+            "each laid-out row contributes its header, and a row clipped at the viewport edge \
+             contributes the rectangle without its text: painted={painted} rows={}",
+            toggles.len()
+        );
+        assert!(
+            painted >= 4,
+            "the visible rows paint: {painted} of {toggles:?}"
+        );
+        assert!(
+            painted <= 40 && toggles.len() <= 40,
+            "only the rows in view are laid out, not 10 001: painted={painted} rows={}",
+            toggles.len()
+        );
+        assert!(
+            controls.len() <= 40,
+            "one copy control per laid-out row, not per tree node: {}",
+            controls.len()
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "10001 rows · levels 2/2 · 10001 nodes"),
+            "the header states the row count and the level bound: {texts:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(1500),
+            "one pass over a 10 001-node tree took {elapsed:?}"
+        );
+
+        // The deep tree exposes the level bound: 15 rows painted, 32 752 named as hidden.
+        let deep = deep_tree_view(14);
+        let (texts, _output, _controls) =
+            paint_inspector_pass(&ctx, &deep, &mut expansion, &mut toggles, Vec::new(), None);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Load 4 more levels (32752 nodes hidden)"),
+            "the level bound paints its own control with the hidden count: {texts:?}"
+        );
+    }
+
     /// SYM-002: the inspector renders the last committed result, not the editor buffer. An edit
     /// changes neither the payload nor the painted inspector; a new committed result does both.
     #[test]
     #[cfg(feature = "real-engine")]
-    fn the_inspector_is_bound_to_the_committed_result_not_the_buffer() {
-        let mut workbench =
+    fn the_inspector_is_bound_to_the_committed_result_not_the_buffer() {        let mut workbench =
             Workbench::with_factory(Box::new(|| Box::new(crate::engine::RealEngine::new())));
         workbench.set_source(
             0,

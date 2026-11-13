@@ -135,6 +135,9 @@ pub struct TreeNode {
     pub detail: Option<String>,
     /// The engine's pretty rendering of this sub-expression.
     pub label: String,
+    /// SYM-003: the engine's canonical rendering of this sub-expression, so one node's canonical
+    /// form can be copied without re-deriving it from the pretty text.
+    pub canonical: String,
     /// The child nodes, in the engine's own child order.
     pub children: Vec<TreeNode>,
 }
@@ -146,10 +149,19 @@ impl TreeNode {
     }
 
     /// The header text: node kind, optional detail, then the engine rendering.
+    #[allow(dead_code)] // model accessor: the row model renders the same header for paint
     pub fn header(&self) -> String {
         match &self.detail {
             Some(detail) => format!("{} {} · {}", self.kind, detail, self.label),
             None => format!("{} · {}", self.kind, self.label),
+        }
+    }
+
+    /// The number of levels in this subtree: 1 for a leaf, 1 + the deepest child's levels.
+    pub fn depth(&self) -> usize {
+        match self.children.iter().map(TreeNode::depth).max() {
+            Some(child) => 1 + child,
+            None => 1,
         }
     }
 }
@@ -266,6 +278,11 @@ fn tree_section(json: Option<&Json>) -> Section<TreeNode> {
 fn tree_node(json: &Json) -> Option<TreeNode> {
     let kind = json.get("kind").and_then(Json::as_str)?.to_string();
     let label = json.get("label").and_then(Json::as_str)?.to_string();
+    let canonical = json
+        .get("canonical")
+        .and_then(Json::as_str)
+        .unwrap_or_default()
+        .to_string();
     let detail = json
         .get("detail")
         .and_then(Json::as_str)
@@ -279,6 +296,7 @@ fn tree_node(json: &Json) -> Option<TreeNode> {
         kind,
         detail,
         label,
+        canonical,
         children,
     })
 }
@@ -407,20 +425,42 @@ fn mathir_section(json: Option<&Json>) -> Section<MathIr> {
     })
 }
 
-/// The collapse state of the inspector's expression tree, scoped to one inspection payload.
+/// SYM-011: the number of expression-tree levels painted on the first pass (root is level 1).
+///
+/// A tree is never opened whole: this bound is what keeps the first committed 10k-node expression
+/// from laying out a hundred thousand wrapped labels before the user has asked for them.
+pub const INITIAL_TREE_LEVELS: usize = 4;
+/// SYM-011: the levels one "Load deeper" action adds.
+pub const TREE_LEVELS_STEP: usize = 4;
+
+/// The interaction state of the inspector's expression tree, scoped to one inspection payload.
 ///
 /// The key is the payload's compact serialization, the same rule round 27 uses for the result
 /// tree: an edit to the buffer cannot change it, while a new committed result can.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// SYM-011: the state also carries how many levels are currently loaded (`levels`, 1 meaning only
+/// the root) and the path a keyboard move has asked for. A node's children are only walked when
+/// the node is expanded *and* its level is below `levels`, so expanding one node costs that node's
+/// own children, never the whole expression.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InspectorExpansion {
     identity: Option<String>,
     collapsed: BTreeMap<String, bool>,
+    levels: usize,
+    /// SYM-003: the tree path a keyboard traversal has asked the next pass to focus. It survives
+    /// the pass that sets it so a row outside the painted range can be scrolled to first.
+    pending_focus: Option<String>,
 }
 
 impl InspectorExpansion {
-    /// A state map with no decisions: every tree node starts expanded.
+    /// A state map with no decisions: the root and the first levels start expanded.
     pub fn new() -> InspectorExpansion {
-        InspectorExpansion::default()
+        InspectorExpansion {
+            identity: None,
+            collapsed: BTreeMap::new(),
+            levels: INITIAL_TREE_LEVELS,
+            pending_focus: None,
+        }
     }
 
     /// Binds the map to one payload. Returns true when a previous result was replaced.
@@ -432,6 +472,8 @@ impl InspectorExpansion {
         let replaced = self.identity.is_some();
         self.identity = Some(identity);
         self.collapsed.clear();
+        self.levels = INITIAL_TREE_LEVELS;
+        self.pending_focus = None;
         replaced
     }
 
@@ -452,6 +494,37 @@ impl InspectorExpansion {
         collapsed
     }
 
+    /// SYM-011: the tree levels this state paints (level 1 is the root alone).
+    pub fn levels(&self) -> usize {
+        self.levels
+    }
+
+    /// SYM-011: loads one more step of levels and returns the new count.
+    pub fn load_deeper(&mut self, deepest: usize) -> usize {
+        self.levels = (self.levels + TREE_LEVELS_STEP).min(deepest.max(1));
+        self.levels
+    }
+
+    /// SYM-011: true while the tree has levels the current bound hides.
+    pub fn has_deeper(&self, deepest: usize) -> bool {
+        self.levels < deepest
+    }
+
+    /// SYM-003: the path a keyboard move asked the next pass to focus.
+    pub fn pending_focus(&self) -> Option<&str> {
+        self.pending_focus.as_deref()
+    }
+
+    /// SYM-003: asks the next pass to focus one row and, when needed, scroll it into range.
+    pub fn set_pending_focus(&mut self, path: &str) {
+        self.pending_focus = Some(path.to_string());
+    }
+
+    /// SYM-003: clears the pending focus once a pass has honoured it.
+    pub fn clear_pending_focus(&mut self) {
+        self.pending_focus = None;
+    }
+
     /// The paths the user has collapsed, in path order.
     #[allow(dead_code)] // model accessor: the tests read it
     pub fn collapsed_paths(&self) -> Vec<&str> {
@@ -462,27 +535,121 @@ impl InspectorExpansion {
             .collect()
     }
 
-    /// The visible indicator for `path`.
-    pub fn glyph(&self, path: &str) -> &'static str {
-        if self.is_collapsed(path) {
-            crate::results_tree::COLLAPSED_GLYPH
-        } else {
-            crate::results_tree::EXPANDED_GLYPH
+
+}
+
+/// One painted row of the expression tree.
+///
+/// The rows are produced from the engine tree and the current expansion state, so the pane paints
+/// exactly the rows it is asked for and can skip every other row of a giant expression (SYM-011).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeRow {
+    /// The node's path in the tree (`inspect.tree.0.1`).
+    pub path: String,
+    /// 0 for the root.
+    pub level: usize,
+    /// The engine node kind.
+    pub kind: String,
+    /// The engine detail (function name or relation operator).
+    pub detail: Option<String>,
+    /// The engine's pretty rendering of this sub-expression.
+    pub label: String,
+    /// The engine's canonical rendering of this sub-expression.
+    pub canonical: String,
+    /// Whether the node has children at all.
+    pub has_children: bool,
+    /// Whether the user collapsed this node.
+    pub collapsed: bool,
+    /// The descendant nodes this row hides because they are past the loaded level bound.
+    pub deeper_nodes: usize,
+}
+
+impl TreeRow {
+    /// The header text: node kind, optional detail, then the engine rendering.
+    pub fn header(&self) -> String {
+        match &self.detail {
+            Some(detail) => format!("{} {} · {}", self.kind, detail, self.label),
+            None => format!("{} · {}", self.kind, self.label),
         }
     }
 
-    /// The state word a UIA client reads: `collapsed` or `expanded`.
-    pub fn state_word(&self, path: &str) -> &'static str {
-        if self.is_collapsed(path) {
+    /// The accessible name of the row's header: header text, node path and state.
+    pub fn accessible_name(&self) -> String {
+        format!(
+            "{} [{}] {}",
+            self.header(),
+            self.path,
+            self.state_word()
+        )
+    }
+
+    /// `collapsed`, `expanded` or `leaf`, the word a UIA client reads for this row.
+    pub fn state_word(&self) -> &'static str {
+        if !self.has_children {
+            "leaf"
+        } else if self.collapsed {
             "collapsed"
         } else {
             "expanded"
         }
     }
 
-    /// The accessible name of a tree header: text, node path and state.
-    pub fn accessible_name(&self, path: &str, label: &str) -> String {
-        format!("{label} [{path}] {}", self.state_word(path))
+    /// The visible expand/collapse indicator for this row.
+    pub fn glyph(&self) -> &'static str {
+        if self.collapsed {
+            crate::results_tree::COLLAPSED_GLYPH
+        } else {
+            crate::results_tree::EXPANDED_GLYPH
+        }
+    }
+}
+
+/// Builds the painted rows of `root` under `expansion`, in engine child order.
+///
+/// A node's subtree is walked only while the node is expanded and its level is below the loaded
+/// bound, so the work is proportional to the painted rows, not to the tree.
+pub fn tree_rows(root: &TreeNode, expansion: &InspectorExpansion) -> Vec<TreeRow> {
+    let mut rows = Vec::new();
+    push_rows(root, TREE_ROOT_PATH, 0, expansion, &mut rows);
+    rows
+}
+
+fn push_rows(
+    node: &TreeNode,
+    path: &str,
+    level: usize,
+    expansion: &InspectorExpansion,
+    rows: &mut Vec<TreeRow>,
+) {
+    let collapsed = expansion.is_collapsed(path);
+    let within = level + 1 < expansion.levels();
+    let deeper_nodes = if within {
+        0
+    } else {
+        node.children.iter().map(TreeNode::count).sum()
+    };
+    rows.push(TreeRow {
+        path: path.to_string(),
+        level,
+        kind: node.kind.clone(),
+        detail: node.detail.clone(),
+        label: node.label.clone(),
+        canonical: node.canonical.clone(),
+        has_children: !node.children.is_empty(),
+        collapsed,
+        deeper_nodes,
+    });
+    if collapsed || !within {
+        return;
+    }
+    for (index, child) in node.children.iter().enumerate() {
+        push_rows(
+            child,
+            &tree_path(path, index),
+            level + 1,
+            expansion,
+            rows,
+        );
     }
 }
 
@@ -542,16 +709,29 @@ mod tests {
                                     ("kind", Json::Str("Add".to_string())),
                                     ("label", Json::Str("x^2 - 1".to_string())),
                                     (
+                                        "canonical",
+                                        Json::Str(
+                                            "(add (pow (sym x) (rat 2 1)) (rat -1 1))".to_string(),
+                                        ),
+                                    ),
+                                    (
                                         "children",
                                         Json::Arr(vec![
                                             Json::obj([
                                                 ("kind", Json::Str("Pow".to_string())),
                                                 ("label", Json::Str("x^2".to_string())),
+                                                (
+                                                    "canonical",
+                                                    Json::Str(
+                                                        "(pow (sym x) (rat 2 1))".to_string(),
+                                                    ),
+                                                ),
                                                 ("children", Json::Arr(Vec::new())),
                                             ]),
                                             Json::obj([
                                                 ("kind", Json::Str("Num".to_string())),
                                                 ("label", Json::Str("-1".to_string())),
+                                                ("canonical", Json::Str("(rat -1 1)".to_string())),
                                                 ("children", Json::Arr(Vec::new())),
                                             ]),
                                         ]),
@@ -624,6 +804,10 @@ mod tests {
         assert_eq!(tree.kind, "Add");
         assert_eq!(tree.count(), 3);
         assert_eq!(tree.children[0].kind, "Pow");
+        // SYM-003: each node carries the engine's canonical form of that very sub-expression.
+        assert_eq!(tree.canonical, "(add (pow (sym x) (rat 2 1)) (rat -1 1))");
+        assert_eq!(tree.children[0].canonical, "(pow (sym x) (rat 2 1))");
+        assert_eq!(tree.children[1].canonical, "(rat -1 1)");
         let assumption = &inspection.assumptions.supplied().expect("assumptions")[0];
         assert_eq!(assumption.type_label(), "relation >");
         assert_eq!(assumption.left.as_deref(), Some("x"));
@@ -724,5 +908,187 @@ mod tests {
     fn tree_paths_name_child_order() {
         assert_eq!(tree_path(TREE_ROOT_PATH, 0), "inspect.tree.0");
         assert_eq!(tree_path("inspect.tree.0", 1), "inspect.tree.0.1");
+    }
+
+    /// One chain of `levels` binary nodes: 2*levels + 1 nodes, the deepest level index `levels`.
+    fn chain(levels: usize) -> TreeNode {
+        fn build(level: usize, total: usize) -> TreeNode {
+            let leaf = |label: &str| TreeNode {
+                kind: "Num".to_string(),
+                detail: None,
+                label: label.to_string(),
+                canonical: format!("(rat {label} 1)"),
+                children: Vec::new(),
+            };
+            if level == total {
+                return leaf("1");
+            }
+            TreeNode {
+                kind: "Add".to_string(),
+                detail: None,
+                label: format!("x + {level}"),
+                canonical: format!("(add (sym x) (rat {level} 1))"),
+                children: vec![leaf("x"), build(level + 1, total)],
+            }
+        }
+        build(0, levels)
+    }
+
+    /// SYM-003: the rows are the engine's own nodes, with their kind, child order and canonical
+    /// form, so a node can be traversed and its canonical form copied.
+    #[test]
+    fn tree_rows_carry_node_kind_child_order_and_the_engine_canonical_form() {
+        let inspection = Inspection::from_json(&full_payload()).expect("payload");
+        let tree = inspection.tree.supplied().expect("tree");
+        let mut expansion = InspectorExpansion::new();
+        let rows = tree_rows(tree, &expansion);
+        let order: Vec<&str> = rows.iter().map(|row| row.kind.as_str()).collect();
+        assert_eq!(order, vec!["Add", "Pow", "Num"]);
+        assert_eq!(rows[0].path, "inspect.tree");
+        assert_eq!(rows[1].path, "inspect.tree.0");
+        assert_eq!(rows[2].path, "inspect.tree.1");
+        assert_eq!(rows[0].level, 0);
+        assert_eq!(rows[2].level, 1);
+        assert_eq!(rows[1].canonical, "(pow (sym x) (rat 2 1))");
+        assert_eq!(rows[0].header(), "Add · x^2 - 1");
+        assert_eq!(rows[1].accessible_name(), "Pow · x^2 [inspect.tree.0] leaf");
+        assert!(!rows[0].collapsed, "the tree starts expanded");
+        // Collapsing a row hides exactly its children, and the row says so.
+        expansion.toggle("inspect.tree.0");
+        let collapsed = tree_rows(tree, &expansion);
+        assert_eq!(collapsed.len(), 3, "a collapsed leaf has no children to hide");
+        expansion.toggle("inspect.tree");
+        assert_eq!(tree_rows(tree, &expansion).len(), 1);
+        assert_eq!(tree_rows(tree, &expansion)[0].state_word(), "collapsed");
+    }
+
+    /// SYM-011: the first pass paints a bounded number of levels, and a row that hides a deeper
+    /// subtree says how many nodes it is hiding. Loading deeper never re-derives the whole tree.
+    #[test]
+    fn tree_rows_stop_at_the_loaded_level_bound_and_report_what_they_hide() {
+        let root = chain(19);
+        let deepest = root.depth();
+        assert_eq!(root.count(), 39);
+        assert_eq!(deepest, 20);
+        let mut expansion = InspectorExpansion::new();
+        let rows = tree_rows(&root, &expansion);
+        // A binary chain: levels 0..3 hold 1 + 2 + 2 + 2 rows.
+        assert_eq!(rows.len(), 2 * INITIAL_TREE_LEVELS - 1);
+        assert!(expansion.has_deeper(deepest));
+        let last = rows.last().expect("the deepest painted row");
+        assert_eq!(last.level, INITIAL_TREE_LEVELS - 1);
+        let hidden: usize = rows.iter().map(|row| row.deeper_nodes).sum();
+        assert_eq!(
+            hidden,
+            root.count() - rows.len(),
+            "the rows that hide a deeper subtree name every node they hide"
+        );
+        assert_eq!(last.deeper_nodes, hidden);
+        // One load-deeper step paints the next step of levels, not the whole tree.
+        let loaded = expansion.load_deeper(deepest);
+        assert_eq!(loaded, INITIAL_TREE_LEVELS + TREE_LEVELS_STEP);
+        let rows = tree_rows(&root, &expansion);
+        assert_eq!(rows.len(), 2 * (INITIAL_TREE_LEVELS + TREE_LEVELS_STEP) - 1);
+        // Loading to the deepest level paints every node, in the engine's order.
+        while expansion.has_deeper(deepest) {
+            expansion.load_deeper(deepest);
+        }
+        assert_eq!(expansion.levels(), deepest);
+        assert_eq!(tree_rows(&root, &expansion).len(), root.count());
+    }
+
+    /// SYM-011: a 10k-node tree is bounded in the two directions that matter. A deep expression
+    /// is cut by the level bound, and a wide one is cut by the paint window: the row model is
+    /// linear in the nodes it is asked for and building 10 001 rows is fast enough to stay
+    /// interactive, while only the rows in view are ever painted (proved at the paint layer).
+    #[test]
+    fn a_ten_thousand_node_tree_is_bounded_by_depth_and_cheap_to_model() {
+        // A wide tree: one root with 10 000 leaf children.
+        let leaf = |index: usize| TreeNode {
+            kind: "Sym".to_string(),
+            detail: None,
+            label: format!("x{index}"),
+            canonical: format!("(sym x{index})"),
+            children: Vec::new(),
+        };
+        let root = TreeNode {
+            kind: "Add".to_string(),
+            detail: None,
+            label: "sum".to_string(),
+            canonical: "(add ...)".to_string(),
+            children: (0..10_000).map(leaf).collect(),
+        };
+        assert_eq!(root.count(), 10_001);
+        assert_eq!(
+            root.depth(),
+            2,
+            "the level bound cannot cut a wide tree; the paint window has to"
+        );
+        let expansion = InspectorExpansion::new();
+        let start = std::time::Instant::now();
+        let rows = tree_rows(&root, &expansion);
+        let elapsed = start.elapsed();
+        assert_eq!(rows.len(), 10_001);
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "modeling 10 001 rows took {elapsed:?}"
+        );
+        assert_eq!(rows[0].state_word(), "expanded");
+        assert_eq!(rows[10_000].path, "inspect.tree.9999");
+
+        // A deep, balanced tree of 32 767 nodes is cut by the level bound: the first pass paints
+        // 1 + 2 + 4 + 8 rows and names every node it did not descend into.
+        fn balanced(level: usize) -> TreeNode {
+            if level == 0 {
+                return TreeNode {
+                    kind: "Sym".to_string(),
+                    detail: None,
+                    label: "x".to_string(),
+                    canonical: "(sym x)".to_string(),
+                    children: Vec::new(),
+                };
+            }
+            TreeNode {
+                kind: "Add".to_string(),
+                detail: None,
+                label: format!("d{level}"),
+                canonical: format!("(add d{level})"),
+                children: vec![balanced(level - 1), balanced(level - 1)],
+            }
+        }
+        let deep = balanced(14);
+        assert_eq!(deep.count(), 32_767);
+        assert_eq!(deep.depth(), 15);
+        let rows = tree_rows(&deep, &expansion);
+        assert_eq!(rows.len(), 15, "four levels of a balanced tree");
+        let hidden: usize = rows.iter().map(|row| row.deeper_nodes).sum();
+        assert_eq!(hidden, deep.count() - rows.len());
+    }
+
+    /// SYM-011: the level bound and the pending keyboard focus reset with a new result, so a new
+    /// expression is never opened at the old expression's depth.
+    #[test]
+    fn a_new_inspection_resets_the_loaded_levels_and_the_pending_focus() {
+        let mut expansion = InspectorExpansion::new();
+        let payload = full_payload();
+        assert!(!expansion.bind(&payload));
+        expansion.load_deeper(30);
+        expansion.set_pending_focus("inspect.tree.1");
+        assert!(expansion.levels() > INITIAL_TREE_LEVELS);
+        assert!(!expansion.bind(&payload), "the same payload keeps its state");
+        assert!(expansion.levels() > INITIAL_TREE_LEVELS);
+        let other = Json::obj([
+            (
+                "subject",
+                Json::obj([
+                    ("kind", Json::Str("Symbolic".to_string())),
+                    ("path", Json::Str("result".to_string())),
+                ]),
+            ),
+            ("sections", Json::obj([("pretty", text("x + 1"))])),
+        ]);
+        assert!(expansion.bind(&other));
+        assert_eq!(expansion.levels(), INITIAL_TREE_LEVELS);
+        assert_eq!(expansion.pending_focus(), None);
     }
 }
