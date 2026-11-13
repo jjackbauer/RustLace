@@ -1236,8 +1236,17 @@ impl WorkbenchApp {
     // -----------------------------------------------------------------------------------------
 
     /// Ctrl+N / File > New: add an empty document tab and select it.
-    fn new_document(&mut self) {
-        self.workbench.new_document();
+    /// Ctrl+N / File > New: add an empty tab and make it the active document.
+    ///
+    /// DOC-002: the tab list changes under this pass's editors, so the editors are reconciled
+    /// immediately (the same way Open and Close do). Without this the rest of this frame - the
+    /// toolbar reads `self.editors[active]` for its line/byte count - indexes a document that has
+    /// no editor yet and the click panics the process.
+    fn new_document(&mut self, ctx: &egui::Context) {
+        let index = self.workbench.new_document();
+        self.sync_after_tab_change(index, ctx);
+        self.pending_focus = Some(surface_id());
+        ctx.request_repaint();
     }
 
     /// Ctrl+O / File > Open: ask the native Open dialog, then open the chosen file in a tab.
@@ -2059,7 +2068,7 @@ impl WorkbenchApp {
         // Trace mode only: the file command's stable name, beside the run trace marks.
         crate::run_trace::mark("file_command", command.label());
         match command {
-            FileCommand::New => self.new_document(),
+            FileCommand::New => self.new_document(ctx),
             FileCommand::Open => self.open_dialog(ctx),
             FileCommand::Save => self.save_active(false, ctx),
             FileCommand::SaveAs => self.save_active(true, ctx),
@@ -2759,7 +2768,7 @@ impl WorkbenchApp {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("File").small().color(theme::dim()));
             if self.file_bar_button(ui, "New", "New document (Ctrl+N)") {
-                self.new_document();
+                self.new_document(&ctx);
             }
             if self.file_bar_button(ui, "Open...", "Open a Lovelace script from disk (Ctrl+O)") {
                 self.open_dialog(&ctx);
@@ -11790,6 +11799,57 @@ mod tests {
         assert!(
             transcript.len() >= 12,
             "the journey records every step: {transcript:?}"
+        );
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// DOC-002: the file bar's own New button adds a tab and the *same* pass renders it.
+    ///
+    /// This is the click path, not the shortcut path: the file bar is painted before the toolbar,
+    /// so the toolbar in the same pass reads the new active document. Before the fix the toolbar
+    /// indexed `self.editors[active]` before `sync_editors` had created the editor for the tab the
+    /// click had just added, and the product panicked with "index out of bounds: the len is 2 but
+    /// the index is 2". The regression is a click, a full pass and the toolbar's own text.
+    #[test]
+    fn clicking_the_file_bar_new_button_adds_a_tab_and_the_same_pass_renders_it() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("new-button");
+        let mut app = a11y_app(plot_dir.clone());
+        // Paint one pass so the file bar records its button rectangles and focus settles.
+        frame(&ctx, &mut app, Vec::new());
+        let before = app.workbench.documents().len();
+        let new_rect = app
+            .file_buttons
+            .iter()
+            .find(|(label, _)| *label == "New")
+            .map(|(_, rect)| *rect)
+            .expect("the file bar paints a New button");
+        assert!(
+            new_rect.width() > 0.0 && new_rect.height() > 0.0,
+            "the New button has real bounds: {new_rect:?}"
+        );
+
+        pointer_click(&ctx, &mut app, new_rect.center());
+
+        assert_eq!(
+            app.workbench.documents().len(),
+            before + 1,
+            "the New click adds exactly one document"
+        );
+        assert!(
+            app.workbench.active_document().title.starts_with("untitled"),
+            "the new tab is untitled: {:?}",
+            app.workbench.active_document().title
+        );
+        assert_eq!(
+            app.editors.len(),
+            app.workbench.documents().len(),
+            "the click pass reconciled one editor per document"
+        );
+        let texts = pump_text(&ctx, &mut app, 2);
+        assert!(
+            texts.iter().any(|text| text.contains("1 lines / 0 bytes")),
+            "the toolbar paints the new tab's own editor: {texts:?}"
         );
         let _ = std::fs::remove_dir_all(&plot_dir);
     }

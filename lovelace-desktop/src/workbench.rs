@@ -43,8 +43,12 @@ pub const LOG_CAP: usize = 500;
 
 /// The source of the first document, so the window opens on a real runnable script instead of a
 /// blank buffer. It is ordinary editable text, not precomputed pane data.
+///
+/// VIS-018: the first line is the fresh-launch keyboard hint. It names the same gesture the Run
+/// button and the shortcut table dispatch (Ctrl+Enter), so a first-run user can run the example
+/// in one action without reaching for the pointer.
 pub const STARTER_SCRIPT: &str = "\
-# Lovelace Desktop. Press Run to evaluate this document.
+# Lovelace Desktop. Press Run or Ctrl+Enter to evaluate this document.
 plot([1, 4, 2], [4, 5, 6], \"welcome\")
 a = 2
 b = a + 10
@@ -3443,6 +3447,24 @@ mod tests {
             "the starter document must be real source, not a copy of the empty tab"
         );
         assert!(!workbench.documents()[0].dirty());
+    }
+
+    /// VIS-018: the fresh launch's working example states the keyboard gesture that runs it, so
+    /// the first script is one visible hint and one action away.
+    #[test]
+    fn the_starter_example_names_the_run_keyboard_hint() {
+        let first_line = STARTER_SCRIPT.lines().next().expect("the starter script has a hint line");
+        assert!(
+            first_line.contains("Press Run") && first_line.contains("Ctrl+Enter"),
+            "the fresh-launch hint must name Run and Ctrl+Enter: {first_line:?}"
+        );
+        // The example is still real runnable source: a plot, two assignments and a result line.
+        for statement in ["plot(", "a = 2", "b = a + 10", "\nb\n"] {
+            assert!(
+                STARTER_SCRIPT.contains(statement),
+                "the working example must keep its {statement:?} statement: {STARTER_SCRIPT:?}"
+            );
+        }
     }
 
     #[test]
