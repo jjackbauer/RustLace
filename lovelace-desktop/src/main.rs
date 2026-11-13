@@ -18,6 +18,10 @@
 //! - --raster-svg: the round-29 fidelity harness entry point. It rasterises one SVG file through
 //!   the pane's exact resvg path (system fonts, PLT-002 resolver) to a PNG, so a reference
 //!   rasteriser can be compared against the product rather than against a look-alike.
+//! - --contrast-check: VIS-009. Prints every dark/light token pair's WCAG contrast ratio, the
+//!   threshold it must reach and its pass/exempt status, and exits non-zero when normal text is
+//!   below 4.5:1 or large text/non-text UI indicators are below 3:1. The ratios are computed
+//!   from the rendered `Color32` tokens, not from a table in the docs.
 //! - --legacy-win32: the old Win32 EDIT-control shell, reachable only through this explicit
 //!   argument. It is no longer the default UI.
 //!
@@ -73,6 +77,12 @@ fn main() {
     let started = std::time::Instant::now();
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    // VIS-009: the WCAG contrast checker. It computes every ratio from the rendered token values
+    // (the same `Color32`s the paint routines use), prints each pair and exits non-zero when a
+    // normal-text pair is below 4.5:1 or a large-text/non-text pair is below 3:1.
+    if args.iter().any(|arg| arg == "--contrast-check") {
+        std::process::exit(ui::theme::contrast_cli());
+    }
     if args.iter().any(|arg| arg == "--gui-selftest") {
         std::process::exit(gui_selftest::run());
     }
@@ -169,6 +179,10 @@ fn usage() -> String {
     );
     text.push_str(
         "                                      typing and scroll-frame budgets, write <report>\n",
+    );
+    text.push_str("  lovelace-desktop --contrast-check   print every theme pair's WCAG ratio\n");
+    text.push_str(
+        "                                      (fails below 4.5:1 text / 3:1 large or non-text)\n",
     );
     text.push_str("  lovelace-desktop --legacy-win32 [script.ls]\n");
     text.push_str(

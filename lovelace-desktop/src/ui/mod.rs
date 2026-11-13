@@ -11,5 +11,6 @@ pub(crate) mod file_dialogs;
 pub(crate) mod measure;
 pub(crate) mod plot;
 mod syntax;
+pub(crate) mod theme;
 
 pub use app::run;

@@ -25,58 +25,8 @@ use crate::history::{self, Caret, EditKind, History, HistoryCommand, Snapshot};
 use crate::settings::EditorSettings;
 
 use super::syntax;
+use super::theme;
 
-/// Editor background.
-pub const EDITOR_BG: Color32 = Color32::from_rgb(0x14, 0x18, 0x1d);
-/// Gutter background.
-pub const GUTTER_BG: Color32 = Color32::from_rgb(0x10, 0x13, 0x18);
-/// Current-line highlight.
-pub const CURRENT_LINE: Color32 = Color32::from_rgb(0x1f, 0x2a, 0x33);
-/// Gutter line numbers.
-pub const GUTTER_TEXT: Color32 = Color32::from_rgb(0x5c, 0x6b, 0x7d);
-/// Caret colour.
-pub const CARET: Color32 = Color32::from_rgb(0xf0, 0xf4, 0xf8);
-/// Selection highlight, painted behind the selected text.
-pub const SELECTION: Color32 = Color32::from_rgb(0x28, 0x4a, 0x5c);
-/// EDT-007: the cell background of a matched bracket pair.
-pub const BRACKET_MATCH_BG: Color32 = Color32::from_rgb(0x1d, 0x4f, 0x4a);
-/// EDT-007: the matched pair's underline / box colour.
-pub const BRACKET_MATCH: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
-/// EDT-007: the cell background of a bracket with no mate.
-pub const BRACKET_UNMATCHED_BG: Color32 = Color32::from_rgb(0x5a, 0x25, 0x25);
-/// EDT-007: the unmatched bracket's underline / box colour, distinct from the matched teal.
-pub const BRACKET_UNMATCHED: Color32 = Color32::from_rgb(0xff, 0x7b, 0x72);
-/// Diagnostic underline colour.
-pub const DIAGNOSTIC_UNDERLINE: Color32 = Color32::from_rgb(0xff, 0x7b, 0x72);
-/// Diagnostic gutter-marker colour; a little deeper than the underline so it reads as a marker.
-pub const DIAGNOSTIC_MARKER: Color32 = Color32::from_rgb(0xe0, 0x4b, 0x45);
-/// Completion popup background: one step above the pane background so it reads as an overlay.
-pub const COMPLETION_BG: Color32 = Color32::from_rgb(0x1b, 0x22, 0x2a);
-/// Completion popup border, in the accent colour.
-pub const COMPLETION_BORDER: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
-/// The highlighted completion row.
-pub const COMPLETION_SELECTED: Color32 = Color32::from_rgb(0x2b, 0x4a, 0x47);
-/// The detail column of a completion row.
-pub const COMPLETION_DETAIL: Color32 = Color32::from_rgb(0x8b, 0x98, 0xa9);
-/// EDT-009: the background of every match in the buffer.
-pub const FIND_MATCH_BG: Color32 = Color32::from_rgb(0x4a, 0x3f, 0x1f);
-/// EDT-009: the background of the highlighted (current) match.
-pub const FIND_CURRENT_BG: Color32 = Color32::from_rgb(0x7a, 0x64, 0x20);
-/// EDT-009: the underline of the highlighted match, so it stays distinct from the other hits.
-pub const FIND_CURRENT_MARK: Color32 = Color32::from_rgb(0xf0, 0xc8, 0x60);
-/// EDT-004: signature popup background, one step above the pane background.
-pub const SIGNATURE_BG: Color32 = Color32::from_rgb(0x1b, 0x22, 0x2a);
-/// EDT-004: signature popup border, in the accent colour.
-pub const SIGNATURE_BORDER: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
-/// EDT-004: the parameter name the caret is currently editing.
-pub const SIGNATURE_ACTIVE: Color32 = Color32::from_rgb(0xf0, 0xc8, 0x60);
-/// EDT-004: the rest of the signature.
-pub const SIGNATURE_TEXT: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
-/// User-defined and host functions: a distinct accent from the builtins, which use the
-/// highlighter's builtin blue. This is how the popup marks user functions apart.
-pub const COMPLETION_FUNCTION: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
-/// Variables use the plain text colour; their detail carries the kind.
-pub const COMPLETION_VARIABLE: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
 /// Height of one completion row, in pixels.
 const COMPLETION_ROW_H: f32 = 18.0;
 /// The popup never grows past this many rows; the highlight scrolls the window inside it.
@@ -1739,7 +1689,7 @@ impl TextEditor {
         let row_h = ui.text_style_height(&TextStyle::Monospace) + 3.0;
         let char_w = ui
             .painter()
-            .layout_no_wrap("M".to_owned(), font.clone(), Color32::WHITE)
+            .layout_no_wrap("M".to_owned(), font.clone(), theme::text())
             .size()
             .x
             .max(1.0);
@@ -2083,11 +2033,11 @@ impl TextEditor {
         let find_selected = self.find.selected();
 
         let painter = ui.painter();
-        painter.rect_filled(rect, 0.0, EDITOR_BG);
+        painter.rect_filled(rect, 0.0, theme::editor_bg());
         painter.rect_filled(
             Rect::from_min_size(rect.min, vec2(gutter_w, rect.height())),
             0.0,
-            GUTTER_BG,
+            theme::gutter_bg(),
         );
 
         // Current-line highlight.
@@ -2095,7 +2045,7 @@ impl TextEditor {
         painter.rect_filled(
             Rect::from_min_size(pos2(rect.left(), row_top), vec2(rect.width(), row_h)),
             0.0,
-            CURRENT_LINE,
+            theme::current_line(),
         );
 
         let mut laid_out = 0usize;
@@ -2122,9 +2072,9 @@ impl TextEditor {
                     Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + row_h - 1.0)),
                     1.0,
                     if current {
-                        FIND_CURRENT_BG
+                        theme::find_current_bg()
                     } else {
-                        FIND_MATCH_BG
+                        theme::find_match_bg()
                     },
                 );
                 if current {
@@ -2134,7 +2084,7 @@ impl TextEditor {
                             pos2(x1, y + row_h - 1.0),
                         ),
                         1.0,
-                        FIND_CURRENT_MARK,
+                        theme::find_current_mark(),
                     );
                 }
             }
@@ -2155,7 +2105,7 @@ impl TextEditor {
                                 pos2(to_x, y + row_h - 1.0),
                             ),
                             1.0,
-                            SELECTION,
+                            theme::selection_bg(),
                         );
                     }
                 }
@@ -2184,26 +2134,26 @@ impl TextEditor {
                     );
                 };
                 if matched.is_matched() {
-                    paint_cell(matched.at, BRACKET_MATCH_BG, BRACKET_MATCH);
+                    paint_cell(matched.at, theme::bracket_match_bg(), theme::bracket_match());
                     if let Some(mate) = matched.mate {
-                        paint_cell(mate, BRACKET_MATCH_BG, BRACKET_MATCH);
+                        paint_cell(mate, theme::bracket_match_bg(), theme::bracket_match());
                     }
                 } else {
-                    paint_cell(matched.at, BRACKET_UNMATCHED_BG, BRACKET_UNMATCHED);
+                    paint_cell(matched.at, theme::bracket_unmatched_bg(), theme::bracket_unmatched());
                 }
             }
             let line = &self.lines[row];
             let display_line = expand_tabs(line, tab_width);
-            let job = syntax::job(&display_line, font.clone(), &syntax::DARK, &self.syntax);
+            let job = syntax::job(&display_line, font.clone(), theme::syntax(), &self.syntax);
             let galley = painter.layout_job(job);
             laid_out += 1;
-            painter.galley(pos2(text_left, y), galley, syntax::DARK.plain);
+            painter.galley(pos2(text_left, y), galley, theme::syntax().plain);
             painter.text(
                 pos2(rect.left() + gutter_w - 4.0, y),
                 Align2::RIGHT_TOP,
                 (row + 1).to_string(),
                 FontId::monospace(11.0),
-                GUTTER_TEXT,
+                theme::gutter_text(),
             );
             if let Some((range, _)) = &decoration {
                 if range.line == row + 1 {
@@ -2216,7 +2166,7 @@ impl TextEditor {
                     painter.rect_filled(
                         Rect::from_min_max(pos2(x0, y + row_h - 3.0), pos2(x1, y + row_h - 1.0)),
                         1.0,
-                        DIAGNOSTIC_UNDERLINE,
+                        theme::diagnostic_underline(),
                     );
                     // A distinct gutter marker on the same line: a solid bar at the gutter edge,
                     // clear of the right-aligned line number.
@@ -2226,7 +2176,7 @@ impl TextEditor {
                             pos2(rect.left() + 6.0, y + row_h - 2.0),
                         ),
                         1.0,
-                        DIAGNOSTIC_MARKER,
+                        theme::diagnostic_marker(),
                     );
                 }
             }
@@ -2270,12 +2220,12 @@ impl TextEditor {
                     pos2(caret_x, caret_y + 1.0),
                     pos2(caret_x, caret_y + row_h - 1.0),
                 ],
-                Stroke::new(1.5, CARET),
+                Stroke::new(1.5, theme::caret()),
             );
             painter.rect_stroke(
                 rect,
                 0.0,
-                Stroke::new(1.0, Color32::from_rgb(0x4e, 0xc9, 0xb0)),
+                Stroke::new(1.0, theme::focus_ring()),
                 egui::StrokeKind::Inside,
             );
         }
@@ -2348,13 +2298,13 @@ impl TextEditor {
         let detail_font = FontId::monospace(11.0);
         let label_char_w = ui
             .painter()
-            .layout_no_wrap("M".to_owned(), font.clone(), Color32::WHITE)
+            .layout_no_wrap("M".to_owned(), font.clone(), theme::text())
             .size()
             .x
             .max(1.0);
         let detail_char_w = ui
             .painter()
-            .layout_no_wrap("M".to_owned(), detail_font.clone(), Color32::WHITE)
+            .layout_no_wrap("M".to_owned(), detail_font.clone(), theme::text())
             .size()
             .x
             .max(1.0);
@@ -2419,11 +2369,11 @@ impl TextEditor {
 
         let painter = ui.painter().with_clip_rect(rect);
         let popup = Rect::from_min_size(pos2(x, y), vec2(width, height));
-        painter.rect_filled(popup, 3.0, COMPLETION_BG);
+        painter.rect_filled(popup, 3.0, theme::completion_bg());
         painter.rect_stroke(
             popup,
             3.0,
-            Stroke::new(1.0, COMPLETION_BORDER),
+            Stroke::new(1.0, theme::completion_border()),
             egui::StrokeKind::Inside,
         );
         for (offset, item) in items[first..first + visible].iter().enumerate() {
@@ -2434,7 +2384,7 @@ impl TextEditor {
                 vec2(popup.width() - 2.0, COMPLETION_ROW_H),
             );
             if index == selected {
-                painter.rect_filled(row, 2.0, COMPLETION_SELECTED);
+                painter.rect_filled(row, 2.0, theme::completion_selected_bg());
             }
             let accent = completion_colour(item.kind);
             // A two-pixel kind bar: builtins keep the highlighter's blue, user functions and
@@ -2462,7 +2412,7 @@ impl TextEditor {
                 Align2::LEFT_TOP,
                 &item.detail,
                 detail_font.clone(),
-                COMPLETION_DETAIL,
+                theme::completion_detail(),
             );
         }
     }
@@ -2471,10 +2421,10 @@ impl TextEditor {
 /// The colour and kind bar one completion entry is painted with.
 fn completion_colour(kind: CompletionKind) -> Color32 {
     match kind {
-        CompletionKind::Keyword => syntax::DARK.keyword,
-        CompletionKind::Builtin => syntax::DARK.builtin,
-        CompletionKind::Function => COMPLETION_FUNCTION,
-        CompletionKind::Variable => COMPLETION_VARIABLE,
+        CompletionKind::Keyword => theme::syntax().keyword,
+        CompletionKind::Builtin => theme::syntax().builtin,
+        CompletionKind::Function => theme::completion_function(),
+        CompletionKind::Variable => theme::completion_variable(),
     }
 }
 
@@ -2499,13 +2449,13 @@ fn paint_signature(
     let detail_font = FontId::monospace(10.5);
     let label_char_w = ui
         .painter()
-        .layout_no_wrap("M".to_owned(), font.clone(), Color32::WHITE)
+        .layout_no_wrap("M".to_owned(), font.clone(), theme::text())
         .size()
         .x
         .max(1.0);
     let detail_char_w = ui
         .painter()
-        .layout_no_wrap("M".to_owned(), detail_font.clone(), Color32::WHITE)
+        .layout_no_wrap("M".to_owned(), detail_font.clone(), theme::text())
         .size()
         .x
         .max(1.0);
@@ -2552,11 +2502,11 @@ fn paint_signature(
 
     let painter = ui.painter().with_clip_rect(rect);
     let popup = Rect::from_min_size(pos2(x, y), vec2(width, height));
-    painter.rect_filled(popup, 3.0, SIGNATURE_BG);
+    painter.rect_filled(popup, 3.0, theme::signature_bg());
     painter.rect_stroke(
         popup,
         3.0,
-        Stroke::new(1.0, SIGNATURE_BORDER),
+        Stroke::new(1.0, theme::signature_border()),
         egui::StrokeKind::Inside,
     );
 
@@ -2580,7 +2530,7 @@ fn paint_signature(
         Align2::LEFT_TOP,
         &before,
         font.clone(),
-        SIGNATURE_TEXT,
+        theme::signature_text(),
     );
     text_x += before.chars().count() as f32 * label_char_w;
     if !active_text.is_empty() {
@@ -2589,7 +2539,7 @@ fn paint_signature(
             Align2::LEFT_TOP,
             &active_text,
             font.clone(),
-            SIGNATURE_ACTIVE,
+            theme::signature_active(),
         );
         let active_w = active_text.chars().count() as f32 * label_char_w;
         painter.rect_filled(
@@ -2598,7 +2548,7 @@ fn paint_signature(
                 pos2(text_x + active_w, text_y + 16.0),
             ),
             0.0,
-            SIGNATURE_ACTIVE,
+            theme::signature_active(),
         );
         text_x += active_w;
     }
@@ -2607,14 +2557,14 @@ fn paint_signature(
         Align2::LEFT_TOP,
         &after,
         font,
-        SIGNATURE_TEXT,
+        theme::signature_text(),
     );
     painter.text(
         pos2(popup.left() + padding, text_y + 19.0),
         Align2::LEFT_TOP,
         &status,
         detail_font.clone(),
-        COMPLETION_DETAIL,
+        theme::completion_detail(),
     );
     if !summary.is_empty() {
         let max_chars = (((width - padding * 2.0) / detail_char_w).floor() as usize).max(8);
@@ -2627,7 +2577,7 @@ fn paint_signature(
             Align2::LEFT_TOP,
             shortened,
             detail_font,
-            COMPLETION_DETAIL,
+            theme::completion_detail(),
         );
     }
 }

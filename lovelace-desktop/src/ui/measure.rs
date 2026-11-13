@@ -358,7 +358,9 @@ pub fn run(script: Option<PathBuf>, out: Option<PathBuf>, started: Instant) -> i
         "Lovelace Desktop - EDT-016 measurement",
         options,
         Box::new(move |creation| {
-            creation.egui_ctx.set_visuals(egui::Visuals::dark());
+            // VIS-002: the measurement window paints the shipped dark token set; the embedded
+            // WorkbenchApp applies its own (dark by default) tokens on every pass.
+            super::theme::apply(&creation.egui_ctx, super::theme::ThemeId::Dark);
             Ok(Box::new(MeasureApp::new(script, out, started)))
         }),
     ) {

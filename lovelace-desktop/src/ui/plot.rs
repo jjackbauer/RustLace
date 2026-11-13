@@ -31,19 +31,11 @@ use std::time::Instant;
 use resvg::tiny_skia;
 use resvg::usvg;
 
+use super::theme;
 use egui::{
-    Align2, Color32, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle,
+    Align2, CursorIcon, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle,
     TextureOptions, Ui, Vec2, pos2, vec2,
 };
-
-/// Plot background.
-pub const PLOT_BG: Color32 = Color32::from_rgb(0x0c, 0x10, 0x14);
-/// Plot border.
-pub const PLOT_BORDER: Color32 = Color32::from_rgb(0x33, 0x3a, 0x44);
-/// Error text and border.
-pub const ERROR: Color32 = Color32::from_rgb(0xff, 0x7b, 0x72);
-/// Secondary text.
-pub const DIM: Color32 = Color32::from_rgb(0x8b, 0x98, 0xa9);
 
 /// Texture side cap; also bounded by `max_texture_side` reported by the backend.
 const MAX_SIDE: f32 = 4096.0;
@@ -512,11 +504,11 @@ impl Plot {
         self.canvas = rect;
         if self.is_empty() {
             let painter = ui.painter();
-            painter.rect_filled(rect, 0.0, PLOT_BG);
+            painter.rect_filled(rect, 0.0, theme::plot_bg());
             painter.rect_stroke(
                 rect.shrink(1.0),
                 0.0,
-                Stroke::new(1.0, PLOT_BORDER),
+                Stroke::new(1.0, theme::plot_border()),
                 StrokeKind::Inside,
             );
             painter.text(
@@ -524,7 +516,7 @@ impl Plot {
                 Align2::CENTER_CENTER,
                 "No plot yet. Run a script that calls plot(...).",
                 FontId::proportional(14.0),
-                DIM,
+                theme::plot_empty_text(),
             );
             return PlotMetrics {
                 screen: rect,
@@ -535,11 +527,11 @@ impl Plot {
         }
 
         if let Some(error) = self.error.clone() {
-            ui.painter().rect_filled(rect, 0.0, PLOT_BG);
+            ui.painter().rect_filled(rect, 0.0, theme::plot_bg());
             ui.painter().rect_stroke(
                 rect.shrink(1.0),
                 0.0,
-                Stroke::new(1.0, ERROR),
+                Stroke::new(1.0, theme::error()),
                 StrokeKind::Inside,
             );
             let inner = rect.shrink(12.0);
@@ -548,9 +540,9 @@ impl Plot {
                     .max_rect(inner)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
                 |ui| {
-                    ui.colored_label(ERROR, "SVG parse error (shown inline, no panic):");
+                    ui.colored_label(theme::error(), "SVG parse error (shown inline, no panic):");
                     ui.add(egui::Label::new(
-                        egui::RichText::new(error).monospace().color(ERROR),
+                        egui::RichText::new(error).monospace().color(theme::error()),
                     ));
                 },
             );
@@ -599,13 +591,13 @@ impl Plot {
 
         let screen = self.view.scene_rect(rect, svg, fit);
         let painter = ui.painter();
-        painter.rect_filled(rect, 0.0, PLOT_BG);
+        painter.rect_filled(rect, 0.0, theme::plot_bg());
         if let Some(texture) = &self.texture {
             painter.image(
                 texture.id(),
                 screen,
                 Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
+                theme::texture_tint(),
             );
         } else {
             painter.text(
@@ -613,13 +605,13 @@ impl Plot {
                 Align2::CENTER_CENTER,
                 "raster unavailable",
                 FontId::proportional(14.0),
-                ERROR,
+                theme::error(),
             );
         }
         painter.rect_stroke(
             rect.shrink(1.0),
             0.0,
-            Stroke::new(1.0, PLOT_BORDER),
+            Stroke::new(1.0, theme::plot_border()),
             StrokeKind::Inside,
         );
 

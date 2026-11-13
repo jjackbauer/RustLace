@@ -32,6 +32,48 @@ pub const MIN_INDENT_WIDTH: usize = 1;
 /// Largest accepted editor indent width, in columns.
 pub const MAX_INDENT_WIDTH: usize = 8;
 
+/// VIS-002: the persisted colour theme.
+///
+/// This lives in the settings module rather than in the Windows-only `ui` module so the settings
+/// document stays cross-platform and every build can round-trip it. The UI maps it to its token
+/// set; the strings are the persisted values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ThemePreference {
+    /// The shipped default: the dark token set.
+    #[default]
+    Dark,
+    /// The light token set.
+    Light,
+}
+
+impl ThemePreference {
+    /// The string written to the settings document.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemePreference::Dark => "dark",
+            ThemePreference::Light => "light",
+        }
+    }
+
+    /// Parses a persisted theme; unknown text is rejected by the caller, which warns and keeps
+    /// the default.
+    pub fn parse(text: &str) -> Option<ThemePreference> {
+        match text {
+            "dark" => Some(ThemePreference::Dark),
+            "light" => Some(ThemePreference::Light),
+            _ => None,
+        }
+    }
+
+    /// The other theme, for the runtime toggle.
+    pub fn toggled(self) -> ThemePreference {
+        match self {
+            ThemePreference::Dark => ThemePreference::Light,
+            ThemePreference::Light => ThemePreference::Dark,
+        }
+    }
+}
+
 /// Saved window geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowGeometry {
@@ -155,6 +197,8 @@ pub struct Settings {
     pub layout: LayoutFractions,
     /// EDT-008: indentation and auto-close behaviour.
     pub editor: EditorSettings,
+    /// VIS-002: the colour theme the window paints; dark is the shipped default.
+    pub theme: ThemePreference,
     /// Most-recently used file paths, newest first.
     pub recent_files: Vec<String>,
     /// Display precision of the document that was active at exit.
@@ -172,6 +216,7 @@ impl Default for Settings {
             window: WindowGeometry::default(),
             layout: LayoutFractions::default(),
             editor: EditorSettings::default(),
+            theme: ThemePreference::default(),
             recent_files: Vec::new(),
             active_precision: DEFAULT_PRECISION,
             session: None,
@@ -234,6 +279,7 @@ impl Settings {
                 "active_precision",
                 Json::Num(self.active_precision.to_string()),
             ),
+            ("theme", Json::Str(self.theme.as_str().to_string())),
             (
                 "session",
                 match &self.session {
@@ -399,6 +445,16 @@ impl Settings {
             MAX_PRECISION as i64,
             &mut warnings,
         ) as usize;
+        // VIS-002: an absent theme is the dark default (older settings files are not warnings);
+        // a present but unknown value is a real problem the user should see.
+        if let Some(theme) = root.get("theme") {
+            match theme.as_str().and_then(ThemePreference::parse) {
+                Some(preference) => settings.theme = preference,
+                None => warnings.push(
+                    "theme is not \"dark\" or \"light\"; the dark theme is used.".to_string(),
+                ),
+            }
+        }
         if let Some(recent) = root.get("recent_files") {
             match recent.as_arr() {
                 Some(items) => {
@@ -658,6 +714,43 @@ pub fn default_recovery_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_theme_preference_round_trips_and_rejects_unknown_values() {
+        assert_eq!(
+            Settings::new().theme,
+            ThemePreference::Dark,
+            "dark is the shipped default"
+        );
+        let mut settings = Settings::new();
+        settings.theme = ThemePreference::Light;
+        let again = Settings::from_json(&settings.to_json());
+        assert_eq!(again.theme, ThemePreference::Light);
+        assert!(
+            again.warnings.is_empty(),
+            "a valid theme must round-trip without warnings: {:?}",
+            again.warnings
+        );
+        // A file written before VIS-002 has no theme field: dark, and no warning (the field was
+        // not lost, it simply did not exist).
+        let older = Settings::from_json(r#"{"schema_version": 1, "active_precision": 30}"#);
+        assert_eq!(older.theme, ThemePreference::Dark);
+        assert!(
+            !older.warnings.iter().any(|warning| warning.contains("theme")),
+            "a missing theme is not a warning: {:?}",
+            older.warnings
+        );
+        // An unknown value is a real problem, so it warns and keeps the safe default.
+        let unknown = Settings::from_json(r#"{"schema_version": 1, "theme": "blue"}"#);
+        assert_eq!(unknown.theme, ThemePreference::Dark);
+        assert!(
+            unknown.warnings.iter().any(|warning| warning.contains("theme")),
+            "warnings: {:?}",
+            unknown.warnings
+        );
+        assert_eq!(ThemePreference::Dark.toggled(), ThemePreference::Light);
+        assert_eq!(ThemePreference::Light.toggled(), ThemePreference::Dark);
+    }
 
     #[test]
     fn settings_round_trip_through_json() {

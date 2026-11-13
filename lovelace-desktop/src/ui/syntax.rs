@@ -88,7 +88,7 @@ impl TokenClass {
 /// so the capture's palette probe excludes the pane header and border. The window capture in
 /// `docs/goal-desktop-v4/round-20/` states these limits rather than claiming a wider visual
 /// separation.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Palette {
     /// Ordinary code and punctuation.
     pub plain: Color32,
@@ -115,19 +115,13 @@ pub struct Palette {
 }
 
 /// The dark editor palette.
-pub const DARK: Palette = Palette {
-    plain: Color32::from_rgb(0xd4, 0xd9, 0xe0),
-    number: Color32::from_rgb(0xb5, 0xce, 0x8b),
-    rational: Color32::from_rgb(0xe5, 0xc0, 0x7b),
-    string: Color32::from_rgb(0xce, 0x91, 0x78),
-    interpolation: Color32::from_rgb(0xf0, 0xa8, 0xd0),
-    keyword: Color32::from_rgb(0xc5, 0x86, 0xc0),
-    operator: Color32::from_rgb(0x56, 0xb6, 0xc2),
-    function: Color32::from_rgb(0x4e, 0xc9, 0xb0),
-    builtin: Color32::from_rgb(0x4f, 0xc1, 0xff),
-    delimiter: Color32::from_rgb(0x8b, 0x98, 0xa9),
-    symbol: Color32::from_rgb(0xc8, 0xb6, 0xff),
-};
+///
+/// VIS-002: the palettes live in [`super::theme`] with the rest of the token set, so a theme
+/// switch repaints the syntax classes too instead of leaving the highlighter on a fixed set.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn dark_palette() -> &'static Palette {
+    super::theme::dark_syntax()
+}
 
 /// The context a line needs beyond its own text.
 ///
@@ -955,7 +949,7 @@ mod tests {
     fn layout_job_sections_are_the_classified_spans_in_order() {
         let ctx = context(&["sqrt"], "");
         let line = "func f(x) = sqrt(1/3)";
-        let job = job(line, FontId::monospace(13.0), &DARK, &ctx);
+        let job = job(line, FontId::monospace(13.0), dark_palette(), &ctx);
         let spans = classify(line, &ctx);
         assert_eq!(job.sections.len(), spans.len());
         for (section, span) in job.sections.iter().zip(spans.iter()) {
@@ -968,7 +962,7 @@ mod tests {
                 "section end must match the classified span"
             );
             assert_eq!(section.format.font_id, FontId::monospace(13.0));
-            assert_eq!(section.format.color, span.class.color(&DARK));
+            assert_eq!(section.format.color, span.class.color(dark_palette()));
             assert_eq!(
                 &line[section.byte_range.start.0..section.byte_range.end.0],
                 &line[span.range.clone()]

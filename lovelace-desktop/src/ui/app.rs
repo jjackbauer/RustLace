@@ -33,31 +33,7 @@ use crate::workspace_table::{
 use super::editor::{TextEditor, surface_id};
 use super::file_dialogs::{self, FileDialogs, NativeFileDialogs};
 use super::plot::{self, Plot, PngBackground};
-/// Pane background.
-pub const PANE_BG: Color32 = Color32::from_rgb(0x17, 0x1b, 0x21);
-/// Pane header background.
-pub const HEADER_BG: Color32 = Color32::from_rgb(0x22, 0x28, 0x30);
-/// Pane border.
-pub const BORDER: Color32 = Color32::from_rgb(0x33, 0x3a, 0x44);
-/// Primary text.
-pub const TEXT: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
-/// Secondary text.
-pub const DIM: Color32 = Color32::from_rgb(0x8b, 0x98, 0xa9);
-/// Accent (names, caret, status).
-pub const ACCENT: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
-/// Splitter background.
-pub const SPLIT_BG: Color32 = Color32::from_rgb(0x0d, 0x10, 0x14);
-/// Splitter hover colour.
-pub const SPLIT_HOT: Color32 = Color32::from_rgb(0x2b, 0x4a, 0x47);
-/// Warning text.
-pub const WARN: Color32 = Color32::from_rgb(0xd7, 0xba, 0x7d);
-/// Error text.
-pub const ERROR: Color32 = Color32::from_rgb(0xff, 0x7b, 0x72);
-/// Echo marker text (the quiet, low-contrast lavender of a prompt echo).
-pub const LOG_ECHO: Color32 = Color32::from_rgb(0xc8, 0xb6, 0xff);
-/// Progress marker text (a calm blue, distinct from the accent teal).
-pub const LOG_PROGRESS: Color32 = Color32::from_rgb(0x7f, 0xb0, 0xd8);
-
+use super::theme;
 /// Width of a splitter, in pixels.
 pub const SPLIT: f32 = 6.0;
 const MIN_EDITOR: f32 = 320.0;
@@ -311,6 +287,20 @@ pub struct WorkbenchApp {
     workbench: Workbench,
     /// DOC-004: the settings value this run loaded, updated as the session changes.
     settings: Settings,
+    /// VIS-002: the theme this window paints. Persisted in `settings.theme`; dark by default.
+    theme: theme::ThemeId,
+    /// VIS-002: the theme whose egui styles were last written into the context.
+    applied_theme: Option<theme::ThemeId>,
+    /// VIS-002 test seam: the toolbar theme toggle's last painted rectangle. UIA reaches the same
+    /// button by its accessible name.
+    theme_button: Option<Rect>,
+    /// VIS-002: the widget that owned keyboard focus when this pass began, before any toolbar
+    /// interaction could move it. The theme toggle restores it, so switching theme never costs
+    /// the user their place in the editor.
+    focus_before_interaction: Option<Id>,
+    /// VIS-002: the most recent pass that began with a focused widget. A pointer press can clear
+    /// egui's focus before the click frame runs, so the toggle restores this instead of `None`.
+    last_stable_focus: Option<Id>,
     /// DOC-004: where the settings file and the recovery directory live.
     storage: AppStorage,
     /// DOC-005: the debounced writer that keeps one recovery record per dirty document.
@@ -500,6 +490,8 @@ impl WorkbenchApp {
 
         let mut app = WorkbenchApp::with_storage(workbench, storage);
         app.settings = settings;
+        // VIS-002: the persisted theme wins over the dark default; the first frame applies it.
+        app.theme = app.settings.theme;
         app.apply_editor_settings();
         // A record the session restore consumed is exactly the text now in its tab, so the journal
         // keeps tracking it instead of rewriting it on the first frame; it is deleted when the
@@ -561,6 +553,11 @@ impl WorkbenchApp {
         WorkbenchApp {
             workbench,
             settings: Settings::new(),
+            theme: theme::ThemeId::Dark,
+            applied_theme: None,
+            theme_button: None,
+            focus_before_interaction: None,
+            last_stable_focus: None,
             storage,
             recovery,
             recovery_prompt: None,
@@ -1106,12 +1103,12 @@ impl WorkbenchApp {
                 RichText::new("Unsaved changes")
                     .strong()
                     .size(16.0)
-                    .color(TEXT),
+                    .color(theme::text()),
             );
             ui.add_space(4.0);
             ui.label(
                 RichText::new(format!("Save changes to {title} before closing?"))
-                    .color(TEXT)
+                    .color(theme::text())
                     .size(14.0),
             );
             if total > 1 {
@@ -1122,17 +1119,17 @@ impl WorkbenchApp {
                         total
                     ))
                     .small()
-                    .color(DIM),
+                    .color(theme::dim()),
                 );
             }
             ui.label(
                 RichText::new("If you discard, what you changed since the last save is lost.")
                     .small()
-                    .color(DIM),
+                    .color(theme::dim()),
             );
             if let Some(error) = &error {
                 ui.add_space(2.0);
-                ui.label(RichText::new(error).small().color(ERROR));
+                ui.label(RichText::new(error).small().color(theme::error()));
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -1186,7 +1183,7 @@ impl WorkbenchApp {
                 RichText::new("Recover unsaved work")
                     .strong()
                     .size(16.0)
-                    .color(TEXT),
+                    .color(theme::text()),
             );
             ui.add_space(4.0);
             ui.label(
@@ -1194,7 +1191,7 @@ impl WorkbenchApp {
                     "The last session did not close cleanly. These buffers were journaled before \
                      it ended:",
                 )
-                .color(TEXT)
+                .color(theme::text())
                 .size(14.0),
             );
             ui.label(
@@ -1203,11 +1200,11 @@ impl WorkbenchApp {
                      nothing. Discarding deletes the record.",
                 )
                 .small()
-                .color(DIM),
+                .color(theme::dim()),
             );
             if let Some(error) = &prompt.error {
                 ui.add_space(2.0);
-                ui.label(RichText::new(error).small().color(ERROR));
+                ui.label(RichText::new(error).small().color(theme::error()));
             }
             ui.add_space(8.0);
             egui::ScrollArea::vertical()
@@ -1215,7 +1212,7 @@ impl WorkbenchApp {
                 .show(ui, |ui| {
                     for (row, record) in prompt.records.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&record.title).monospace().color(ACCENT));
+                            ui.label(RichText::new(&record.title).monospace().color(theme::accent()));
                             ui.label(
                                 RichText::new(format!(
                                     "{}  ·  {} bytes",
@@ -1223,7 +1220,7 @@ impl WorkbenchApp {
                                     record.buffer_bytes()
                                 ))
                                 .small()
-                                .color(DIM),
+                                .color(theme::dim()),
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 for choice in [RecoveryAnswer::Discard, RecoveryAnswer::Recover] {
@@ -1249,7 +1246,7 @@ impl WorkbenchApp {
             ui.label(
                 RichText::new("Escape keeps these records for the next launch.")
                     .small()
-                    .color(DIM),
+                    .color(theme::dim()),
             );
         });
         if answer.is_none() && (escape || modal.should_close()) {
@@ -1417,7 +1414,7 @@ impl WorkbenchApp {
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new("Line or line:column, 1-based. Enter jumps; Esc cancels.")
-                        .color(DIM),
+                        .color(theme::dim()),
                 );
                 let field = ui
                     .add(
@@ -1436,7 +1433,7 @@ impl WorkbenchApp {
                     prompt.focus = false;
                 }
                 if let Some(error) = &prompt.error {
-                    ui.label(RichText::new(error).color(ERROR).monospace());
+                    ui.label(RichText::new(error).color(theme::error()).monospace());
                 }
                 submit = ui.input(|input| input.key_pressed(Key::Enter));
                 cancel = ui.input(|input| input.key_pressed(Key::Escape));
@@ -1488,7 +1485,7 @@ impl WorkbenchApp {
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new("Filter the document's identifiers. Enter jumps; Esc cancels.")
-                        .color(DIM),
+                        .color(theme::dim()),
                 );
                 let field = ui
                     .add(
@@ -1516,7 +1513,7 @@ impl WorkbenchApp {
                 }
                 ui.separator();
                 if hits.is_empty() {
-                    ui.label(RichText::new("No identifier matches.").color(DIM));
+                    ui.label(RichText::new("No identifier matches.").color(theme::dim()));
                 }
                 egui::ScrollArea::vertical()
                     .id_salt("find_symbol_list")
@@ -1581,7 +1578,7 @@ impl WorkbenchApp {
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new("Indentation and typing behaviour for every document")
-                        .color(DIM),
+                        .color(theme::dim()),
                 );
                 changed |= ui
                     .checkbox(&mut preferences.use_spaces, "Indent with spaces")
@@ -1613,7 +1610,7 @@ impl WorkbenchApp {
                         }
                     ))
                     .monospace()
-                    .color(ACCENT),
+                    .color(theme::accent()),
                 );
             });
         self.editor_settings_open = open;
@@ -1630,7 +1627,7 @@ impl WorkbenchApp {
         let ctx = ui.ctx().clone();
         self.file_buttons.clear();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("File").small().color(DIM));
+            ui.label(RichText::new("File").small().color(theme::dim()));
             if self.file_bar_button(ui, "New", "New document (Ctrl+N)") {
                 self.new_document();
             }
@@ -1688,7 +1685,7 @@ impl WorkbenchApp {
             ui.label(
                 RichText::new(document.encoding_label())
                     .monospace()
-                    .color(DIM),
+                    .color(theme::dim()),
             )
             .on_hover_text("The encoding and newline style this document saves with");
             match &document.path {
@@ -1697,11 +1694,11 @@ impl WorkbenchApp {
                         RichText::new(path.display().to_string())
                             .monospace()
                             .small()
-                            .color(DIM),
+                            .color(theme::dim()),
                     );
                 }
                 None => {
-                    ui.label(RichText::new("no file yet").small().color(DIM));
+                    ui.label(RichText::new("no file yet").small().color(theme::dim()));
                 }
             }
         });
@@ -1714,7 +1711,57 @@ impl WorkbenchApp {
         response.clicked()
     }
 
+    /// VIS-002: switches the window to `theme` at runtime.
+    ///
+    /// Only the token selection and egui's style slots change. The workbench, the editors (with
+    /// their carets, selections and undo history), the plot and the focused widget are not
+    /// touched, which is what makes the switch lossless. The choice is persisted immediately.
+    fn set_theme(&mut self, theme: theme::ThemeId, ctx: &egui::Context) {
+        self.theme = theme;
+        theme::apply(ctx, theme);
+        self.applied_theme = Some(theme);
+        self.settings.theme = theme;
+        self.persist_state(true);
+        // VIS-002: a click on the toolbar button moves egui's focus to that button. Hand it back
+        // to whatever owned it before the pass (normally the editor) so the switch costs neither
+        // the caret nor the focused control.
+        if let Some(focus) = self.focus_before_interaction {
+            self.pending_focus = Some(focus);
+            ctx.memory_mut(|memory| memory.request_focus(focus));
+        }
+        ctx.request_repaint();
+    }
+
+    /// VIS-002: the toolbar toggle's visible label, which is also its UIA accessible name.
+    fn theme_button_label(&self) -> String {
+        format!(
+            "Theme: {}",
+            match self.theme {
+                theme::ThemeId::Dark => "Dark",
+                theme::ThemeId::Light => "Light",
+            }
+        )
+    }
+
     fn ui_root(&mut self, ui: &mut Ui) {
+        // VIS-002: every pass starts with the active theme's tokens applied to this Ui's style,
+        // so no widget can inherit egui's default palette. When the theme changed, the context's
+        // style slots are rewritten too, which is what windows, menus and tooltips created
+        // through `ctx` (rather than through this Ui) read.
+        theme::set_active(self.theme);
+        theme::apply_style(ui.style_mut(), self.theme);
+        if self.applied_theme != Some(self.theme) {
+            theme::apply(ui.ctx(), self.theme);
+            self.applied_theme = Some(self.theme);
+        }
+        // VIS-002: remember the focus owner before any widget can steal it, so the theme toggle
+        // can hand focus back when it has finished switching. A press can clear focus in the same
+        // frame, so the last pass that began focused is remembered too.
+        let current_focus = ui.ctx().memory(|memory| memory.focused());
+        if current_focus.is_some() {
+            self.last_stable_focus = current_focus;
+        }
+        self.focus_before_interaction = current_focus.or(self.last_stable_focus);
         // RUN-001 trace: the frame after the Running frame begins only once that frame has been
         // painted and presented, so its start bounds the paint time.
         if self.trace_after_paint {
@@ -2054,10 +2101,10 @@ impl WorkbenchApp {
             ui.label(
                 RichText::new("Lovelace Desktop")
                     .strong()
-                    .color(TEXT)
+                    .color(theme::text())
                     .size(15.0),
             );
-            ui.label(RichText::new(self.workbench.engine_name()).color(DIM));
+            ui.label(RichText::new(self.workbench.engine_name()).color(theme::dim()));
             ui.separator();
 
             let toolbar = self.workbench.toolbar_state();
@@ -2076,7 +2123,7 @@ impl WorkbenchApp {
                 let cancel = ui
                     .add_enabled(
                         toolbar.cancel_enabled,
-                        egui::Button::new(RichText::new("Cancel").color(ERROR)),
+                        egui::Button::new(RichText::new("Cancel").color(theme::error())),
                     )
                     .on_hover_text("Cancel (Esc): stop the active run at the next statement boundary");
                 if cancel.clicked() {
@@ -2088,7 +2135,7 @@ impl WorkbenchApp {
             // RUN-019: one visibly labelled precision input. It accepts text so an invalid value
             // is rejected with guidance instead of being silently clamped by a spinner; the
             // document precision is only changed when the value is valid.
-            ui.label(RichText::new("Precision").color(DIM));
+            ui.label(RichText::new("Precision").color(theme::dim()));
             let field = ui
                 .add(
                     egui::TextEdit::singleline(&mut self.precision_input)
@@ -2117,11 +2164,11 @@ impl WorkbenchApp {
                 }
             }
             ui.label(
-                RichText::new(format!("{} digits", self.view.precision)).color(DIM),
+                RichText::new(format!("{} digits", self.view.precision)).color(theme::dim()),
             )
             .on_hover_text("The active document's applied display precision");
             if let Some(guidance) = &self.precision_error {
-                ui.label(RichText::new(guidance).color(ERROR))
+                ui.label(RichText::new(guidance).color(theme::error()))
                     .on_hover_text("The precision was not changed; the run uses the last valid value.");
             }
             ui.separator();
@@ -2173,6 +2220,24 @@ impl WorkbenchApp {
             }
             ui.separator();
 
+            // VIS-002: the runtime theme toggle. Its label carries the render state, so a UIA
+            // capture names the control ("Theme: Dark") and the same name opens the next theme.
+            let theme_response = ui
+                .button(self.theme_button_label())
+                .on_hover_text(
+                    "Switch between the dark and light theme at runtime; the open documents, \
+                     carets, selection and keyboard focus are preserved",
+                );
+            self.theme_button = Some(theme_response.rect);
+            if theme_response.clicked() {
+                let next = self.theme.toggled();
+                self.set_theme(next, ui.ctx());
+                // Apply the new tokens to this Ui immediately so the rest of this pass (panes and
+                // status strip) paints in the new theme instead of a mixed frame.
+                theme::apply_style(ui.style_mut(), next);
+            }
+            ui.separator();
+
             let active = self.workbench.active();
             let editor = &self.editors[active];
             ui.label(
@@ -2181,7 +2246,7 @@ impl WorkbenchApp {
                     editor.line_count(),
                     editor.bytes()
                 ))
-                .color(DIM),
+                .color(theme::dim()),
             );
             ui.separator();
             ui.label(
@@ -2189,7 +2254,7 @@ impl WorkbenchApp {
                     "laid out {} / {} visible rows",
                     editor.metrics.laid_out_rows, editor.metrics.visible_rows
                 ))
-                .color(DIM),
+                .color(theme::dim()),
             );
         });
     }
@@ -2221,7 +2286,7 @@ impl WorkbenchApp {
                         "document {} · revision {}",
                         document.id.0, document.revision
                     ))
-                    .color(DIM),
+                    .color(theme::dim()),
                 );
             }
         });
@@ -2235,14 +2300,21 @@ impl WorkbenchApp {
             if self.trace_pending {
                 crate::run_trace::mark("status_bar_drawn", format!("status={status:?}"));
             }
-            ui.label(RichText::new(status).monospace().color(ACCENT));
+            // VIS-002: the run state's semantic colour is a theme token, not a fixed accent:
+            // success is positive, an in-flight run progresses, failure is the error colour and
+            // a stale/cancelled result is a warning.
+            ui.label(
+                RichText::new(status)
+                    .monospace()
+                    .color(status_state_color(self.view.run_state)),
+            );
             ui.separator();
             if let Some(document) = self.workbench.documents().get(active) {
-                ui.label(RichText::new(format!("{} ms last run", document.elapsed_ms)).color(DIM));
+                ui.label(RichText::new(format!("{} ms last run", document.elapsed_ms)).color(theme::dim()));
             }
             if self.workbench.active_is_running() {
                 ui.separator();
-                ui.label(RichText::new("Cancel is available in the toolbar.").color(WARN));
+                ui.label(RichText::new("Cancel is available in the toolbar.").color(theme::warning()));
             }
         });
     }
@@ -2251,7 +2323,7 @@ impl WorkbenchApp {
         let layout = compute_layout(full, self.editor_frac, self.workspace_frac, self.logs_frac);
         self.layout = Some(layout);
         ui.painter()
-            .rect_filled(full, 0.0, Color32::from_rgb(0x0b, 0x0e, 0x12));
+            .rect_filled(full, 0.0, theme::app_bg());
 
         // RUN-003: one view for the whole frame. The clone is what a pane closure can borrow
         // while another pane mutates `self`; no pane reads pane data from the workbench.
@@ -2322,9 +2394,9 @@ impl WorkbenchApp {
         let pane_title = format!("Editor - {title}");
         with_pane(ui, rect, &pane_title, |ui, header, body| {
             ui.scope_builder(header_ui(header), |ui| {
-                ui.label(RichText::new(&title).color(ACCENT).monospace());
-                ui.label(RichText::new(format!("{lines} lines / {bytes} bytes")).color(DIM));
-                ui.label(RichText::new(&encoding).monospace().small().color(DIM))
+                ui.label(RichText::new(&title).color(theme::accent()).monospace());
+                ui.label(RichText::new(format!("{lines} lines / {bytes} bytes")).color(theme::dim()));
+                ui.label(RichText::new(&encoding).monospace().small().color(theme::dim()))
                     .on_hover_text(
                         "The document's encoding and newline style; Save writes them back \
                          unchanged unless the file is edited",
@@ -2334,7 +2406,7 @@ impl WorkbenchApp {
                     ui.label(
                         RichText::new(diagnostic_summary(diagnostic))
                             .monospace()
-                            .color(ERROR),
+                            .color(theme::error()),
                     )
                     .on_hover_text(diagnostic.render_fully());
                 }
@@ -2342,7 +2414,7 @@ impl WorkbenchApp {
                 // completion also exists in the accessibility tree and in a UIA capture.
                 if let Some(summary) = self.editors[active].completion_summary() {
                     ui.separator();
-                    ui.label(RichText::new(summary).monospace().color(ACCENT));
+                    ui.label(RichText::new(summary).monospace().color(theme::accent()));
                 }
                 // EDT-007: the matching-bracket state is also stated in the pane header, so both
                 // the matched pair and the distinct unmatched state are readable (and visible in
@@ -2350,9 +2422,9 @@ impl WorkbenchApp {
                 if let Some(status) = self.editors[active].bracket_status() {
                     ui.separator();
                     let color = if status.starts_with("Unmatched") {
-                        ERROR
+                        theme::error()
                     } else {
-                        ACCENT
+                        theme::accent()
                     };
                     ui.label(RichText::new(status).monospace().color(color))
                         .on_hover_text(
@@ -2364,7 +2436,7 @@ impl WorkbenchApp {
                 // same signature and active parameter for accessibility clients and UIA captures.
                 if let Some(status) = self.editors[active].signature_summary() {
                     ui.separator();
-                    ui.label(RichText::new(status).monospace().color(ACCENT))
+                    ui.label(RichText::new(status).monospace().color(theme::accent()))
                         .on_hover_text(
                             "The engine-registered signature of the call the caret is inside; \
                              the active parameter is the argument being typed",
@@ -2375,9 +2447,9 @@ impl WorkbenchApp {
                 if let Some(status) = self.editors[active].find_summary() {
                     ui.separator();
                     let color = if status.contains("invalid regex") {
-                        ERROR
+                        theme::error()
                     } else {
-                        ACCENT
+                        theme::accent()
                     };
                     ui.label(RichText::new(status).monospace().color(color));
                 }
@@ -2408,7 +2480,7 @@ impl WorkbenchApp {
                     Align2::CENTER_CENTER,
                     "This document is empty. Type a Lovelace script.",
                     FontId::proportional(13.0),
-                    DIM,
+                    theme::dim(),
                 );
             }
         });
@@ -2436,16 +2508,16 @@ impl WorkbenchApp {
                 .max_rect(rect)
                 .layout(Layout::top_down(Align::LEFT)),
             |ui| {
-                ui.painter().rect_filled(rect, 3.0, HEADER_BG);
+                ui.painter().rect_filled(rect, 3.0, theme::header_bg());
                 ui.painter().rect_stroke(
                     rect,
                     3.0,
-                    Stroke::new(1.0, BORDER),
+                    Stroke::new(1.0, theme::border()),
                     StrokeKind::Inside,
                 );
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Find").small().color(DIM));
+                    ui.label(RichText::new("Find").small().color(theme::dim()));
                     let find = &mut self.editors[active].find;
                     let query = ui
                         .add(
@@ -2509,13 +2581,13 @@ impl WorkbenchApp {
                                 RichText::new(format!("Invalid regex: {short}"))
                                     .monospace()
                                     .small()
-                                    .color(ERROR),
+                                    .color(theme::error()),
                             )
                             .on_hover_text(reason);
                         }
                         None => {
                             let text = find.count_text().unwrap_or_default();
-                            ui.label(RichText::new(text).monospace().small().color(DIM));
+                            ui.label(RichText::new(text).monospace().small().color(theme::dim()));
                         }
                     }
                     let previous_button = ui
@@ -2541,7 +2613,7 @@ impl WorkbenchApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Replace").small().color(DIM));
+                    ui.label(RichText::new("Replace").small().color(theme::dim()));
                     let find = &mut self.editors[active].find;
                     let replacement = ui
                         .add(
@@ -2645,16 +2717,16 @@ impl WorkbenchApp {
                 ui.label(
                     RichText::new(format!("{:.0}%", self.plot.zoom_percent()))
                         .monospace()
-                        .color(DIM),
+                        .color(theme::dim()),
                 )
                 .on_hover_text("Zoom as a percentage of natural size");
                 ui.separator();
                 match &plot_title {
                     Some(title) => {
-                        ui.label(RichText::new(title).color(ACCENT));
+                        ui.label(RichText::new(title).color(theme::accent()));
                     }
                     None => {
-                        ui.label(RichText::new("no engine plot").color(DIM));
+                        ui.label(RichText::new("no engine plot").color(theme::dim()));
                     }
                 }
                 ui.separator();
@@ -2676,9 +2748,9 @@ impl WorkbenchApp {
                 }
                 if let Some((status, error)) = &self.plot_export_status {
                     ui.label(RichText::new(status).small().color(if *error {
-                        ERROR
+                        theme::error()
                     } else {
-                        ACCENT
+                        theme::accent()
                     }));
                 }
             });
@@ -2699,7 +2771,7 @@ impl WorkbenchApp {
                     .max_rect(Rect::from_min_size(body.min, vec2(body.width(), 18.0)))
                     .layout(Layout::left_to_right(Align::Center)),
                 |ui| {
-                    ui.label(RichText::new(info).small().color(DIM));
+                    ui.label(RichText::new(info).small().color(theme::dim()));
                 },
             );
             let canvas = Rect::from_min_max(pos2(body.left(), body.top() + 18.0), body.max);
@@ -2803,14 +2875,14 @@ impl WorkbenchApp {
             .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(RichText::new("Scale").color(DIM));
+                ui.label(RichText::new("Scale").color(theme::dim()));
                 ui.horizontal(|ui| {
                     for scale in [1.0f32, 2.0, 4.0] {
                         let selected = (options.scale - scale).abs() < f32::EPSILON;
                         let label = format!("{scale:.0}x");
                         if ui
                             .add(egui::Button::new(if selected {
-                                RichText::new(label).strong().color(ACCENT)
+                                RichText::new(label).strong().color(theme::accent())
                             } else {
                                 RichText::new(label)
                             }))
@@ -2820,14 +2892,14 @@ impl WorkbenchApp {
                         }
                     }
                 });
-                ui.label(RichText::new("Background").color(DIM));
+                ui.label(RichText::new("Background").color(theme::dim()));
                 ui.horizontal(|ui| {
                     for background in [PngBackground::Opaque, PngBackground::Transparent] {
                         let selected = options.background == background;
                         let label = background.label();
                         if ui
                             .add(egui::Button::new(if selected {
-                                RichText::new(label).strong().color(ACCENT)
+                                RichText::new(label).strong().color(theme::accent())
                             } else {
                                 RichText::new(label)
                             }))
@@ -2845,7 +2917,7 @@ impl WorkbenchApp {
                         options.scale,
                         options.background.label()
                     ))
-                    .color(DIM),
+                    .color(theme::dim()),
                 );
                 ui.horizontal(|ui| {
                     if ui.button("Save PNG...").clicked() {
@@ -2927,7 +2999,7 @@ impl WorkbenchApp {
                 .labelled_by(label.id);
                 ui.label(
                     RichText::new(format!("{variable_count} vars · {function_count} funcs"))
-                        .color(DIM),
+                        .color(theme::dim()),
                 )
                 .on_hover_text(format!(
                     "{variable_count} variables · {function_count} functions"
@@ -2959,7 +3031,7 @@ impl WorkbenchApp {
                             inspector_open = true;
                         }
                         workspace_view_tabs[1] = Some(inspector_tab.rect);
-                        ui.label(RichText::new(&state_line).small().color(ACCENT));
+                        ui.label(RichText::new(&state_line).small().color(theme::accent()));
                     });
                     ui.add_space(4.0);
                     if inspector_open {
@@ -3002,7 +3074,7 @@ impl WorkbenchApp {
                                 ui.label(
                                     RichText::new(format!("VARIABLES · {variable_count}"))
                                         .small()
-                                        .color(DIM),
+                                        .color(theme::dim()),
                                 );
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     let can_clear =
@@ -3066,13 +3138,13 @@ impl WorkbenchApp {
                                         widths[0],
                                         RichText::new(cell_text(&row.name))
                                             .monospace()
-                                            .color(ACCENT),
+                                            .color(theme::accent()),
                                         &row.name,
                                     );
                                     table_cell(
                                         ui,
                                         widths[1],
-                                        RichText::new(cell_text(&row.kind)).monospace().color(DIM),
+                                        RichText::new(cell_text(&row.kind)).monospace().color(theme::dim()),
                                         &row.kind,
                                     );
                                     // WKS-001: a large display value is cut in the cell; the
@@ -3080,7 +3152,7 @@ impl WorkbenchApp {
                                     table_cell(
                                         ui,
                                         widths[2],
-                                        RichText::new(row.display_cell()).monospace().color(TEXT),
+                                        RichText::new(row.display_cell()).monospace().color(theme::text()),
                                         &row.display,
                                     );
                                 });
@@ -3093,7 +3165,7 @@ impl WorkbenchApp {
                                 } else {
                                     "No variables match the filter."
                                 };
-                                ui.label(RichText::new(message).color(DIM));
+                                ui.label(RichText::new(message).color(theme::dim()));
                             }
 
                             ui.add_space(8.0);
@@ -3101,7 +3173,7 @@ impl WorkbenchApp {
                             ui.label(
                                 RichText::new(format!("FUNCTIONS · {function_count}"))
                                     .small()
-                                    .color(DIM),
+                                    .color(theme::dim()),
                             );
                             let widths = function_column_widths(ui.available_width());
                             ui.horizontal(|ui| {
@@ -3146,7 +3218,7 @@ impl WorkbenchApp {
                                         widths[0],
                                         RichText::new(cell_text(&row.name))
                                             .monospace()
-                                            .color(ACCENT),
+                                            .color(theme::accent()),
                                         &row.name,
                                     );
                                     let parameters = row.parameters_text();
@@ -3155,7 +3227,7 @@ impl WorkbenchApp {
                                         widths[1],
                                         RichText::new(cell_text(&parameters))
                                             .monospace()
-                                            .color(TEXT),
+                                            .color(theme::text()),
                                         &parameters,
                                     );
                                     let origin_hover = match &row.plugin {
@@ -3187,7 +3259,7 @@ impl WorkbenchApp {
                                                     egui::Label::new(
                                                         RichText::new(summary_cell)
                                                             .small()
-                                                            .color(DIM),
+                                                            .color(theme::dim()),
                                                     )
                                                     .truncate(),
                                                 )
@@ -3205,7 +3277,7 @@ impl WorkbenchApp {
                                 } else {
                                     "No functions match the filter."
                                 };
-                                ui.label(RichText::new(message).color(DIM));
+                                ui.label(RichText::new(message).color(theme::dim()));
                             }
                         });
                     }
@@ -3234,7 +3306,7 @@ impl WorkbenchApp {
                         "run log · caret Ln {line}, Col {column} · engine {}",
                         self.workbench.engine_name()
                     ))
-                    .color(DIM),
+                    .color(theme::dim()),
                 )
                 .on_hover_text(format!("Log kinds: {legend}"));
             });
@@ -3248,10 +3320,10 @@ impl WorkbenchApp {
                     self.quick_eval_row(ui);
                     let logs = &view.logs;
                     if logs.is_empty() {
-                        ui.label(RichText::new("No log entries yet. Run the document.").color(DIM));
+                        ui.label(RichText::new("No log entries yet. Run the document.").color(theme::dim()));
                         // The legend names every kind and marker before the first line exists,
                         // so the vocabulary is discoverable even in an empty pane.
-                        ui.label(RichText::new(legend.clone()).small().color(DIM));
+                        ui.label(RichText::new(legend.clone()).small().color(theme::dim()));
                         return;
                     }
                     egui::ScrollArea::vertical()
@@ -3262,13 +3334,13 @@ impl WorkbenchApp {
                                 // LOG-002: the marker is part of the line's rendered model, so
                                 // the pane paints exactly the string the unit tests pin.
                                 let color = match entry.kind {
-                                    LogKind::Echo => LOG_ECHO,
-                                    LogKind::Stdout => TEXT,
-                                    LogKind::Result => ACCENT,
-                                    LogKind::Diagnostic => ERROR,
-                                    LogKind::Timing => WARN,
-                                    LogKind::Progress => LOG_PROGRESS,
-                                    LogKind::Info => DIM,
+                                    LogKind::Echo => theme::log_echo(),
+                                    LogKind::Stdout => theme::text(),
+                                    LogKind::Result => theme::accent(),
+                                    LogKind::Diagnostic => theme::error(),
+                                    LogKind::Timing => theme::warning(),
+                                    LogKind::Progress => theme::progress(),
+                                    LogKind::Info => theme::dim(),
                                 };
                                 ui.label(RichText::new(entry.render()).monospace().color(color));
                             }
@@ -3287,7 +3359,7 @@ impl WorkbenchApp {
         let mut submit = false;
         let mut navigate: i8 = 0;
         ui.horizontal(|ui| {
-            let label = ui.label(RichText::new("Quick eval").strong().color(TEXT));
+            let label = ui.label(RichText::new("Quick eval").strong().color(theme::text()));
             let id = quick_eval_id();
             let response = ui
                 .add(
@@ -3333,12 +3405,12 @@ impl WorkbenchApp {
                 submit = true;
             }
 
-            ui.label(RichText::new("Ctrl+Shift+E").small().color(DIM))
+            ui.label(RichText::new("Ctrl+Shift+E").small().color(theme::dim()))
                 .on_hover_text("Focus quick eval");
             ui.label(
                 RichText::new("Enter runs · Esc leaves the field")
                     .small()
-                    .color(DIM),
+                    .color(theme::dim()),
             );
         });
 
@@ -3393,10 +3465,10 @@ fn paint_inspector(
     ui.label(
         RichText::new("INSPECTOR · last committed result")
             .small()
-            .color(DIM),
+            .color(theme::dim()),
     );
     if !view.has_snapshot {
-        ui.label(RichText::new("No run has published a result yet.").color(DIM));
+        ui.label(RichText::new("No run has published a result yet.").color(theme::dim()));
         return;
     }
     let Some(payload) = view.result_inspection.as_ref() else {
@@ -3407,7 +3479,7 @@ fn paint_inspector(
                  inspect.",
             )
             .small()
-            .color(WARN),
+            .color(theme::warning()),
         );
         return;
     };
@@ -3421,7 +3493,7 @@ fn paint_inspector(
                  no section is shown.",
             )
             .small()
-            .color(WARN),
+            .color(theme::warning()),
         );
         return;
     };
@@ -3438,7 +3510,7 @@ fn paint_inspector(
             subject.kind, subject.path
         ))
         .monospace()
-        .color(ACCENT),
+        .color(theme::accent()),
     );
 
     paint_inspector_heading(ui, "Pretty", "");
@@ -3481,7 +3553,7 @@ fn paint_inspector(
                         "No active assumptions constrain the free symbols of this result.",
                     )
                     .small()
-                    .color(DIM),
+                    .color(theme::dim()),
                 );
             }
             for assumption in assumptions {
@@ -3508,7 +3580,7 @@ fn paint_inspector(
                          was already in its target form.",
                     )
                     .small()
-                    .color(DIM),
+                    .color(theme::dim()),
                 );
             }
             for (index, step) in steps.iter().enumerate() {
@@ -3516,37 +3588,37 @@ fn paint_inspector(
                 ui.label(
                     RichText::new(format!("{}. {}", index + 1, step.rule_id))
                         .monospace()
-                        .color(ACCENT),
+                        .color(theme::accent()),
                 );
                 ui.label(
                     RichText::new(format!("classification  {}", step.classification))
                         .small()
-                        .color(DIM),
+                        .color(theme::dim()),
                 );
                 ui.label(
                     RichText::new(format!("before  {}", step.before))
                         .monospace()
-                        .color(TEXT),
+                        .color(theme::text()),
                 );
                 if !step.before_canonical.is_empty() {
                     ui.label(
                         RichText::new(format!("canonical  {}", step.before_canonical))
                             .small()
                             .monospace()
-                            .color(DIM),
+                            .color(theme::dim()),
                     );
                 }
                 ui.label(
                     RichText::new(format!("after   {}", step.after))
                         .monospace()
-                        .color(TEXT),
+                        .color(theme::text()),
                 );
                 if !step.after_canonical.is_empty() {
                     ui.label(
                         RichText::new(format!("canonical  {}", step.after_canonical))
                             .small()
                             .monospace()
-                            .color(DIM),
+                            .color(theme::dim()),
                     );
                 }
                 if step.conditions.is_empty() {
@@ -3554,10 +3626,10 @@ fn paint_inspector(
                         RichText::new("requires  none")
                             .small()
                             .monospace()
-                            .color(DIM),
+                            .color(theme::dim()),
                     );
                 } else {
-                    ui.label(RichText::new("requires").small().color(DIM));
+                    ui.label(RichText::new("requires").small().color(theme::dim()));
                     for condition in &step.conditions {
                         paint_inspector_assumption(ui, condition);
                     }
@@ -3593,7 +3665,7 @@ fn paint_inspector(
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.add(
-                        egui::Label::new(RichText::new(&mathir.text).monospace().color(TEXT))
+                        egui::Label::new(RichText::new(&mathir.text).monospace().color(theme::text()))
                             .selectable(true)
                             .extend(),
                     );
@@ -3618,23 +3690,23 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
 fn paint_inspector_heading(ui: &mut Ui, title: &str, detail: &str) {
     ui.add_space(8.0);
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(title).small().color(DIM));
+        ui.label(RichText::new(title).small().color(theme::dim()));
         if !detail.is_empty() {
-            ui.label(RichText::new(detail).small().color(ACCENT));
+            ui.label(RichText::new(detail).small().color(theme::accent()));
         }
     });
 }
 
 fn paint_inspector_text(ui: &mut Ui, text: &str) {
     ui.add(
-        egui::Label::new(RichText::new(text).monospace().color(TEXT))
+        egui::Label::new(RichText::new(text).monospace().color(theme::text()))
             .selectable(true)
             .wrap(),
     );
 }
 
 fn paint_inspector_reason(ui: &mut Ui, reason: &str) {
-    ui.label(RichText::new(reason).small().color(WARN));
+    ui.label(RichText::new(reason).small().color(theme::warning()));
 }
 
 fn paint_inspector_assumption(ui: &mut Ui, assumption: &crate::inspector::Assumption) {
@@ -3643,16 +3715,16 @@ fn paint_inspector_assumption(ui: &mut Ui, assumption: &crate::inspector::Assump
         ui.label(
             RichText::new(format!("[{}]", assumption.source))
                 .small()
-                .color(DIM),
+                .color(theme::dim()),
         );
-        ui.label(RichText::new(assumption.type_label()).small().color(ACCENT));
-        ui.label(RichText::new(&assumption.label).monospace().color(TEXT));
+        ui.label(RichText::new(assumption.type_label()).small().color(theme::accent()));
+        ui.label(RichText::new(&assumption.label).monospace().color(theme::text()));
     });
     if let Some(canonical) = &assumption.canonical {
         ui.horizontal_wrapped(|ui| {
             ui.add_space(12.0);
-            ui.label(RichText::new("canonical").small().color(DIM));
-            ui.label(RichText::new(canonical).small().monospace().color(DIM));
+            ui.label(RichText::new("canonical").small().color(theme::dim()));
+            ui.label(RichText::new(canonical).small().monospace().color(theme::dim()));
         });
     }
 }
@@ -3671,14 +3743,14 @@ fn paint_inspector_node(
     if node.children.is_empty() {
         ui.horizontal_wrapped(|ui| {
             ui.add_space(8.0);
-            ui.label(RichText::new(label).monospace().color(TEXT));
+            ui.label(RichText::new(label).monospace().color(theme::text()));
         });
         return;
     }
     let visible = format!("{} {}", expansion.glyph(path), label);
     let response = ui
         .push_id(path, |ui| {
-            ui.add(egui::Button::new(RichText::new(visible).monospace().color(ACCENT)).frame(false))
+            ui.add(egui::Button::new(RichText::new(visible).monospace().color(theme::accent())).frame(false))
         })
         .inner;
     if response.clicked() {
@@ -3729,10 +3801,10 @@ fn paint_result_section(
     ui.label(
         RichText::new("RESULT · structured projection")
             .small()
-            .color(DIM),
+            .color(theme::dim()),
     );
     if !view.has_snapshot {
-        ui.label(RichText::new("No run has published a result yet.").color(DIM));
+        ui.label(RichText::new("No run has published a result yet.").color(theme::dim()));
         return;
     }
     let projection = ResultProjection::new(view.result.clone(), view.result_structured.clone());
@@ -3755,7 +3827,7 @@ fn paint_result_section(
                 RichText::new(format!("display: {caption}"))
                     .small()
                     .monospace()
-                    .color(DIM),
+                    .color(theme::dim()),
             )
             .on_hover_text(full);
             paint_structured_node(ui, &tree, "result", expansion, toggles);
@@ -3767,7 +3839,7 @@ fn paint_result_section(
                      text is available.",
                 )
                 .small()
-                .color(DIM),
+                .color(theme::dim()),
             );
         }
     }
@@ -3792,7 +3864,7 @@ fn paint_toggle(
     let visible = expansion.header_text(path, label);
     let response = ui
         .push_id(path, |ui| {
-            ui.add(egui::Button::new(RichText::new(visible).monospace().color(ACCENT)).frame(false))
+            ui.add(egui::Button::new(RichText::new(visible).monospace().color(theme::accent())).frame(false))
         })
         .inner;
     if response.clicked() {
@@ -3861,17 +3933,17 @@ fn paint_node_body(
 /// One scalar row: the projection kind, the value, then the remaining published fields.
 fn paint_scalar(ui: &mut Ui, scalar: &crate::results_tree::ScalarNode) {
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(&scalar.kind).monospace().color(DIM));
-        ui.label(RichText::new(&scalar.value).monospace().color(TEXT));
+        ui.label(RichText::new(&scalar.kind).monospace().color(theme::dim()));
+        ui.label(RichText::new(&scalar.value).monospace().color(theme::text()));
         for (key, value) in &scalar.details {
-            ui.label(RichText::new(format!("{key}={value}")).small().color(DIM));
+            ui.label(RichText::new(format!("{key}={value}")).small().color(theme::dim()));
         }
     });
 }
 
 /// The absent value, painted where a node would be.
 fn paint_absent(ui: &mut Ui) {
-    ui.label(RichText::new("Null - no value").monospace().color(DIM));
+    ui.label(RichText::new("Null - no value").monospace().color(theme::dim()));
 }
 
 /// Paints one matrix cell. A scalar (the common case) is compact on the cell's row; a symbolic
@@ -3888,7 +3960,7 @@ fn paint_cell(
     match node {
         StructuredNode::Scalar(scalar) => paint_scalar(ui, scalar),
         StructuredNode::Null => {
-            ui.label(RichText::new("Null").monospace().color(DIM));
+            ui.label(RichText::new("Null").monospace().color(theme::dim()));
         }
         other => {
             let label = format!("[{column}] {}", other.headline());
@@ -3907,7 +3979,7 @@ fn paint_symbolic_body(ui: &mut Ui, symbolic: &crate::results_tree::SymbolicNode
         egui::Label::new(
             RichText::new(format!("pretty     {}", symbolic.pretty))
                 .monospace()
-                .color(TEXT),
+                .color(theme::text()),
         )
         .wrap(),
     );
@@ -3915,7 +3987,7 @@ fn paint_symbolic_body(ui: &mut Ui, symbolic: &crate::results_tree::SymbolicNode
         egui::Label::new(
             RichText::new(format!("canonical  {}", symbolic.canonical))
                 .monospace()
-                .color(TEXT),
+                .color(theme::text()),
         )
         .wrap(),
     );
@@ -3923,32 +3995,32 @@ fn paint_symbolic_body(ui: &mut Ui, symbolic: &crate::results_tree::SymbolicNode
         ui.label(
             RichText::new(format!("domain     {domain}"))
                 .small()
-                .color(DIM),
+                .color(theme::dim()),
         );
     }
     if !symbolic.free_symbols.is_empty() {
         ui.label(
             RichText::new(format!("free       {}", symbolic.free_symbols.join(", ")))
                 .small()
-                .color(DIM),
+                .color(theme::dim()),
         );
     }
     if let Some(count) = &symbolic.node_count {
         ui.label(
             RichText::new(format!("nodes      {count}"))
                 .small()
-                .color(DIM),
+                .color(theme::dim()),
         );
     }
     if symbolic.truncated {
         ui.label(
             RichText::new("this rendering was shortened by a print budget")
                 .small()
-                .color(WARN),
+                .color(theme::warning()),
         );
     }
     for (key, value) in &symbolic.details {
-        ui.label(RichText::new(format!("{key}={value}")).small().color(DIM));
+        ui.label(RichText::new(format!("{key}={value}")).small().color(theme::dim()));
     }
 }
 
@@ -4005,7 +4077,7 @@ fn paint_array_body(
         return;
     }
     if array.elements.is_empty() {
-        ui.label(RichText::new("empty").small().color(DIM));
+        ui.label(RichText::new("empty").small().color(theme::dim()));
         return;
     }
     for (index, element) in array.elements.iter().enumerate() {
@@ -4034,7 +4106,7 @@ fn paint_record_body(
     toggles: &mut Vec<(String, Rect)>,
 ) {
     if record.fields.is_empty() {
-        ui.label(RichText::new("no fields").small().color(DIM));
+        ui.label(RichText::new("no fields").small().color(theme::dim()));
         return;
     }
     for field in &record.fields {
@@ -4089,9 +4161,24 @@ fn table_cell(ui: &mut Ui, width: f32, text: RichText, full: &str) {
 /// definitions take the accent so the three rows are distinguishable at a glance.
 fn origin_color(origin: FunctionOrigin) -> Color32 {
     match origin {
-        FunctionOrigin::Builtin => DIM,
-        FunctionOrigin::Plugin => WARN,
-        FunctionOrigin::User => ACCENT,
+        FunctionOrigin::Builtin => theme::dim(),
+        FunctionOrigin::Plugin => theme::warning(),
+        FunctionOrigin::User => theme::accent(),
+    }
+}
+
+/// VIS-002: the semantic colour of the status strip's run-state text.
+///
+/// Every branch is a theme token, so the status strip carries the positive/error/warning/progress
+/// semantic roles in both themes instead of one fixed accent colour.
+fn status_state_color(state: crate::run_state::RunState) -> Color32 {
+    use crate::run_state::RunState;
+    match state {
+        RunState::Idle => theme::accent(),
+        RunState::Queued | RunState::Running | RunState::Cancelling => theme::progress(),
+        RunState::Finished => theme::positive(),
+        RunState::Failed => theme::error(),
+        RunState::Cancelled | RunState::Stale => theme::warning(),
     }
 }
 
@@ -4174,11 +4261,11 @@ fn with_pane<R>(
             .accessibility_role(egui::Role::Pane)
             .accessibility_label(title),
         |ui| {
-            ui.painter().rect_filled(rect, 4.0, PANE_BG);
+            ui.painter().rect_filled(rect, 4.0, theme::panel_bg());
             ui.painter()
-                .rect_stroke(rect, 4.0, Stroke::new(1.0, BORDER), StrokeKind::Inside);
+                .rect_stroke(rect, 4.0, Stroke::new(1.0, theme::border()), StrokeKind::Inside);
             let header = Rect::from_min_size(rect.min, vec2(rect.width(), 24.0));
-            ui.painter().rect_filled(header, 4.0, HEADER_BG);
+            ui.painter().rect_filled(header, 4.0, theme::header_bg());
             let body = Rect::from_min_max(
                 pos2(rect.left() + 1.0, header.bottom() + 1.0),
                 pos2(rect.right() - 1.0, rect.bottom() - 1.0),
@@ -4198,14 +4285,14 @@ fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &
     let focused = response.has_focus();
     let hot = response.hovered() || response.dragged() || focused;
     ui.painter()
-        .rect_filled(rect, 0.0, if hot { SPLIT_HOT } else { SPLIT_BG });
+        .rect_filled(rect, 0.0, if hot { theme::splitter_hot() } else { theme::splitter_bg() });
     let grip = if horizontal_axis {
         Rect::from_center_size(rect.center(), vec2(2.0, rect.height()))
     } else {
         Rect::from_center_size(rect.center(), vec2(rect.width(), 2.0))
     };
     ui.painter()
-        .rect_filled(grip, 1.0, if hot { ACCENT } else { BORDER });
+        .rect_filled(grip, 1.0, if hot { theme::accent() } else { theme::control_border() });
 
     if hot {
         ui.ctx().set_cursor_icon(if horizontal_axis {
@@ -4281,7 +4368,9 @@ pub fn run(initial_path: Option<PathBuf>) -> i32 {
         "Lovelace Desktop",
         options,
         Box::new(move |creation| {
-            creation.egui_ctx.set_visuals(egui::Visuals::dark());
+            // VIS-002: the dark token set is the shipped default. A persisted light preference
+            // is applied by the first frame's `ui_root` before any pane paints.
+            theme::apply(&creation.egui_ctx, theme::ThemeId::Dark);
             Ok(Box::new(WorkbenchApp::new(initial_path)))
         }),
     ) {
@@ -4489,6 +4578,129 @@ mod tests {
                 }],
             );
         }
+    }
+
+    /// VIS-002: clicking the toolbar theme control switches the whole window's token set at
+    /// runtime without touching the document, its caret, its revision, its selection or the
+    /// focused widget, and the next pass paints with egui visuals derived from the new tokens.
+    #[test]
+    fn the_theme_toggle_switches_at_runtime_and_preserves_the_document_and_focus() {
+        let mut app = app_with_source("value: 41 + 1\nother: value * 2", 0, 13);
+        let ctx = egui::Context::default();
+        let screen = vec2(1600.0, 1000.0);
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        // A real edit before the switch makes the preserved state non-trivial: a dirty buffer,
+        // a moved caret and an editor that owns focus.
+        frame(&ctx, &mut app, vec![egui::Event::Text("7".to_string())]);
+        // A non-empty selection is part of "document state": the caret stays after the typed
+        // character and the selection anchor stays at column 8 of line 1.
+        app.editors[0].selection = Some((0, 8));
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        let before_source = app.workbench.documents()[0].source.clone();
+        let before_caret = app.editors[0].line_col_1based();
+        let before_selection = app.editors[0].selection;
+        let before_focus = ctx.memory(|memory| memory.focused());
+        let before_revision = app.workbench.documents()[0].revision;
+        let before_dirty = app.workbench.documents()[0].dirty();
+        assert_eq!(app.theme, theme::ThemeId::Dark, "dark is the shipped default");
+        assert_eq!(before_focus, Some(surface_id()), "the editor owns focus");
+        assert!(app.workbench.documents()[0].source.contains("41 + 17"));
+        assert_eq!(
+            ctx.global_style().visuals.panel_fill,
+            theme::tokens_for(theme::ThemeId::Dark).app_bg,
+            "the first pass must already be token-themed"
+        );
+
+        let button = app
+            .theme_button
+            .expect("the toolbar must paint the theme control");
+        assert!(
+            Rect::from_min_size(pos2(0.0, 0.0), screen).contains_rect(button),
+            "the theme control is off-screen: {button:?}"
+        );
+        pointer_click(&ctx, &mut app, button.center());
+
+        assert_eq!(app.theme, theme::ThemeId::Light, "the toggle switched");
+        assert_eq!(app.settings.theme, theme::ThemeId::Light, "the choice persists");
+        assert_eq!(
+            app.workbench.documents()[0].source, before_source,
+            "the document text must survive the theme switch"
+        );
+        assert_eq!(
+            app.editors[0].line_col_1based(),
+            before_caret,
+            "the caret must survive the theme switch"
+        );
+        assert_eq!(
+            app.editors[0].selection, before_selection,
+            "the text selection must survive the theme switch"
+        );
+        assert_eq!(
+            app.workbench.documents()[0].revision, before_revision,
+            "the theme switch must not advance the document revision"
+        );
+        assert_eq!(
+            app.workbench.documents()[0].dirty(),
+            before_dirty,
+            "the theme switch must not change the dirty state"
+        );
+
+        // One more pass settles egui's context style; both the explicit paint tokens and the
+        // widget visuals must now be the light set. The same pass re-focuses the editor: the
+        // release click moved focus to the toolbar, and the toggle handed it back.
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            before_focus,
+            "keyboard focus must survive the theme switch"
+        );
+        let light = theme::tokens_for(theme::ThemeId::Light);
+        assert_eq!(ctx.global_style().visuals.panel_fill, light.app_bg);
+        assert_eq!(ctx.global_style().visuals.window_fill, light.window_bg);
+        assert_eq!(ctx.global_style().visuals.widgets.inactive.bg_fill, light.button_bg);
+        assert!(!ctx.global_style().visuals.dark_mode, "light text transfer function");
+
+        // Switching back restores the dark tokens and still preserves the buffer and focus.
+        let button = app.theme_button.expect("still painted");
+        pointer_click(&ctx, &mut app, button.center());
+        frame_sized(&ctx, &mut app, screen, Vec::new());
+        assert_eq!(app.theme, theme::ThemeId::Dark);
+        assert_eq!(app.workbench.documents()[0].source, before_source);
+        assert_eq!(app.editors[0].line_col_1based(), before_caret);
+        assert_eq!(app.editors[0].selection, before_selection);
+        assert_eq!(ctx.memory(|memory| memory.focused()), before_focus);
+        assert_eq!(
+            ctx.global_style().visuals.panel_fill,
+            theme::tokens_for(theme::ThemeId::Dark).app_bg
+        );
+    }
+
+    /// VIS-002: the theme control must be visible in the shipped 1280x800 window, not only in
+    /// the 1600x1000 capture frame.
+    #[test]
+    fn the_theme_control_is_inside_the_default_window() {
+        let mut app = WorkbenchApp::with_workbench(slow_workbench());
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let button = app.theme_button.expect("the theme control is painted");
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 800.0));
+        assert!(
+            screen.contains_rect(button),
+            "the theme control is clipped at the default window size: {button:?}"
+        );
+    }
+
+    /// VIS-002: the status strip paints each run state with its semantic token.
+    #[test]
+    fn the_status_strip_uses_the_semantic_status_tokens() {
+        use crate::run_state::RunState;
+        frame(&egui::Context::default(), &mut app_with_source("1", 0, 0), Vec::new());
+        let dark = theme::tokens_for(theme::ThemeId::Dark);
+        assert_eq!(status_state_color(RunState::Finished), dark.positive);
+        assert_eq!(status_state_color(RunState::Failed), dark.error);
+        assert_eq!(status_state_color(RunState::Running), dark.progress);
+        assert_eq!(status_state_color(RunState::Stale), dark.warning);
+        assert_eq!(status_state_color(RunState::Idle), dark.accent);
     }
 
     #[test]
