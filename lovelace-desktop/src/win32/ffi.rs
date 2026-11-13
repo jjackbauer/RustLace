@@ -500,6 +500,12 @@ unsafe extern "system" {
     pub fn GetForegroundWindow() -> HWND;
     /// Returns the thread that owns a window and optionally its process id.
     pub fn GetWindowThreadProcessId(hwnd: HWND, process_id: *mut u32) -> u32;
+    /// Returns the system's DPI (96 is 100% scale).
+    pub fn GetDpiForSystem() -> u32;
+    /// Returns the DPI of the monitor the window is on.
+    pub fn GetDpiForWindow(hwnd: HWND) -> u32;
+    /// Returns a system metric. `SM_CMONITORS` (80) is the number of display monitors.
+    pub fn GetSystemMetrics(index: i32) -> i32;
     /// Creates an empty menu.
     pub fn CreateMenu() -> HMENU;
     /// Creates an empty popup menu.
@@ -1372,4 +1378,19 @@ pub fn foreground_window_of_this_process() -> HWND {
 /// A stock object index for the default GUI font, for callers that need it.
 pub const fn default_gui_font() -> isize {
     DEFAULT_GUI_FONT as isize
+}
+
+/// PLF-010: this display's DPI and monitor count, read from the OS that will paint the window.
+///
+/// `GetDpiForSystem` returns the system DPI (96 = 100%, 120 = 125%, 144 = 150%, 192 = 200%) and
+/// `GetSystemMetrics(SM_CMONITORS)` the number of display monitors. Both are query-only and take no
+/// pointer, so the probe can report the real numbers rather than a table from a document.
+pub fn system_dpi_and_monitors() -> (u32, i32) {
+    // SAFETY: both functions are parameterless/query-only Win32 calls; they read the display
+    // configuration and write nothing.
+    unsafe {
+        let dpi = GetDpiForSystem();
+        let monitors = GetSystemMetrics(80); // SM_CMONITORS
+        (if dpi == 0 { 96 } else { dpi }, monitors)
+    }
 }

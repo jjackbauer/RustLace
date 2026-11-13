@@ -4,12 +4,14 @@
 //! application-scoped recovery directory, keyed by the document's stable identity:
 //!
 //! ```text
-//! LOVELACE-RECOVERY 1
+//! LOVELACE-RECOVERY 2
 //! id: 7
 //! revision: 3
 //! title: notes.lv
 //! path: C:\scripts\notes.lv
 //! bom: 0
+//! precision: 30
+//! glyphs: 0
 //! caret: 4:2
 //! selection: 4:2-4:5
 //! mtime_unix_nanos: 1763000000000000000
@@ -48,7 +50,11 @@ use crate::workbench::WorkbenchDocument;
 /// First line of every record: the magic bytes and the record schema number.
 pub const MAGIC: &str = "LOVELACE-RECOVERY";
 /// The record schema version this build writes and reads.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// DOC-014: version 2 adds the per-document display precision and ASCII/Unicode notation
+/// (DOC-009). A version 1 record is still read — its missing fields take the shipped defaults —
+/// and [`scan`] reports that migration as a warning instead of silently changing the tab.
+pub const SCHEMA_VERSION: u32 = 2;
 /// Extension of a recovery record file.
 pub const RECORD_EXTENSION: &str = "lvrec";
 /// Prefix of the temporary file an atomic write renames from (`doc-7.lvrec.tmp-<pid>-<n>`).
@@ -75,6 +81,12 @@ pub struct RecoveryRecord {
     pub path: Option<PathBuf>,
     /// True when the document's file began with a UTF-8 byte-order mark.
     pub bom: bool,
+    /// DOC-009: the document's display precision when the record was written.
+    pub precision: usize,
+    /// DOC-009: the document's ASCII/Unicode notation when the record was written.
+    pub unicode_glyphs: bool,
+    /// The record schema the bytes were written with (or migrated from, on load).
+    pub schema_version: u32,
     /// Caret row and column, both 0-based.
     pub caret: (usize, usize),
     /// Selection anchor `(row, col)` and caret end `(row, col)`, when one was active.
@@ -96,6 +108,9 @@ impl RecoveryRecord {
             title: document.title.clone(),
             path: document.path.clone(),
             bom: document.bom,
+            precision: document.precision,
+            unicode_glyphs: document.unicode_glyphs,
+            schema_version: SCHEMA_VERSION,
             caret: document.caret,
             selection: document.selection,
             source_mtime: document.source_mtime,
@@ -131,6 +146,8 @@ impl RecoveryRecord {
             header.push_str(&format!("path: {}\n", path.display()));
         }
         header.push_str(&format!("bom: {}\n", u8::from(self.bom)));
+        header.push_str(&format!("precision: {}\n", self.precision));
+        header.push_str(&format!("glyphs: {}\n", u8::from(self.unicode_glyphs)));
         header.push_str(&format!("caret: {}:{}\n", self.caret.0, self.caret.1));
         if let Some(((anchor_row, anchor_col), (caret_row, caret_col))) = self.selection {
             header.push_str(&format!(
@@ -183,6 +200,8 @@ impl RecoveryRecord {
         let mut title: Option<String> = None;
         let mut path: Option<PathBuf> = None;
         let mut bom = false;
+        let mut precision = crate::engine::DEFAULT_PRECISION;
+        let mut unicode_glyphs = false;
         let mut caret = (0usize, 0usize);
         let mut selection = None;
         let mut source_mtime = None;
@@ -216,6 +235,20 @@ impl RecoveryRecord {
                     }
                 }
                 "bom" => bom = matches!(value, "1" | "true"),
+                // DOC-009/DOC-014: schema 2 fields. A schema 1 record has no such line and keeps
+                // the shipped defaults, which is what the migration warning in `scan` names.
+                "precision" => {
+                    precision = value
+                        .parse::<usize>()
+                        .map(|value| {
+                            value.clamp(
+                                crate::settings::MIN_PRECISION,
+                                crate::settings::MAX_PRECISION,
+                            )
+                        })
+                        .unwrap_or(crate::engine::DEFAULT_PRECISION);
+                }
+                "glyphs" => unicode_glyphs = matches!(value, "1" | "true"),
                 "caret" => caret = parse_position(value)?,
                 "selection" => {
                     let (anchor, end) = value
@@ -265,6 +298,9 @@ impl RecoveryRecord {
             title,
             path,
             bom,
+            precision,
+            unicode_glyphs,
+            schema_version: version,
             caret,
             selection,
             source_mtime,
@@ -402,7 +438,21 @@ pub fn scan(root: &Path) -> RecoveryScan {
             continue;
         }
         match read_record(&path) {
-            Ok(record) => scan.records.push(record),
+            Ok(record) => {
+                // DOC-014: an older record is still usable, but it is upgraded deliberately and
+                // the launch says so: the tab it restores keeps the shipped precision/notation
+                // defaults because the record predates those fields.
+                if record.schema_version < SCHEMA_VERSION {
+                    scan.warnings.push(format!(
+                        "migrated recovery record {} from schema {} to schema {}: its missing \
+                         per-document precision and notation use the shipped defaults.",
+                        path.display(),
+                        record.schema_version,
+                        SCHEMA_VERSION
+                    ));
+                }
+                scan.records.push(record);
+            }
             Err(message) => {
                 // PERF-010: "warning/default/backup". The record is not used (default), the
                 // warning names it, and its bytes are copied aside before a later journal write
@@ -729,6 +779,9 @@ mod tests {
             title: "notes.lv".to_string(),
             path: Some(PathBuf::from(r"C:\scripts\notes.lv")),
             bom: true,
+            precision: 40,
+            unicode_glyphs: true,
+            schema_version: SCHEMA_VERSION,
             caret: (4, 2),
             selection: Some(((4, 2), (4, 5))),
             source_mtime: Some(UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
@@ -753,7 +806,7 @@ mod tests {
             "the body must be byte-identical to the buffer"
         );
         assert!(
-            bytes.starts_with(b"LOVELACE-RECOVERY 1\n"),
+            bytes.starts_with(b"LOVELACE-RECOVERY 2\n"),
             "the header starts with the magic and the schema"
         );
         assert!(
@@ -762,9 +815,50 @@ mod tests {
         );
     }
 
+    /// DOC-014: a record written by schema 1 is migrated, not refused. Its missing per-document
+    /// precision/notation take the shipped defaults, the buffer is recovered byte-exactly, and the
+    /// scan reports the migration as a warning (a corrupt record is the separate backup path).
     #[test]
-    fn a_record_without_a_path_or_selection_round_trips() {
-        let mut record = record();
+    fn a_schema_one_record_is_migrated_with_a_warning_and_its_buffer_survives() {
+        let directory = scratch("migrate-v1");
+        let v2 = String::from_utf8(record().to_bytes()).expect("the header is ASCII");
+        let v1 = v2
+            .replacen("LOVELACE-RECOVERY 2", "LOVELACE-RECOVERY 1", 1)
+            .replace("precision: 40\n", "")
+            .replace("glyphs: 1\n", "");
+        assert!(!v1.contains("precision:"), "the old record has no such field");
+        std::fs::write(record_path(&directory, 7), v1.as_bytes()).expect("write v1");
+
+        let parsed = read_record(&record_path(&directory, 7)).expect("a v1 record is readable");
+        assert_eq!(parsed.schema_version, 1);
+        assert_eq!(parsed.precision, crate::engine::DEFAULT_PRECISION);
+        assert!(!parsed.unicode_glyphs);
+        assert_eq!(
+            parsed.source, record().source,
+            "migration must not disturb the buffer bytes"
+        );
+
+        let scan = scan(&directory);
+        assert_eq!(scan.records.len(), 1, "the migrated record is offered");
+        assert_eq!(scan.records[0].source, record().source);
+        assert!(
+            scan.warnings
+                .iter()
+                .any(|warning| warning.contains("migrated recovery record")
+                    && warning.contains("doc-7.lvrec")
+                    && warning.contains("schema 1")),
+            "the migration is named: {:?}",
+            scan.warnings
+        );
+        assert!(
+            !corrupt_backup_path(&record_path(&directory, 7)).exists(),
+            "a migration is not corruption: no backup copy is needed"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_record_without_a_path_or_selection_round_trips() {        let mut record = record();
         record.path = None;
         record.selection = None;
         record.source_mtime = None;
@@ -892,7 +986,7 @@ mod tests {
         let mut bytes = record().to_bytes();
         let text = String::from_utf8(bytes.clone()).expect("header is ASCII");
         bytes = text
-            .replacen("LOVELACE-RECOVERY 1", "LOVELACE-RECOVERY 99", 1)
+            .replacen("LOVELACE-RECOVERY 2", "LOVELACE-RECOVERY 99", 1)
             .into_bytes();
         let error = RecoveryRecord::parse(&bytes).expect_err("a newer schema is refused");
         assert!(error.contains("newer than supported"), "{error}");

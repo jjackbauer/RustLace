@@ -58,6 +58,15 @@ b
 /// The tab title a document with no file yet carries.
 pub const UNTITLED_TITLE: &str = "untitled.lv";
 
+/// DOC-010: the sentence shown while a restored tab's engine state is reset.
+///
+/// A restart restores files, unsaved text and layout, but computed variables and functions cannot
+/// survive without being recomputed. Every restored document carries this note until its next run,
+/// so the empty Workspace pane says *why* it is empty instead of looking like a document that ran
+/// and produced nothing.
+pub const ENGINE_RESET_NOTICE: &str = "This tab's computed variables and functions were not \
+     restored by the restart; they stay reset until the document is run again.";
+
 /// The result of writing a document to disk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SaveOutcome {
@@ -212,6 +221,10 @@ struct RestoredDocument {
     title: String,
     /// File path, when the tab showed a file.
     path: Option<PathBuf>,
+    /// DOC-009: the tab's own display precision.
+    precision: usize,
+    /// DOC-009: the tab's own ASCII/Unicode notation.
+    unicode_glyphs: bool,
     /// The buffer text to show.
     source: String,
     /// The text that counts as saved, so [`WorkbenchDocument::dirty`] is meaningful immediately.
@@ -317,6 +330,17 @@ pub struct WorkbenchDocument {
     pub newline: NewlineStyle,
     /// DOC-002: true when the file began with a UTF-8 byte-order mark, which save restores.
     pub bom: bool,
+    /// DOC-009: the ASCII/Unicode mathematical notation this tab renders its values in.
+    ///
+    /// The preference is per document, not per window: two tabs can show the same engine value
+    /// in different notation, and selecting a tab switches the notation with it.
+    pub unicode_glyphs: bool,
+    /// DOC-010: the sentence the Workspace pane shows while this tab's engine state is reset.
+    ///
+    /// A restart restores the file, the unsaved text and the layout, but no computed variable or
+    /// function. This notice makes that reset explicit on the pane that would otherwise just look
+    /// empty; it is cleared by the next run, which recomputes the workspace.
+    pub engine_state_note: Option<String>,
     /// DOC-005: the file's modification time when it was opened or last saved.
     ///
     /// The recovery record carries it so a recovered buffer still names the version of the file
@@ -1031,8 +1055,13 @@ impl Workbench {
             Some(index) => index,
             None => {
                 let id = self.next_document_id();
-                self.docs
-                    .push(WorkbenchDocument::new(id, UNTITLED_TITLE, ""));
+                // DOC-009: a tab created by Open starts from the active tab's own settings.
+                let precision = self.docs[self.active].precision;
+                let unicode_glyphs = self.docs[self.active].unicode_glyphs;
+                let mut document = WorkbenchDocument::new(id, UNTITLED_TITLE, "");
+                document.precision = precision;
+                document.unicode_glyphs = unicode_glyphs;
+                self.docs.push(document);
                 self.docs.len() - 1
             }
         };
@@ -1075,6 +1104,9 @@ impl Workbench {
         doc.path = Some(path.to_path_buf());
         doc.source = loaded.text;
         doc.saved_source = doc.source.clone();
+        // Opening a file replaces the tab's content: a reset notice left by a previous restore no
+        // longer describes this document's engine state.
+        doc.engine_state_note = None;
         doc.newline = loaded.newline;
         doc.bom = loaded.bom;
         doc.source_mtime = file_mtime(path);
@@ -1108,9 +1140,12 @@ impl Workbench {
     pub fn new_document(&mut self) -> usize {
         let id = self.next_document_id();
         let title = self.next_untitled_title();
+        // DOC-009: a new tab starts from the active tab's own settings, not from a global value.
         let precision = self.docs[self.active].precision;
+        let unicode_glyphs = self.docs[self.active].unicode_glyphs;
         let mut document = WorkbenchDocument::new(id, &title, "");
         document.precision = precision;
+        document.unicode_glyphs = unicode_glyphs;
         self.docs.push(document);
         let index = self.docs.len() - 1;
         self.active = index;
@@ -1533,6 +1568,10 @@ impl Workbench {
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned()),
                     document_id: document.id.0,
+                    // DOC-009: precision and notation travel with the tab, so a restart cannot
+                    // give tab B the value tab A had.
+                    precision: document.precision,
+                    unicode_glyphs: document.unicode_glyphs,
                 })
                 .collect(),
             self.active,
@@ -1576,6 +1615,8 @@ impl Workbench {
                             id: DocumentId(tab.document_id),
                             title: file_name_of(&path),
                             path: Some(path.clone()),
+                            precision: tab.precision,
+                            unicode_glyphs: tab.unicode_glyphs,
                             source: loaded.text.clone(),
                             saved_source: loaded.text,
                             newline: Some(loaded.newline),
@@ -1692,6 +1733,11 @@ impl Workbench {
                 let document = &mut self.docs[index];
                 let was_active = document.state() != RunState::Idle;
                 document.source = record.source.clone();
+                // DOC-009: a recovery restores the tab's formatting along with its text.
+                document.precision = record
+                    .precision
+                    .clamp(MIN_PRECISION, MAX_PRECISION);
+                document.unicode_glyphs = record.unicode_glyphs;
                 document.caret = record.caret;
                 document.selection = record.selection;
                 document.source_mtime = record.source_mtime;
@@ -1713,6 +1759,9 @@ impl Workbench {
                 document.last_plot = None;
                 document.diagnostic = None;
                 document.diagnostic_revision = None;
+                // DOC-010: the recovered text has no computed workspace either; keep saying so
+                // until a run recomputes it.
+                document.engine_state_note = Some(ENGINE_RESET_NOTICE.to_string());
                 document.pending_logs.clear();
                 document.current_statement = None;
                 document.committed = 0;
@@ -1778,6 +1827,8 @@ impl Workbench {
             id,
             title: record.title.clone(),
             path: record.path.clone(),
+            precision: record.precision,
+            unicode_glyphs: record.unicode_glyphs,
             source: record.source.clone(),
             saved_source: disk_text.unwrap_or_default(),
             // The journal holds the buffer's own line endings, so the style is detected from it.
@@ -1807,6 +1858,12 @@ impl Workbench {
             (None, _) => DiskStatus::NotLocated,
         };
         document.path = restored.path;
+        // DOC-009: the tab's own precision and notation come back with its text.
+        document.precision = restored.precision.clamp(MIN_PRECISION, MAX_PRECISION);
+        document.unicode_glyphs = restored.unicode_glyphs;
+        // DOC-010: a restored tab has no computed workspace. The pane says so explicitly until
+        // the next run, instead of only looking empty.
+        document.engine_state_note = Some(ENGINE_RESET_NOTICE.to_string());
         document.newline = restored
             .newline
             .unwrap_or_else(|| NewlineStyle::detect(&restored.source));
@@ -1874,6 +1931,33 @@ impl Workbench {
     /// [`Workbench::set_precision_text`]).
     pub fn set_active_precision_text(&mut self, text: &str) -> Result<usize, String> {
         self.set_precision_text(self.active, text)
+    }
+
+    /// DOC-009: sets one tab's ASCII/Unicode mathematical notation.
+    ///
+    /// The choice belongs to the tab, not the window: switching tabs brings that tab's notation
+    /// back. The value is carried into [`SessionState`] so a process restart restores each tab's
+    /// own choice instead of imposing the active tab's on every tab.
+    pub fn set_unicode_glyphs(&mut self, index: usize, enabled: bool) {
+        let Some(document) = self.docs.get_mut(index) else {
+            return;
+        };
+        document.unicode_glyphs = enabled;
+    }
+
+    /// DOC-009: the active tab's mathematical notation.
+    pub fn active_unicode_glyphs(&self) -> bool {
+        self.active_document().unicode_glyphs
+    }
+
+    /// DOC-009: gives a tab the mathematical notation of `enabled` without logging.
+    ///
+    /// Used by the launch path for the starter tabs of a first run: the persisted notation
+    /// default applies to documents that have no per-tab choice of their own yet.
+    pub fn set_unicode_glyphs_quietly(&mut self, index: usize, enabled: bool) {
+        if let Some(document) = self.docs.get_mut(index) {
+            document.unicode_glyphs = enabled;
+        }
     }
 
     /// WKS-004 / J-10: clears the document's variables while retaining its functions.
@@ -2133,6 +2217,8 @@ impl Workbench {
             // A new run supersedes the previous refusal: the advisory described a request that
             // could not start, and this one did.
             doc.run_refusal = None;
+            // DOC-010: a run is what recomputes the workspace, so the reset notice stops here.
+            doc.engine_state_note = None;
             doc.submitted_precision = precision;
             doc.committed_results.clear();
             doc.committed_reused.clear();
@@ -2881,6 +2967,8 @@ impl WorkbenchDocument {
             path: None,
             newline: NewlineStyle::detect(source),
             bom: false,
+            unicode_glyphs: false,
+            engine_state_note: None,
             source_mtime: None,
             source_snapshot: None,
             disk_status: DiskStatus::NotLocated,
@@ -6188,6 +6276,397 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    /// DOC-001: every tab owns all of its surfaces. Running and failing in one tab must not move
+    /// the other tab's buffer, engine, variables, functions, precision, revision, incremental
+    /// cache, diagnostic or last figure. One test observes all of them at once, because the
+    /// requirement is the conjunction: a single leaked field falsifies the row.
+    #[test]
+    fn doc_001_every_tab_owns_its_buffer_engine_workspace_precision_cache_diagnostic_and_figure() {
+        let mut workbench = fake_workbench();
+
+        // Tab 1: a successful run that commits a variable and a figure.
+        workbench.set_source(
+            0,
+            "alpha = 1\nplot(\"zero\", 1, 2, 3)\nalpha\n".to_string(),
+        );
+        workbench.set_active(0);
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(5)));
+        let first = &workbench.documents()[0];
+        assert_eq!(first.state(), RunState::Finished);
+        assert_eq!(
+            first.snapshot.as_ref().expect("tab 1 snapshot").variables,
+            vec![("alpha".to_string(), "1".to_string())]
+        );
+        let first_plot = first.last_plot.clone().expect("tab 1's figure");
+        assert_eq!(first_plot.title, "zero");
+        let first_revision = first.revision;
+        let first_id = first.id;
+        let first_cache = workbench.host.cached_entries(first_id);
+        assert!(
+            first_cache > 0,
+            "the successful run fills tab 1's own incremental cache"
+        );
+
+        // Tab 2: a run that names the other tab's variable. If engines or variables leaked, this
+        // would succeed; it must fail with the engine's undefined-variable diagnostic.
+        workbench.set_source(1, "beta = alpha + 1\n".to_string());
+        workbench.set_active(1);
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(5)));
+        let second = &workbench.documents()[1];
+        assert_eq!(second.state(), RunState::Failed);
+        assert!(
+            second
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.variables.is_empty())
+                .unwrap_or(true),
+            "a failed run publishes no committed variable"
+        );
+        assert!(second.last_plot.is_none(), "tab 2 has no figure");
+        assert_eq!(
+            workbench
+                .diagnostic(1)
+                .expect("tab 2's failure is its own diagnostic")
+                .message,
+            "Undefined variable 'alpha'."
+        );
+        assert_eq!(
+            workbench.host.cached_entries(second.id),
+            0,
+            "the failed statement is not cached in tab 2"
+        );
+
+        // Tab 1 is untouched on every surface.
+        let first = &workbench.documents()[0];
+        assert_eq!(first.state(), RunState::Finished);
+        assert_eq!(first.source, "alpha = 1\nplot(\"zero\", 1, 2, 3)\nalpha\n");
+        assert_eq!(first.revision, first_revision, "tab 2's run did not edit tab 1");
+        assert_eq!(first.id, first_id, "document identities stay distinct");
+        assert_eq!(
+            first.snapshot.as_ref().expect("snapshot").variables,
+            vec![("alpha".to_string(), "1".to_string())]
+        );
+        assert_eq!(first.last_plot.as_ref().map(|plot| plot.title.as_str()), Some("zero"));
+        assert!(
+            !first
+                .snapshot
+                .as_ref()
+                .expect("snapshot")
+                .functions
+                .is_empty(),
+            "tab 1's snapshot carries its own engine function registry"
+        );
+        assert_eq!(workbench.host.cached_entries(first_id), first_cache);
+        assert!(
+            workbench.diagnostic(0).is_none(),
+            "tab 2's diagnostic must not decorate tab 1"
+        );
+
+        // Precision and notation are per tab too.
+        workbench.set_precision(1, 250);
+        workbench.set_unicode_glyphs(1, true);
+        assert_eq!(workbench.documents()[1].precision, 250);
+        assert!(workbench.documents()[1].unicode_glyphs);
+        assert_eq!(
+            workbench.documents()[0].precision, crate::engine::DEFAULT_PRECISION,
+            "one tab's precision control must not move the other's"
+        );
+        assert!(!workbench.documents()[0].unicode_glyphs);
+
+        // An edit in tab 2 advances only tab 2's revision.
+        workbench.set_source(1, "beta = 2\n".to_string());
+        assert_eq!(workbench.documents()[1].revision, 2);
+        assert_eq!(workbench.documents()[0].revision, first_revision);
+        assert_ne!(workbench.documents()[0].source, workbench.documents()[1].source);
+    }
+
+    /// DOC-001: a user function defined in one tab is unknown in the other. The fake engine has no
+    /// user `func` support, so this half runs on the shipped engine.
+    #[test]
+    #[cfg(feature = "real-engine")]
+    fn doc_001_a_user_function_defined_in_one_tab_is_unknown_in_the_other() {
+        let mut workbench = Workbench::with_factory(Box::new(|| {
+            Box::new(crate::engine::RealEngine::new())
+        }));
+        workbench.set_source(0, "func f(x) = x + 1\nf(2)\n".to_string());
+        workbench.set_active(0);
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(10)));
+        let first = workbench.documents()[0]
+            .snapshot
+            .as_ref()
+            .expect("tab 1 ran");
+        assert!(
+            first.functions.iter().any(|(name, _)| name == "f"),
+            "tab 1's snapshot owns its user function: {:?}",
+            first.functions
+        );
+
+        workbench.set_source(1, "f(2)\n".to_string());
+        workbench.set_active(1);
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(10)));
+        let second = workbench.documents()[1]
+            .snapshot
+            .as_ref()
+            .expect("a failed run still publishes its terminal snapshot");
+        assert!(
+            !second.functions.iter().any(|(name, _)| name == "f"),
+            "tab 2 must not see tab 1's user function: {:?}",
+            second.functions
+        );
+        let diagnostic = workbench.diagnostic(1).expect("tab 2's failure diagnostic");
+        assert!(
+            diagnostic.message.contains("Unknown function 'f'"),
+            "diagnostic: {}",
+            diagnostic.message
+        );
+        assert!(
+            workbench.documents()[0]
+                .snapshot
+                .as_ref()
+                .expect("tab 1")
+                .functions
+                .iter()
+                .any(|(name, _)| name == "f"),
+            "tab 1 keeps its function when tab 2 fails"
+        );
+    }
+
+    /// DOC-008: opening and editing never execute; a run evaluates exactly the source snapshot it
+    /// was submitted with, even when the buffer changes while that run is still in flight.
+    #[test]
+    fn doc_008_a_run_evaluates_the_submitted_snapshot_and_never_the_live_buffer() {
+        use std::sync::Mutex;
+
+        struct RecordingEngine {
+            recorded: Arc<Mutex<Vec<String>>>,
+            entered: Arc<AtomicBool>,
+            delay: Duration,
+        }
+        impl Evaluator for RecordingEngine {
+            fn eval(&mut self, src: &str) -> Result<String, String> {
+                self.recorded.lock().expect("recorded").push(src.to_string());
+                self.entered.store(true, Ordering::SeqCst);
+                std::thread::sleep(self.delay);
+                Ok("ok".to_string())
+            }
+        }
+
+        let directory = session_scratch("doc-008-snapshot");
+        let file = directory.join("snapshot.lv");
+        std::fs::write(&file, "a = 1\n").expect("fixture");
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let entered = Arc::new(AtomicBool::new(false));
+        let constructions = Arc::new(AtomicU64::new(0));
+        let engine_recorded = Arc::clone(&recorded);
+        let engine_entered = Arc::clone(&entered);
+        let engine_constructions = Arc::clone(&constructions);
+        let mut workbench = Workbench::with_named_factory(
+            Box::new(move || {
+                engine_constructions.fetch_add(1, Ordering::SeqCst);
+                Box::new(RecordingEngine {
+                    recorded: Arc::clone(&engine_recorded),
+                    entered: Arc::clone(&engine_entered),
+                    delay: Duration::from_millis(120),
+                })
+            }),
+            "recording",
+        );
+
+        // Opening reads and decodes the file; it constructs no engine and evaluates nothing.
+        let index = workbench.open(&file).expect("open");
+        assert_eq!(workbench.documents()[index].source, "a = 1\n");
+        assert_eq!(constructions.load(Ordering::SeqCst), 0, "open executed nothing");
+        assert!(recorded.lock().expect("recorded").is_empty());
+        assert!(workbench.documents()[index].snapshot.is_none());
+
+        // Editing is just text: still no engine and no evaluation.
+        workbench.set_source(index, "a = 2\n".to_string());
+        assert_eq!(constructions.load(Ordering::SeqCst), 0, "editing executed nothing");
+        assert!(recorded.lock().expect("recorded").is_empty());
+
+        // Run captures "a = 2\n". While it is inside eval, the buffer is edited to "a = 3\n";
+        // that edit cancels the run, but the engine must already have received the submitted text.
+        assert!(workbench.run_active());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !entered.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(entered.load(Ordering::SeqCst), "the run reached eval");
+        workbench.set_source(index, "a = 3\n".to_string());
+        assert!(workbench.wait_until_idle(Duration::from_secs(10)));
+        assert_eq!(
+            recorded.lock().expect("recorded").as_slice(),
+            ["a = 2"],
+            "the in-flight run evaluated the submitted snapshot, not the edited buffer"
+        );
+        assert_eq!(workbench.documents()[index].source, "a = 3\n");
+        assert_eq!(constructions.load(Ordering::SeqCst), 1);
+
+        // A new run captures the new snapshot.
+        entered.store(false, Ordering::SeqCst);
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(10)));
+        assert_eq!(
+            recorded.lock().expect("recorded").as_slice(),
+            ["a = 2", "a = 3"]
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// DOC-009: two tabs keep different precision and ASCII/Unicode notation, they survive the
+    /// session document, and restoring the process puts each back on its own tab.
+    #[test]
+    fn doc_009_per_tab_precision_and_notation_round_trip_through_the_session() {
+        use crate::settings::Settings;
+
+        let directory = session_scratch("doc-009-tabs");
+        let first = directory.join("first.lv");
+        let second = directory.join("second.lv");
+        std::fs::write(&first, "a = pi(40)\n").expect("fixture");
+        std::fs::write(&second, "b = pi(250)\n").expect("fixture");
+
+        let mut workbench = fake_workbench();
+        workbench.load_file(0, &first).expect("load first");
+        workbench.load_file(1, &second).expect("load second");
+        workbench.set_precision(0, 40);
+        workbench.set_unicode_glyphs(0, true);
+        workbench.set_precision(1, 250);
+        world_assert_tab(&workbench, 0, 40, true);
+        world_assert_tab(&workbench, 1, 250, false);
+        workbench.set_active(1);
+
+        let session = workbench.session_state();
+        assert_eq!(session.documents[0].precision, 40);
+        assert!(session.documents[0].unicode_glyphs);
+        assert_eq!(session.documents[1].precision, 250);
+        assert!(!session.documents[1].unicode_glyphs);
+        assert_eq!(session.active, 1, "the selected tab is part of the state");
+
+        // The settings document is the persistence boundary: each tab's two values must survive
+        // it, warning-free, or a restart would have nothing correct to restore.
+        let mut settings = Settings::new();
+        settings.set_session(session.clone());
+        let json = settings.to_json();
+        let loaded = Settings::from_json(&json);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        let persisted = loaded.session.expect("the session persists");
+        assert_eq!(persisted, session);
+
+        // A fresh process restores both tabs with their own values, and the selection.
+        let mut relaunched = fake_workbench();
+        let report = relaunched.restore_session(&persisted, &[]);
+        assert_eq!(report.restored.len(), 2);
+        assert_eq!(relaunched.active(), 1, "the selected tab comes back selected");
+        world_assert_tab(&relaunched, 0, 40, true);
+        world_assert_tab(&relaunched, 1, 250, false);
+        assert_eq!(relaunched.documents()[0].source, "a = pi(40)\n");
+        assert_eq!(relaunched.documents()[1].source, "b = pi(250)\n");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// One tab's two DOC-009 settings, read the way the window reads them.
+    fn world_assert_tab(workbench: &Workbench, index: usize, precision: usize, unicode: bool) {
+        assert_eq!(
+            workbench.documents()[index].precision, precision,
+            "tab {index} precision"
+        );
+        assert_eq!(
+            workbench.documents()[index].unicode_glyphs, unicode,
+            "tab {index} notation"
+        );
+    }
+
+    /// DOC-010: a restart restores the files, the journaled unsaved text and the active tab, and
+    /// every restored tab explicitly reports its engine state as reset until its next run.
+    #[test]
+    fn doc_010_restore_reports_each_tabs_engine_state_as_reset_until_it_runs() {
+        let directory = session_scratch("doc-010-reset");
+        let file = directory.join("kept.lv");
+        std::fs::write(&file, "a = 1\n").expect("fixture");
+        let session = SessionState::new(
+            vec![
+                SessionTab {
+                    path: Some(file.to_string_lossy().into_owned()),
+                    document_id: 1,
+                    precision: 40,
+                    unicode_glyphs: false,
+                },
+                SessionTab {
+                    path: None,
+                    document_id: 7,
+                    precision: 250,
+                    unicode_glyphs: true,
+                },
+            ],
+            1,
+        );
+        let record = RecoveryRecord {
+            document_id: 7,
+            revision: 3,
+            title: "draft.lv".to_string(),
+            path: None,
+            bom: false,
+            precision: 250,
+            unicode_glyphs: true,
+            schema_version: crate::recovery::SCHEMA_VERSION,
+            caret: (0, 3),
+            selection: None,
+            source_mtime: None,
+            saved_at: SystemTime::UNIX_EPOCH,
+            source: "b = 2\n".to_string(),
+        };
+
+        let mut workbench = fake_workbench();
+        let report = workbench.restore_session(&session, std::slice::from_ref(&record));
+        assert_eq!(report.restored.len(), 2);
+        assert_eq!(report.recovered, vec![7], "the unsaved draft came from the journal");
+        assert_eq!(workbench.active(), 1);
+        assert_eq!(workbench.documents()[0].source, "a = 1\n");
+        assert_eq!(workbench.documents()[1].source, "b = 2\n");
+        assert!(workbench.documents()[1].dirty(), "the unsaved text is restored as unsaved");
+        for index in [0, 1] {
+            assert_eq!(
+                workbench.documents()[index].engine_state_note.as_deref(),
+                Some(ENGINE_RESET_NOTICE),
+                "tab {index} must say its engine state was reset"
+            );
+            assert!(
+                workbench.documents()[index].snapshot.is_none(),
+                "no computed workspace is restored"
+            );
+            assert_eq!(workbench.documents()[index].state(), RunState::Idle);
+        }
+        let launch_log: String = workbench
+            .documents()
+            .iter()
+            .flat_map(|document| document.logs.iter())
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            launch_log.contains("Restored 2 of 2 document(s)")
+                && launch_log.contains("nothing was run"),
+            "the launch log states what was and was not restored: {launch_log}"
+        );
+
+        // The first run recomputes the workspace and retires the notice for that tab only.
+        workbench.set_active(0);
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(5)));
+        assert_eq!(workbench.documents()[0].engine_state_note, None);
+        assert!(workbench.documents()[0].snapshot.is_some());
+        assert_eq!(
+            workbench.documents()[1].engine_state_note.as_deref(),
+            Some(ENGINE_RESET_NOTICE),
+            "running tab 1 does not claim tab 2's workspace was recomputed"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     #[test]
     fn restoring_a_session_never_constructs_an_engine() {
         // A factory that counts its own invocations: a run would construct the engine, so a count
@@ -6229,6 +6708,8 @@ mod tests {
             vec![SessionTab {
                 path: None,
                 document_id: 5,
+                precision: 250,
+                unicode_glyphs: true,
             }],
             0,
         );
@@ -6251,6 +6732,9 @@ mod tests {
             title: "untitled-2.lv".to_string(),
             path: None,
             bom: false,
+            precision: 250,
+            unicode_glyphs: true,
+            schema_version: crate::recovery::SCHEMA_VERSION,
             caret: (1, 4),
             selection: Some(((0, 0), (1, 4))),
             source_mtime: None,

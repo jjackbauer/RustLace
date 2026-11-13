@@ -58,8 +58,11 @@ mod netcheck;
 mod perf_probe;
 #[cfg(test)]
 mod precision_default;
+mod platform_claims;
 #[cfg(windows)]
 mod platform_dialogs;
+#[cfg(windows)]
+mod platform_parity;
 mod quick_eval;
 mod recovery;
 mod regex_lite;
@@ -130,6 +133,16 @@ fn main() {
     }
     if args.iter().any(|arg| arg == "--gui-selftest") {
         std::process::exit(gui_selftest::run());
+    }
+    // PLF-010: the platform-specific behaviour report (modifiers, dialogs, clipboard, caret/IME,
+    // DPI) for this advertised platform. Exits non-zero when an area fails.
+    if args.iter().any(|arg| arg == "--platform-parity") {
+        std::process::exit(platform_parity::run());
+    }
+    // PLF-009: the release matrix's platform claims and the refusal a non-Windows build prints.
+    // It reads a document, so it runs on every build.
+    if args.iter().any(|arg| arg == "--platform-claims") {
+        std::process::exit(platform_claims::run());
     }
     if let Some(index) = args.iter().position(|arg| arg == "--journey") {
         std::process::exit(journey::run(&args[index + 1..]));
@@ -263,7 +276,16 @@ fn main() {
     if args.iter().any(|arg| arg == "--shortcuts") {
         std::process::exit(shortcuts_cli());
     }
-    eprintln!("this build targets Windows; the native workbench is unavailable");
+    // PLF-009: the release matrix is a document, so its claims are checkable on every platform.
+    if args.iter().any(|arg| arg == "--platform-claims") {
+        std::process::exit(platform_claims::run());
+    }
+    // PLF-009: a platform without a UI adapter says so by name and refuses to start a placeholder.
+    // The text comes from `platform_claims::unsupported_notice`, the same value the test asserts.
+    match platform_claims::unsupported_notice(std::env::consts::OS, std::env::consts::ARCH) {
+        Some(notice) => eprintln!("{notice}"),
+        None => eprintln!("this build targets Windows; the native workbench is unavailable"),
+    }
     std::process::exit(2);
 }
 
@@ -360,6 +382,21 @@ fn usage() -> String {
         "                                      report what an extreme precision request does\n",
     );
     text.push_str("                                      (PERF-011; exits non-zero when nothing warns)\n");
+    text.push_str(
+        "  lovelace-desktop --platform-claims  print the release matrix's platform verdicts and\n",
+    );
+    text.push_str(
+        "                                      the refusal an unsupported build prints (PLF-009)\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --platform-parity  report this platform's modifiers, dialogs,\n",
+    );
+    text.push_str(
+        "                                      clipboard, caret/IME and DPI behaviour (PLF-010;\n",
+    );
+    text.push_str(
+        "                                      exits non-zero when an area fails)\n",
+    );
     text.push_str(
         "  lovelace-desktop --ui-audit         audit src/ui for ARC-003 separation (no eval,\n",
     );

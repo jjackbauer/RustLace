@@ -188,6 +188,13 @@ pub struct TextEditor {
     /// `None` means no selection. When this equals the caret position the selection is empty and
     /// [`TextEditor::selection_range`] reports none.
     pub selection: Option<(usize, usize)>,
+    /// PLF-010: the IME composition the platform is still building, painted at the caret.
+    ///
+    /// `egui-winit` delivers an IME commit as `Event::Ime(ImeEvent::Commit)` and *not* as
+    /// `Event::Text`, so a window that only handled `Text` silently dropped every composed
+    /// character. The preedit is display-only: it is never spliced into the buffer, so an
+    /// abandoned composition leaves the document byte-identical.
+    pub preedit: Option<String>,
     /// EDT-008: indentation and auto-close behaviour copied from the persisted settings.
     pub preferences: EditorSettings,
     /// EDT-009: the find bar's query, toggles, matches and highlighted match for this document.
@@ -259,6 +266,7 @@ impl TextEditor {
             completion: CompletionSession::default(),
             history: History::new(),
             selection: None,
+            preedit: None,
             preferences: EditorSettings::default(),
             find: FindSession::default(),
             last_signature: None,
@@ -855,6 +863,87 @@ impl TextEditor {
         };
         self.completion.dismiss();
         self.history.break_burst();
+    }
+
+    /// Selects the whole buffer (Ctrl+A) and leaves the caret at its end.
+    ///
+    /// An empty document has nothing to select, so it keeps an empty selection rather than
+    /// marking a zero-length range that would make every later edit replace the buffer.
+    pub fn select_all(&mut self) {
+        let last = self.line_count().saturating_sub(1);
+        let end = self.line_chars(last);
+        if last == 0 && end == 0 {
+            self.selection = None;
+        } else {
+            self.selection = Some((0, 0));
+            self.caret_row = last;
+            self.caret_col = end;
+        }
+        self.completion.dismiss();
+        self.history.break_burst();
+    }
+
+    /// The bytes Ctrl+C and Ctrl+X put on the platform clipboard (PLF-001).
+    ///
+    /// A non-empty selection is copied exactly as painted: a range that spans lines keeps one
+    /// `\n` between them, which is what [`TextEditor::selected_text`] already produces and what a
+    /// paste back into the buffer turns into the document's own line ending. With no selection the
+    /// caret's line is copied without its newline (the line-copy gesture Windows editors share),
+    /// and an empty line puts nothing on the clipboard rather than emptying it.
+    pub fn clipboard_text(&self) -> Option<String> {
+        if let Some(text) = self.selected_text() {
+            return (!text.is_empty()).then_some(text);
+        }
+        let line = self.lines.get(self.caret_row)?;
+        (!line.is_empty()).then(|| line.clone())
+    }
+
+    /// Removes up to `before` characters before the caret and `after` after it, as one edit.
+    ///
+    /// PLF-010: an IME may ask the host to repair the text around the caret instead of editing the
+    /// composition itself. The delete is clamped to the buffer, never panics on a stale range, and
+    /// is one undo step, so undoing it restores exactly the two removed sides.
+    pub fn delete_surrounding(&mut self, before: usize, after: usize) -> bool {
+        if before == 0 && after == 0 {
+            return false;
+        }
+        let (mut row, mut col) = (self.caret_row, self.caret_col);
+        for _ in 0..before {
+            if col > 0 {
+                col -= 1;
+            } else if row > 0 {
+                row -= 1;
+                col = self.line_chars(row);
+            } else {
+                break;
+            }
+        }
+        let start = (row, col);
+        let (mut end_row, mut end_col) = (self.caret_row, self.caret_col);
+        for _ in 0..after {
+            if end_col < self.line_chars(end_row) {
+                end_col += 1;
+            } else if end_row + 1 < self.line_count() {
+                end_row += 1;
+                end_col = 0;
+            } else {
+                break;
+            }
+        }
+        if start == (end_row, end_col) {
+            return false;
+        }
+        self.begin_edit(EditKind::Atomic);
+        // The splice works on the ordered selection, so express the repair as one.
+        self.selection = Some(start);
+        self.caret_row = end_row;
+        self.caret_col = end_col;
+        self.delete_selection();
+        self.caret_row = start.0;
+        self.caret_col = start.1;
+        self.note_symbol_edit("");
+        self.edits += 1;
+        true
     }
 
     /// The selection ordered from the start of the buffer to its end, when non-empty.
@@ -1770,6 +1859,57 @@ impl TextEditor {
                         self.insert_text(&text, EditKind::Atomic);
                         self.completion.dismiss();
                     }
+                    egui::Event::Copy => {
+                        // PLF-001: Ctrl+C. egui-winit turns the platform chord into this event;
+                        // the bytes handed to the OS clipboard are exactly the painted selection
+                        // (or the caret's line when nothing is selected).
+                        if let Some(text) = self.clipboard_text() {
+                            ui.ctx().copy_text(text);
+                        }
+                        self.completion.dismiss();
+                    }
+                    egui::Event::Cut => {
+                        // PLF-001: Ctrl+X copies the same bytes and removes the range as one
+                        // atomic undo step, so an undo restores the text exactly once.
+                        if let Some(text) = self.clipboard_text() {
+                            ui.ctx().copy_text(text);
+                            self.begin_edit(EditKind::Atomic);
+                            if self.delete_selection() {
+                                self.edits += 1;
+                            }
+                        }
+                        self.completion.dismiss();
+                    }
+                    egui::Event::Ime(ime) => match ime {
+                        // PLF-010: a composed character (CJK, dead key, emoji picker) arrives as a
+                        // commit, never as `Event::Text`. It is one atomic edit at the caret.
+                        egui::ImeEvent::Commit(text) => {
+                            self.preedit = None;
+                            if !text.is_empty() {
+                                self.insert_text(&text, EditKind::Atomic);
+                            }
+                            self.completion.dismiss();
+                        }
+                        // The composition in progress is painted at the caret and never spliced
+                        // into the buffer: abandoning it leaves the document untouched.
+                        egui::ImeEvent::Preedit { text, .. } => {
+                            self.preedit = (!text.is_empty()).then_some(text);
+                            self.history.break_burst();
+                        }
+                        egui::ImeEvent::DeleteSurrounding {
+                            before_chars,
+                            after_chars,
+                        } => {
+                            self.preedit = None;
+                            self.delete_surrounding(before_chars, after_chars);
+                        }
+                        #[allow(deprecated)]
+                        egui::ImeEvent::Enabled => {}
+                        #[allow(deprecated)]
+                        egui::ImeEvent::Disabled => {
+                            self.preedit = None;
+                        }
+                    },
                     egui::Event::Key {
                         key,
                         pressed: true,
@@ -1787,6 +1927,14 @@ impl TextEditor {
                         ) {
                             self.command(command);
                             self.completion.dismiss();
+                            continue;
+                        }
+                        // PLF-001: Ctrl+A selects the whole buffer. A command-modified letter
+                        // produces no Text event, so this cannot insert an "a"; the chord is
+                        // handled here (like Ctrl+Space) because the selection belongs to the
+                        // editor, not to the window.
+                        if matches!(key, egui::Key::A) && (modifiers.command || modifiers.ctrl) {
+                            self.select_all();
                             continue;
                         }
                         // Only keys the editor treats as actions end a typing burst. A letter
@@ -2263,6 +2411,26 @@ impl TextEditor {
                 ],
                 Stroke::new(1.5, theme::caret()),
             );
+            // PLF-010: the IME composition in progress is drawn at the caret with the composition
+            // underline, so a user composing a CJK syllable sees the pending text before the
+            // commit. It is a painter overlay over the buffer: the document is not edited.
+            if let Some(preedit) = self.preedit.as_ref() {
+                painter.text(
+                    pos2(caret_x, caret_y),
+                    Align2::LEFT_TOP,
+                    preedit,
+                    font.clone(),
+                    theme::text(),
+                );
+                let width = preedit.chars().count() as f32 * char_w;
+                painter.line_segment(
+                    [
+                        pos2(caret_x, caret_y + row_h - 2.0),
+                        pos2(caret_x + width, caret_y + row_h - 2.0),
+                    ],
+                    Stroke::new(1.5, theme::caret()),
+                );
+            }
             painter.rect_stroke(
                 rect,
                 0.0,
@@ -2796,6 +2964,179 @@ mod tests {
 
     fn caret(editor: &TextEditor) -> (usize, usize) {
         (editor.caret_row, editor.caret_col)
+    }
+
+    /// Runs one headless pass of the shipped editor with `events` and returns every text the pass
+    /// would put on the platform clipboard (the `CopyText` commands eframe forwards to the OS).
+    ///
+    /// The surface is focused the way a click focuses it, because the editor only consumes input
+    /// while it has focus; the first pass exists to create the widget the focus id belongs to.
+    fn editor_clipboard_pass(editor: &mut TextEditor, events: Vec<egui::Event>) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0));
+        let state = EngineState::default();
+        let mut run = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let rect = ui.max_rect();
+                let _ = editor.ui(ui, rect, &[], &state);
+            });
+            // A headless pass has no painter to upload the font texture to (the window tests
+            // handle the deltas the same way).
+            output.textures_delta.clear();
+            output
+        };
+        let _ = run(Vec::new());
+        ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+        let output = run(events);
+        output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ctrl_copy_puts_exactly_the_selected_text_on_the_clipboard() {
+        let mut editor = TextEditor::from_source("alpha beta\ngamma");
+        // Select "beta": shift-click semantics from the line start to column 9.
+        editor.set_caret(0, 6);
+        editor.select_to(0, 10);
+        assert_eq!(editor.selected_text().as_deref(), Some("beta"));
+
+        let copied = editor_clipboard_pass(&mut editor, vec![egui::Event::Copy]);
+        assert_eq!(
+            copied,
+            vec!["beta".to_string()],
+            "Ctrl+C must hand the OS the painted selection bytes"
+        );
+        assert_eq!(
+            editor.source(),
+            "alpha beta\ngamma",
+            "copy never edits the buffer"
+        );
+    }
+
+    #[test]
+    fn ctrl_copy_without_a_selection_copies_the_caret_line() {
+        let mut editor = TextEditor::from_source("first\nsecond");
+        editor.set_caret(1, 3);
+        let copied = editor_clipboard_pass(&mut editor, vec![egui::Event::Copy]);
+        assert_eq!(copied, vec!["second".to_string()]);
+    }
+
+    #[test]
+    fn ctrl_cut_copies_the_selection_and_removes_it_as_one_undo_step() {
+        let mut editor = TextEditor::from_source("keep cut keep");
+        editor.set_caret(0, 5);
+        editor.select_to(0, 8);
+        let copied = editor_clipboard_pass(&mut editor, vec![egui::Event::Cut]);
+        assert_eq!(copied, vec!["cut".to_string()]);
+        assert_eq!(editor.source(), "keep  keep", "the selected bytes are cut");
+        assert_eq!(caret(&editor), (0, 5), "the caret lands on the cut start");
+        assert!(editor.undo(), "the cut is undoable");
+        assert_eq!(
+            editor.source(),
+            "keep cut keep",
+            "one undo restores the cut text once"
+        );
+    }
+
+    #[test]
+    fn ctrl_a_selects_the_whole_buffer_so_copy_hands_over_every_line() {
+        let mut editor = TextEditor::from_source("one\ntwo\nthree");
+        let copied = editor_clipboard_pass(
+            &mut editor,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }],
+        );
+        assert!(copied.is_empty(), "Ctrl+A itself writes no clipboard text");
+        assert_eq!(
+            editor.selection_range(),
+            Some(((0, 0), (2, 5))),
+            "Ctrl+A selects from the buffer start to its end"
+        );
+        let copied = editor_clipboard_pass(&mut editor, vec![egui::Event::Copy]);
+        assert_eq!(copied, vec!["one\ntwo\nthree".to_string()]);
+    }
+
+    #[test]
+    fn an_ime_commit_inserts_the_composed_text_and_the_preedit_is_never_written() {
+        let mut editor = TextEditor::from_source("x = ");
+        editor.set_caret(0, 4);
+        // A composition in progress is displayed but not spliced into the buffer.
+        let _ = editor_clipboard_pass(
+            &mut editor,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "に".to_string(),
+                active_range_chars: None,
+            })],
+        );
+        assert_eq!(editor.preedit.as_deref(), Some("に"));
+        assert_eq!(
+            editor.source(),
+            "x = ",
+            "an uncommitted composition must not edit the document"
+        );
+
+        // The commit replaces the pending composition with the composed character.
+        let _ = editor_clipboard_pass(
+            &mut editor,
+            vec![egui::Event::Ime(egui::ImeEvent::Commit("日本".to_string()))],
+        );
+        assert_eq!(editor.preedit, None, "the commit ends the composition");
+        assert_eq!(editor.source(), "x = 日本");
+        assert_eq!(
+            caret(&editor),
+            (0, 6),
+            "the caret advances by the committed characters, not bytes"
+        );
+        assert!(editor.undo(), "the commit is one undoable edit");
+        assert_eq!(editor.source(), "x = ", "one undo removes the whole commit");
+    }
+
+    #[test]
+    fn ime_delete_surrounding_removes_both_sides_as_one_undo_step() {
+        // Columns: a0 b1 日2 c3 d4. The caret sits between "c" and "d".
+        let mut editor = TextEditor::from_source("ab日cd");
+        editor.set_caret(0, 4);
+        assert!(editor.delete_surrounding(2, 1));
+        assert_eq!(editor.source(), "ab", "two characters before and one after");
+        assert_eq!(caret(&editor), (0, 2), "the caret stays where the range began");
+        assert!(editor.undo());
+        assert_eq!(editor.source(), "ab日cd", "one undo restores both sides");
+    }
+
+    #[test]
+    fn an_abandoned_composition_leaves_no_undo_step() {
+        let mut editor = TextEditor::from_source("value");
+        let _ = editor_clipboard_pass(
+            &mut editor,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "か".to_string(),
+                active_range_chars: None,
+            })],
+        );
+        // Escape cancels the composition; egui reports it as an empty preedit or a disabled IME.
+        #[allow(deprecated)]
+        let disable = egui::ImeEvent::Disabled;
+        let _ = editor_clipboard_pass(&mut editor, vec![egui::Event::Ime(disable)]);
+        assert_eq!(editor.preedit, None);
+        assert_eq!(editor.source(), "value");
+        assert!(!editor.undo(), "a composition that never committed has no step");
     }
 
     #[test]

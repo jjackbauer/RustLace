@@ -905,8 +905,16 @@ impl WorkbenchApp {
         app.apply_workbench_layout();
         // VIS-002: the persisted theme wins over the dark default; the first frame applies it.
         app.theme = app.settings.theme;
-        // A11Y-014: the persisted ASCII/Unicode choice, applied from the first frame.
+        // A11Y-014 / DOC-009: the persisted ASCII/Unicode choice is the default for documents
+        // without a tab-level choice. A restored session carries each tab's own notation instead;
+        // only a launch with no session (the starter tabs) takes the file-wide default.
         app.glyph_mode = GlyphMode::from_unicode(app.settings.unicode_glyphs);
+        if app.settings.session.is_none() {
+            for index in 0..app.workbench.documents().len() {
+                app.workbench
+                    .set_unicode_glyphs_quietly(index, app.settings.unicode_glyphs);
+            }
+        }
         app.apply_editor_settings();
         // A record the session restore consumed is exactly the text now in its tab, so the journal
         // keeps tracking it instead of rewriting it on the first frame; it is deleted when the
@@ -1064,7 +1072,9 @@ impl WorkbenchApp {
     /// the answer. A glyph the font lacks is replaced by its documented fallback in the same
     /// call, which is why no pane can ever paint a tofu box.
     fn localize_glyphs(&mut self, ctx: &egui::Context) {
-        self.glyph_mode = GlyphMode::from_unicode(self.settings.unicode_glyphs);
+        // DOC-009: the notation is the active document's own preference, so selecting a tab
+        // switches the notation with it instead of one window-wide value leaking across tabs.
+        self.glyph_mode = GlyphMode::from_unicode(self.workbench.active_document().unicode_glyphs);
         let mode = self.glyph_mode;
         let coverage = &mut self.glyph_coverage;
         let view = &mut self.view;
@@ -2389,14 +2399,18 @@ impl WorkbenchApp {
         self.shortcuts_focus = true;
     }
 
-    /// A11Y-014: switches the window between ASCII and Unicode mathematical notation.
+    /// DOC-009 / A11Y-014: switches the active document between ASCII and Unicode notation.
     ///
-    /// The setting is persisted immediately and the log records the change, so the switch is
-    /// observable without a re-run: the next frame re-localizes the committed view in place.
+    /// The preference belongs to the tab: the value is carried in the session, so a restart and a
+    /// tab switch both restore this tab's own notation instead of cross-talking with another tab.
+    /// `settings.unicode_glyphs` stays the default a newly created tab inherits, and it is
+    /// persisted immediately.
     fn set_unicode_glyphs(&mut self, enabled: bool, ctx: &egui::Context) {
-        if self.settings.unicode_glyphs == enabled {
+        if self.workbench.active_unicode_glyphs() == enabled {
             return;
         }
+        self.workbench
+            .set_unicode_glyphs(self.workbench.active(), enabled);
         self.settings.unicode_glyphs = enabled;
         self.glyph_mode = GlyphMode::from_unicode(enabled);
         self.workbench.log_active(
@@ -2500,7 +2514,7 @@ impl WorkbenchApp {
                 true
             }
             Action::ToggleUnicodeGlyphs => {
-                let enabled = !self.settings.unicode_glyphs;
+                let enabled = !self.workbench.active_unicode_glyphs();
                 self.set_unicode_glyphs(enabled, ctx);
                 true
             }
@@ -2807,7 +2821,7 @@ impl WorkbenchApp {
                 ui.separator();
                 // A11Y-014: the ASCII/Unicode mathematical-notation setting. It applies to the
                 // committed values in place (no re-run) and is persisted immediately.
-                let mut unicode = self.settings.unicode_glyphs;
+                let mut unicode = self.workbench.active_unicode_glyphs();
                 if ui
                     .checkbox(&mut unicode, "Unicode mathematical glyphs (√ × π ≤)")
                     .on_hover_text(format!(
@@ -3704,7 +3718,7 @@ impl WorkbenchApp {
                     ui.close();
                 }
                 ui.separator();
-                let mut unicode = self.settings.unicode_glyphs;
+                let mut unicode = self.workbench.active_unicode_glyphs();
                 if ui
                     .checkbox(&mut unicode, "Unicode mathematical glyphs")
                     .on_hover_text(format!(
@@ -3912,7 +3926,7 @@ impl WorkbenchApp {
                     self.reset_pane_sizes();
                     ui.close();
                 }
-                let mut unicode = self.settings.unicode_glyphs;
+                let mut unicode = self.workbench.active_unicode_glyphs();
                 if ui
                     .checkbox(&mut unicode, "Unicode mathematical glyphs")
                     .changed()
@@ -5427,6 +5441,10 @@ impl WorkbenchApp {
 
     fn workspace_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
         let has_snapshot = view.has_snapshot;
+        // DOC-010: a restored tab's engine state is explicitly reported as reset until its next
+        // run, so the empty Workspace pane is not indistinguishable from a run that produced
+        // nothing. The note belongs to the document, not to the frame.
+        let reset_note = self.workbench.active_document().engine_state_note.clone();
         // SYM-007: where an inspector copy or export goes, resolved before the pane borrows the
         // tree's interaction state.
         let export_dir = self.inspector_export_dir();
@@ -5451,9 +5469,14 @@ impl WorkbenchApp {
             )
         } else {
             format!(
-                "rev {} · no committed statement{}",
+                "rev {} · no committed statement{}{}",
                 view.revision.0,
-                if stale { " · STALE" } else { "" }
+                if stale { " · STALE" } else { "" },
+                if reset_note.is_some() {
+                    " · ENGINE STATE RESET"
+                } else {
+                    ""
+                }
             )
         };
         let mut filter = self.filter.clone();
@@ -5741,7 +5764,19 @@ impl WorkbenchApp {
                                 // each keeps the pane's purpose, and each offers the command that
                                 // resolves it (Run, or Clear the filter).
                                 let state = if !has_snapshot {
-                                    empty::workspace()
+                                    match &reset_note {
+                                        Some(note) => empty::EmptyState::new(
+                                            "workspace",
+                                            "Engine state was reset",
+                                            "The Workspace table lists the variables the last \
+                                             run committed.",
+                                            note.clone(),
+                                            "Run this document (Ctrl+Enter) to recompute its \
+                                             variables and functions.",
+                                        )
+                                        .with_action(empty::EmptyAction::Run),
+                                        None => empty::workspace(),
+                                    }
                                 } else if variable_rows.is_empty() {
                                     empty::EmptyState::new(
                                         "workspace",
@@ -5924,7 +5959,19 @@ impl WorkbenchApp {
                             );
                             if shown == 0 {
                                 let state = if !has_snapshot {
-                                    empty::functions()
+                                    match &reset_note {
+                                        Some(note) => empty::EmptyState::new(
+                                            "functions",
+                                            "Engine state was reset",
+                                            "The functions table lists the engine builtins, \
+                                             plugins and your own func definitions.",
+                                            note.clone(),
+                                            "Run this document (Ctrl+Enter) to recompute its \
+                                             variables and functions.",
+                                        )
+                                        .with_action(empty::EmptyAction::Run),
+                                        None => empty::functions(),
+                                    }
                                 } else if function_rows.is_empty() {
                                     empty::EmptyState::new(
                                         "functions",
@@ -12536,6 +12583,9 @@ mod tests {
             title: file.file_name().unwrap().to_string_lossy().into_owned(),
             path: Some(file.to_path_buf()),
             bom: false,
+            precision: 250,
+            unicode_glyphs: true,
+            schema_version: recovery::SCHEMA_VERSION,
             caret,
             selection: None,
             source_mtime: None,
@@ -12551,6 +12601,8 @@ mod tests {
             vec![crate::settings::SessionTab {
                 path: Some(file.to_string_lossy().into_owned()),
                 document_id: 1,
+                precision: 250,
+                unicode_glyphs: true,
             }],
             0,
         ));
@@ -12803,6 +12855,176 @@ mod tests {
                 .iter()
                 .all(|document| !document.dirty() && document.state() == RunState::Idle),
             "a restored session is clean and has not run anything"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// DOC-009: selecting a tab selects that tab's precision and ASCII/Unicode notation. The two
+    /// tabs in this test disagree on both, so any window-wide value would show the wrong notation
+    /// or the wrong precision in the painted text.
+    #[test]
+    fn doc_009_switching_tabs_switches_each_tabs_notation_and_precision() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("doc-009");
+        let mut app = a11y_app(plot_dir.clone());
+        pump_text(&ctx, &mut app, 2);
+        app.workbench.set_source(0, "first\n".to_string());
+        app.workbench.set_source(1, "second\n".to_string());
+
+        // Tab 1 runs and chooses Unicode notation and 40 digits.
+        run_from_keyboard(&ctx, &mut app);
+        let _ = press_action(&ctx, &mut app, Action::ToggleUnicodeGlyphs);
+        app.workbench.set_precision(0, 40);
+        let expected_unicode = glyphs::render("sqrt(2)*pi", GlyphMode::Unicode, &mut |c| {
+            a11y::font_has_glyph(&ctx, c)
+        });
+        let texts = pump_text(&ctx, &mut app, 2);
+        assert_eq!(app.glyph_mode, GlyphMode::Unicode);
+        assert_eq!(app.precision_input, "40");
+        assert!(
+            texts.iter().any(|text| text == &expected_unicode),
+            "tab 1 paints its own Unicode value: {texts:?}"
+        );
+
+        // Tab 2 runs in ASCII at 250 digits: both values are the tab's own.
+        app.workbench.set_active(1);
+        run_from_keyboard(&ctx, &mut app);
+        app.workbench.set_precision(1, 250);
+        let texts = pump_text(&ctx, &mut app, 2);
+        assert_eq!(
+            app.glyph_mode,
+            GlyphMode::Ascii,
+            "selecting tab 2 restores tab 2's ASCII notation"
+        );
+        assert_eq!(app.precision_input, "250", "tab 2's precision in the toolbar");
+        assert!(
+            texts.iter().any(|text| text == "[result] = sqrt(2)*pi"),
+            "tab 2 paints ASCII despite tab 1 being Unicode: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|text| text == &expected_unicode),
+            "tab 1's notation must not leak into tab 2: {texts:?}"
+        );
+
+        // Back to tab 1: its Unicode notation and 40 digits come back, unchanged.
+        app.workbench.set_active(0);
+        let texts = pump_text(&ctx, &mut app, 2);
+        assert_eq!(app.glyph_mode, GlyphMode::Unicode);
+        assert_eq!(app.precision_input, "40");
+        assert!(texts.iter().any(|text| text == &expected_unicode));
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// DOC-010: a restored tab's Workspace pane says the engine state was reset until the first
+    /// run; the sentence is painted text (a real UIA capture reads the same string).
+    #[test]
+    fn doc_010_the_restored_tab_paints_the_engine_reset_notice_until_it_runs() {
+        let (storage, directory) = app_storage("doc-010-notice");
+        let file = directory.join("restored.lv");
+        std::fs::write(&file, b"a = 1\n").expect("fixture");
+        let mut settings = Settings::new();
+        settings.set_session(crate::settings::SessionState::new(
+            vec![crate::settings::SessionTab {
+                path: Some(file.to_string_lossy().into_owned()),
+                document_id: 1,
+                precision: 40,
+                unicode_glyphs: false,
+            }],
+            0,
+        ));
+        settings
+            .save(storage.settings_path.as_ref().expect("settings path"))
+            .expect("save settings");
+
+        let ctx = egui::Context::default();
+        let mut app = WorkbenchApp::launch(storage.clone(), None);
+        settle(&ctx, &mut app);
+        let texts = pump_text(&ctx, &mut app, 2);
+        assert_eq!(
+            app.workbench.active_document().engine_state_note.as_deref(),
+            Some(crate::workbench::ENGINE_RESET_NOTICE)
+        );
+        assert_eq!(
+            app.workbench.active_document().precision,
+            40,
+            "the tab's persisted precision came back"
+        );
+        assert!(
+            texts.iter().any(|text| text == "Engine state was reset"),
+            "the Workspace pane names the reset: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("not restored by the restart")),
+            "the pane explains what was not restored: {texts:?}"
+        );
+
+        // The first run recomputes the workspace and the notice disappears from both state and paint.
+        run_from_keyboard(&ctx, &mut app);
+        assert_eq!(app.workbench.active_document().engine_state_note, None);
+        let after = pump_text(&ctx, &mut app, 2);
+        assert!(
+            !after.iter().any(|text| text == "Engine state was reset"),
+            "a run retires the reset notice: {after:?}"
+        );
+        assert!(
+            after.iter().any(|text| text == "a"),
+            "the Workspace pane paints the recomputed variable row: {after:?}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// DOC-014: a corrupt settings document and a corrupt recovery record are both survived at
+    /// launch: the application starts, names each problem, and preserves the original bytes beside
+    /// the file before anything can overwrite them.
+    #[test]
+    fn doc_014_corrupt_persisted_state_never_stops_startup_and_is_backed_up() {
+        let (storage, directory) = app_storage("doc-014-corrupt");
+        let settings_path = storage.settings_path.clone().expect("settings path");
+        let corrupt_settings = b"{ this is not a settings document".to_vec();
+        std::fs::write(&settings_path, &corrupt_settings).expect("corrupt settings");
+        let recovery_root = storage.recovery_root.clone().expect("recovery root");
+        std::fs::create_dir_all(&recovery_root).expect("recovery directory");
+        let corrupt_record = recovery_root.join("doc-9.lvrec");
+        let corrupt_bytes = b"not a recovery record at all".to_vec();
+        std::fs::write(&corrupt_record, &corrupt_bytes).expect("corrupt record");
+
+        let ctx = egui::Context::default();
+        let mut app = WorkbenchApp::launch(storage.clone(), None);
+        settle(&ctx, &mut app);
+
+        assert!(
+            !app.workbench.documents().is_empty(),
+            "the launch still opened a document"
+        );
+        assert_eq!(app.settings.window, Settings::new().window, "defaults are usable");
+        let logs: String = app
+            .workbench
+            .documents()
+            .iter()
+            .flat_map(|document| document.logs.iter())
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            logs.contains("settings are not valid JSON"),
+            "the corrupt settings are named: {logs}"
+        );
+        assert!(
+            logs.contains("corrupt recovery record") && logs.contains("doc-9.lvrec"),
+            "the corrupt record is named: {logs}"
+        );
+        // Both originals survive byte-for-byte beside their source file.
+        assert_eq!(
+            std::fs::read(directory.join("desktop.json.bak")).expect("settings backup"),
+            corrupt_settings,
+            "the settings bytes are preserved"
+        );
+        assert_eq!(
+            std::fs::read(recovery_root.join("doc-9.lvrec.bak")).expect("record backup"),
+            corrupt_bytes,
+            "the recovery-record bytes are preserved"
         );
         let _ = std::fs::remove_dir_all(&directory);
     }

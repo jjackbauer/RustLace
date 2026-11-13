@@ -222,6 +222,13 @@ pub struct SessionTab {
     pub path: Option<String>,
     /// The document identity the tab had, so a recovery record can be matched to it.
     pub document_id: u64,
+    /// DOC-009: the display precision the tab had, restored with the tab.
+    ///
+    /// Precision is a per-document setting; persisting it per tab is what stops two tabs from
+    /// sharing one value after a restart.
+    pub precision: usize,
+    /// DOC-009: the ASCII/Unicode notation the tab rendered its committed values in.
+    pub unicode_glyphs: bool,
 }
 
 /// The tabs that were open at the last persist, in tab order, and which one was active.
@@ -581,10 +588,18 @@ impl Settings {
                                     .documents
                                     .iter()
                                     .map(|tab| {
-                                        let mut fields = vec![(
-                                            "document_id",
-                                            Json::Num(tab.document_id.to_string()),
-                                        )];
+                                        let mut fields = vec![
+                                            (
+                                                "document_id",
+                                                Json::Num(tab.document_id.to_string()),
+                                            ),
+                                            // DOC-009: each tab's own precision and notation.
+                                            ("precision", Json::Num(tab.precision.to_string())),
+                                            (
+                                                "unicode_glyphs",
+                                                Json::Bool(tab.unicode_glyphs),
+                                            ),
+                                        ];
                                         if let Some(path) = &tab.path {
                                             fields.push(("path", Json::Str(path.clone())));
                                         }
@@ -900,7 +915,9 @@ impl Settings {
             // `null` is how a settings file with no session is written; it is not a problem.
             // A malformed session never fails the load either: read_session records the warning.
             if !matches!(session, Json::Null) {
-                if let Some(parsed) = read_session(session, &mut warnings) {
+                // DOC-009: a session written before per-tab settings existed keeps the file's
+                // persisted notation default for every tab; read_session records that migration.
+                if let Some(parsed) = read_session(session, settings.unicode_glyphs, &mut warnings) {
                     settings.session = Some(parsed);
                 }
             }
@@ -1016,12 +1033,21 @@ fn settings_were_discarded(settings: &Settings) -> bool {
     })
 }
 
-/// Reads a persisted session (DOC-004).
+/// Reads a persisted session (DOC-004, DOC-009).
 ///
 /// A malformed session never fails the load: it is ignored with a warning and the next launch
 /// simply opens the starter documents. Entries without a usable document identity are skipped,
 /// because an unsaved buffer could not be matched to its recovery record without one.
-fn read_session(session: &Json, warnings: &mut Vec<String>) -> Option<SessionState> {
+///
+/// DOC-009: a tab also carries its own display precision and ASCII/Unicode notation. A session
+/// written before those fields existed is migrated with a warning: the tab keeps the file's
+/// persisted notation default and the shipped precision, because the old document had no value
+/// of its own to restore.
+fn read_session(
+    session: &Json,
+    default_unicode_glyphs: bool,
+    warnings: &mut Vec<String>,
+) -> Option<SessionState> {
     let mut documents = Vec::new();
     match session.get("documents").and_then(Json::as_arr) {
         Some(items) => {
@@ -1054,7 +1080,58 @@ fn read_session(session: &Json, warnings: &mut Vec<String>) -> Option<SessionSta
                         continue;
                     }
                 };
-                documents.push(SessionTab { path, document_id });
+                let mut migrated = false;
+                let precision = match item.get("precision") {
+                    Some(Json::Num(text)) => match text.parse::<usize>() {
+                        Ok(value) => value.clamp(MIN_PRECISION, MAX_PRECISION),
+                        Err(_) => {
+                            warnings.push(format!(
+                                "session document {index} has a precision that is not a \
+                                 number; {DEFAULT_PRECISION} digits are used."
+                            ));
+                            DEFAULT_PRECISION
+                        }
+                    },
+                    Some(_) => {
+                        warnings.push(format!(
+                            "session document {index} has a precision that is not a number; \
+                             {DEFAULT_PRECISION} digits are used."
+                        ));
+                        DEFAULT_PRECISION
+                    }
+                    None => {
+                        // DOC-009 migration: the field did not exist when the file was written.
+                        migrated = true;
+                        DEFAULT_PRECISION
+                    }
+                };
+                let unicode_glyphs = match item.get("unicode_glyphs") {
+                    Some(Json::Bool(enabled)) => *enabled,
+                    Some(_) => {
+                        warnings.push(format!(
+                            "session document {index} has unicode_glyphs that is not a boolean; \
+                             the persisted default is used."
+                        ));
+                        default_unicode_glyphs
+                    }
+                    None => {
+                        migrated = true;
+                        default_unicode_glyphs
+                    }
+                };
+                if migrated {
+                    warnings.push(format!(
+                        "migrated session document {index}: it predates per-tab precision and \
+                         notation, so {DEFAULT_PRECISION} digits and the persisted notation \
+                         default are used."
+                    ));
+                }
+                documents.push(SessionTab {
+                    path,
+                    document_id,
+                    precision,
+                    unicode_glyphs,
+                });
             }
         }
         None => {
@@ -1555,14 +1632,20 @@ mod tests {
                 SessionTab {
                     path: Some(first.to_string_lossy().into_owned()),
                     document_id: 7,
+                    precision: 40,
+                    unicode_glyphs: true,
                 },
                 SessionTab {
                     path: None,
                     document_id: 8,
+                    precision: 30,
+                    unicode_glyphs: false,
                 },
                 SessionTab {
                     path: Some(third.to_string_lossy().into_owned()),
                     document_id: 9,
+                    precision: 250,
+                    unicode_glyphs: true,
                 },
             ],
             1,
@@ -1681,6 +1764,54 @@ mod tests {
             "the entry without an id is skipped"
         );
         assert_eq!(session.active, 0, "the active index is clamped to the tabs");
+    }
+
+    /// DOC-014: an older settings document is migrated field by field, and a section the schema
+    /// predates is migrated with a warning rather than being silently reinterpreted. A newer or
+    /// corrupt document is the separate backup path (see
+    /// `a_corrupt_settings_file_is_backed_up_before_defaults_are_used`).
+    #[test]
+    fn an_older_settings_document_is_migrated_with_a_warning() {
+        let text = r#"{
+            "schema_version": 0,
+            "active_precision": 40,
+            "unicode_glyphs": true,
+            "session": {
+                "active": 0,
+                "documents": [ { "document_id": 3, "path": "C:/old.lv" } ]
+            }
+        }"#;
+        let settings = Settings::from_json(text);
+        assert_eq!(
+            settings.schema_version, SCHEMA_VERSION,
+            "the loaded value is the current schema"
+        );
+        assert!(
+            settings
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("older than supported")),
+            "the schema migration is named: {:?}",
+            settings.warnings
+        );
+        assert!(
+            settings
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("migrated session document 0")),
+            "the per-tab migration is named: {:?}",
+            settings.warnings
+        );
+        let session = settings.session.expect("the old session still loads");
+        assert_eq!(session.documents[0].document_id, 3);
+        assert_eq!(
+            session.documents[0].precision, DEFAULT_PRECISION,
+            "the tab keeps the shipped precision because the file has no per-tab value"
+        );
+        assert!(
+            session.documents[0].unicode_glyphs,
+            "the tab keeps the file's persisted notation default"
+        );
     }
 
     /// DOC-005: the recovery directory is the sibling of the settings file.
