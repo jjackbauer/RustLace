@@ -5283,6 +5283,87 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// PLF-004: a save that fails at the rename leaves the file, the buffer and the recorded
+    /// conflict snapshot exactly as they were; only a completed rename re-records the snapshot.
+    #[test]
+    fn a_failed_atomic_save_keeps_the_original_and_its_recorded_snapshot() {
+        use crate::document_io::{TEMP_SUFFIX, content_hash};
+        let path = scratch("atomic-snapshot");
+        let original = b"a = 1\nb = 2\n";
+        std::fs::write(&path, original).expect("fixture");
+        let mut workbench = fake_workbench();
+        let index = workbench.open(&path).expect("open");
+        let recorded = workbench
+            .document(index)
+            .expect("tab")
+            .source_snapshot
+            .expect("opening records a snapshot");
+        assert_eq!(recorded.hash, content_hash(original));
+        workbench.set_source(index, "a = 1\nb = 9\n".to_string());
+        assert!(workbench.document(index).expect("tab").dirty());
+
+        // A read-only target makes the rename fail *after* the temporary file was written: the
+        // exact window where a truncate-then-write implementation would already have lost the
+        // original. This is the PLF-004 failure injection.
+        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).expect("make the target read-only");
+        let outcome = workbench.save(index);
+        assert!(
+            matches!(outcome, SaveOutcome::Failed(_)),
+            "the failed write is reported, not swallowed: {outcome:?}"
+        );
+        let bytes = std::fs::read(&path).expect("read back");
+        assert_eq!(bytes, original, "the original is byte-identical");
+        assert_eq!(
+            content_hash(&bytes),
+            content_hash(original),
+            "the original's content hash is unchanged"
+        );
+        let document = workbench.document(index).expect("tab");
+        assert_eq!(
+            document.source_snapshot,
+            Some(recorded),
+            "the recorded snapshot is not touched by a failed save"
+        );
+        assert_eq!(
+            crate::document_io::probe(&path).snapshot(),
+            Some(recorded),
+            "the recorded snapshot still describes the untouched file"
+        );
+        assert!(document.dirty(), "the unsaved edit is still in the buffer");
+        assert_eq!(document.path.as_deref(), Some(path.as_path()));
+        let temporary: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .expect("read the directory")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with(&format!(".{}.", path.file_name().unwrap().to_string_lossy()))
+                    && name.ends_with(TEMP_SUFFIX)
+            })
+            .collect();
+        assert!(
+            temporary.is_empty(),
+            "the failed save leaves no temporary file: {temporary:?}"
+        );
+
+        // Only after the rename succeeds does the snapshot move to the bytes now on disk.
+        let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions).expect("restore writability");
+        assert!(matches!(workbench.save(index), SaveOutcome::Saved { .. }));
+        let written = std::fs::read(&path).expect("read back");
+        assert_eq!(written, b"a = 1\nb = 9\n", "the successful save replaces the file");
+        let document = workbench.document(index).expect("tab");
+        let updated = document
+            .source_snapshot
+            .expect("a successful save records the new snapshot");
+        assert_ne!(updated, recorded, "the snapshot now names the new bytes");
+        assert_eq!(updated.hash, content_hash(&written));
+        assert!(!document.dirty());
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn save_as_updates_the_path_the_title_and_the_recent_list() {
         let path = scratch("save-as");

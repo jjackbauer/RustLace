@@ -46,16 +46,177 @@ const MIN_WORKSPACE: f32 = 180.0;
 const MIN_LOGS: f32 = 100.0;
 const MIN_TOP: f32 = 240.0;
 
+/// LAY-011: the smallest client (in points) that still fits three columns and a logs strip.
+///
+/// This is a *point* threshold, not a pixel one: 1280x800 at 100% (1280x800 points) and at 150%
+/// (853x533 points) are above it, 900x600 at 100% (900x600 points) is above it, and the same
+/// windows at 200% (640x400 and 450x300 points) are below it, where a split would have to squeeze
+/// the editor and every pane below a usable width. The compact layout takes over there.
+pub const MIN_SPLIT_WIDTH: f32 = 760.0;
+/// The smallest client height (in points) that still fits a top row and a logs strip.
+pub const MIN_SPLIT_HEIGHT: f32 = 340.0;
+/// LAY-011: the editor's share of the workbench in the compact layout when the drawer is open.
+/// The requirement is at least ~45%; the default leaves the editor the primary surface.
+pub const COMPACT_EDITOR_DEFAULT: f32 = 0.55;
+/// LAY-011: the compact edition never lets the drawer shrink the editor below this share.
+pub const COMPACT_EDITOR_MIN: f32 = 0.48;
+/// LAY-011: the height of the compact pane switcher's row.
+pub const COMPACT_TAB_HEIGHT: f32 = 24.0;
+/// LAY-011: the column minimums of the dense split (a large window at a scale that leaves fewer
+/// than 760x340 points). They are smaller than the normal minimums because the dense split uses
+/// the compact pane headers, which fit a narrower column.
+const DENSE_MIN_EDITOR: f32 = 250.0;
+const DENSE_MIN_PLOT: f32 = 170.0;
+const DENSE_MIN_WORKSPACE: f32 = 130.0;
+/// LAY-011: the editor's share in the dense split; 47% of the workbench keeps it above the 45%
+/// rule while leaving the two ancillary columns enough width for their controls.
+const DENSE_EDITOR_FRACTION: f32 = 0.47;
+
+/// Which of the window layouts a pass uses (LAY-011 / VIS-016).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutMode {
+    /// The normal four-pane arrangement: editor | plot | workspace over logs.
+    Split,
+    /// The four-pane arrangement at a large window whose points are too few for the normal
+    /// minimums (1280x800 at 200%): the panes stay side by side, but the chrome and the pane
+    /// headers use their compact forms so the split keeps the editor above 45% and stays inside
+    /// the client.
+    DenseSplit,
+    /// The minimum-window arrangement: the editor stays the primary surface and the ancillary
+    /// panes collapse into one drawer reached from a compact tab row.
+    Compact,
+}
+
+impl LayoutMode {
+    /// The layout the window described by `window` (client size in points) and
+    /// `pixels_per_point` (the interface scale over the OS DPI) must use.
+    ///
+    /// * At least 760x340 points: the normal split.
+    /// * Fewer points but a large physical client (at least 1200x700 physical): the dense split,
+    ///   the four panes at the compact chrome/header sizes.
+    /// * Anything smaller (the minimum window at 150/200%): the compact drawer layout.
+    pub fn for_window(window: Vec2, pixels_per_point: f32) -> LayoutMode {
+        if window.x >= MIN_SPLIT_WIDTH && window.y >= MIN_SPLIT_HEIGHT {
+            LayoutMode::Split
+        } else if window.x * pixels_per_point >= 1200.0
+            && window.y * pixels_per_point >= 700.0
+        {
+            LayoutMode::DenseSplit
+        } else {
+            LayoutMode::Compact
+        }
+    }
+
+    /// True when the pane headers use their compact form.
+    fn compact_headers(self) -> bool {
+        self != LayoutMode::Split
+    }
+}
+
+/// LAY-011: the ancillary panes the compact layout can show in its drawer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactPane {
+    /// The engine plot.
+    Plot,
+    /// The Workspace pane (Result and Inspector views).
+    Workspace,
+    /// The run log and quick eval.
+    Logs,
+}
+
+impl CompactPane {
+    /// The pane's tab label, which is also its accessible name.
+    pub fn label(self) -> &'static str {
+        match self {
+            CompactPane::Plot => "Plot",
+            CompactPane::Workspace => "Workspace",
+            CompactPane::Logs => "Logs",
+        }
+    }
+}
+
+/// LAY-011: the rectangles of the compact layout.
+#[derive(Clone, Copy, Debug)]
+pub struct CompactLayout {
+    /// The row of pane tabs, across the top of the workbench.
+    pub tab_bar: Rect,
+    /// The editor, always visible and always at least [`COMPACT_EDITOR_MIN`] of the width
+    /// beside the drawer (or the whole width when the drawer is collapsed).
+    pub editor: Rect,
+    /// The open ancillary pane, when the drawer is open.
+    pub drawer: Option<Rect>,
+    /// The draggable divider between the editor and the drawer.
+    pub splitter: Option<Rect>,
+    /// Which pane the drawer shows; `None` means collapsed to the tab row.
+    pub pane: Option<CompactPane>,
+}
+
+/// LAY-011: computes the compact layout from the workbench's client rect.
+///
+/// The tab row is always painted, so every collapsed pane is one pointer action away; the drawer
+/// itself is optional. The editor keeps [`COMPACT_EDITOR_MIN`] of the width whether the drawer is
+/// open or closed, and the whole area is clamped to `full` so no rectangle can leave the client.
+pub fn compute_compact_layout(
+    full: Rect,
+    pane: Option<CompactPane>,
+    editor_fraction: f32,
+) -> CompactLayout {
+    let width = full.width().max(0.0);
+    let tab_h = COMPACT_TAB_HEIGHT.min(full.height().max(0.0));
+    let tab_bar = Rect::from_min_size(full.min, vec2(width, tab_h));
+    let top = (tab_bar.bottom() + 2.0).min(full.bottom());
+    let area = Rect::from_min_max(pos2(full.left(), top), full.max);
+    let height = area.height().max(0.0);
+    match pane {
+        None => CompactLayout {
+            tab_bar,
+            editor: area,
+            drawer: None,
+            splitter: None,
+            pane,
+        },
+        Some(pane) => {
+            let usable = (area.width() - SPLIT).max(0.0);
+            let fraction = editor_fraction.clamp(COMPACT_EDITOR_MIN, 0.82);
+            let editor_w = (usable * fraction).min(usable);
+            let drawer_w = (usable - editor_w).max(0.0);
+            let editor = Rect::from_min_size(area.min, vec2(editor_w, height));
+            let splitter = Rect::from_min_size(
+                pos2(editor.right(), area.top()),
+                vec2(SPLIT.min(drawer_w + SPLIT), height),
+            );
+            let drawer = Rect::from_min_size(
+                pos2(splitter.right(), area.top()),
+                vec2(drawer_w, height),
+            );
+            CompactLayout {
+                tab_bar,
+                editor,
+                drawer: Some(drawer),
+                splitter: Some(splitter),
+                pane: Some(pane),
+            }
+        }
+    }
+}
+
 /// Rectangles of every pane and splitter for one pass.
 #[derive(Clone, Copy, Debug)]
 pub struct PaneLayout {
+    /// The workbench's client rectangle the panes were laid out in (the measurement seam the
+    /// layout tests assert against).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub full: Rect,
+    /// Which layout this pass used.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub mode: LayoutMode,
     /// Editor pane.
     pub editor: Rect,
-    /// Plot pane.
+    /// Plot pane (empty in the compact layout unless its drawer is open).
     pub plot: Rect,
-    /// Workspace pane.
+    /// Workspace pane (empty in the compact layout unless its drawer is open).
     pub workspace: Rect,
-    /// Logs pane.
+    /// Logs pane (empty in the compact layout unless its drawer is open).
     pub logs: Rect,
     /// Editor / plot splitter.
     pub split_a: Rect,
@@ -63,26 +224,43 @@ pub struct PaneLayout {
     pub split_b: Rect,
     /// Top / logs splitter.
     pub split_c: Rect,
+    /// The compact rectangles, when [`PaneLayout::mode`] is [`LayoutMode::Compact`].
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub compact: Option<CompactLayout>,
 }
 
 /// Computes the four-pane layout from the saved fractions, honouring minimum sizes whenever the
 /// window is large enough and compressing the minimums proportionally when it is not.
+///
+/// `dense` selects the compact minimums and the compact editor share used by
+/// [`LayoutMode::DenseSplit`]; the four panes are the same.
 pub fn compute_layout(
     full: Rect,
     editor_frac: f32,
     workspace_frac: f32,
     logs_frac: f32,
+    dense: bool,
 ) -> PaneLayout {
+    let (min_editor_base, min_plot_base, min_workspace_base, editor_frac) = if dense {
+        (
+            DENSE_MIN_EDITOR,
+            DENSE_MIN_PLOT,
+            DENSE_MIN_WORKSPACE,
+            editor_frac.max(DENSE_EDITOR_FRACTION),
+        )
+    } else {
+        (MIN_EDITOR, MIN_PLOT, MIN_WORKSPACE, editor_frac)
+    };
     let usable_w = (full.width() - 2.0 * SPLIT).max(0.0);
-    let min_sum = MIN_EDITOR + MIN_PLOT + MIN_WORKSPACE;
+    let min_sum = min_editor_base + min_plot_base + min_workspace_base;
     let shrink_w = if usable_w >= min_sum {
         1.0
     } else {
         usable_w / min_sum
     };
-    let min_editor = MIN_EDITOR * shrink_w;
-    let min_plot = MIN_PLOT * shrink_w;
-    let min_workspace = MIN_WORKSPACE * shrink_w;
+    let min_editor = min_editor_base * shrink_w;
+    let min_plot = min_plot_base * shrink_w;
+    let min_workspace = min_workspace_base * shrink_w;
 
     let max_editor = (usable_w - min_plot - min_workspace).max(min_editor);
     let editor_w = (usable_w * editor_frac).clamp(min_editor, max_editor);
@@ -123,6 +301,12 @@ pub fn compute_layout(
     );
 
     PaneLayout {
+        full,
+        mode: if dense {
+            LayoutMode::DenseSplit
+        } else {
+            LayoutMode::Split
+        },
         editor,
         plot,
         workspace,
@@ -130,6 +314,7 @@ pub fn compute_layout(
         split_a,
         split_b,
         split_c,
+        compact: None,
     }
 }
 
@@ -455,6 +640,20 @@ pub struct WorkbenchApp {
     editor_frac: f32,
     workspace_frac: f32,
     logs_frac: f32,
+    /// LAY-011: the layout the current pass uses, decided from the window's client size.
+    layout_mode: LayoutMode,
+    /// LAY-011: which ancillary pane the compact drawer shows; `None` is the collapsed state.
+    compact_pane: Option<CompactPane>,
+    /// LAY-011: the editor's share of the compact workbench while the drawer is open.
+    compact_editor_frac: f32,
+    /// LAY-011: the compact pane tabs painted in the last pass (the pointer-test seam, the same
+    /// pattern as `file_buttons`).
+    compact_tabs: Vec<(CompactPane, Rect)>,
+    /// LAY-011: the "Hide panes" button painted in the last compact pass.
+    compact_hide: Option<Rect>,
+    /// LAY-011: the Inspector tab painted in the last compact pass; it opens the workspace drawer
+    /// in the Inspector view, so the inspector is one action away even when collapsed.
+    compact_inspector: Option<Rect>,
     filter: String,
     /// The two Workspace tables, rebuilt from the frame's committed snapshot in [`Self::sync`].
     variables_table: VariableTable,
@@ -704,9 +903,15 @@ impl WorkbenchApp {
             find_symbol: None,
             editor_settings_open: false,
             find_focus: false,
-            editor_frac: 0.40,
+            editor_frac: 0.48,
             workspace_frac: 0.20,
             logs_frac: 0.18,
+            layout_mode: LayoutMode::Split,
+            compact_pane: None,
+            compact_editor_frac: COMPACT_EDITOR_DEFAULT,
+            compact_tabs: Vec::new(),
+            compact_hide: None,
+            compact_inspector: None,
             filter: String::new(),
             variables_table,
             functions_table,
@@ -1963,6 +2168,16 @@ impl WorkbenchApp {
     /// keyboard journey start from a fresh window without a pointer.
     fn request_pane_focus(&mut self, pane: Pane, ctx: &egui::Context) {
         self.focused_pane = pane;
+        // LAY-011: a keyboard pane jump must also reveal the pane it focuses; in the compact
+        // layout Plot, Workspace and Logs live behind the drawer.
+        if self.layout_mode == LayoutMode::Compact {
+            match pane {
+                Pane::Plot => self.compact_pane = Some(CompactPane::Plot),
+                Pane::Workspace => self.compact_pane = Some(CompactPane::Workspace),
+                Pane::Logs => self.compact_pane = Some(CompactPane::Logs),
+                Pane::Toolbar | Pane::Editor => {}
+            }
+        }
         let known = match pane {
             Pane::Toolbar => self.run_button_id,
             Pane::Editor => Some(surface_id()),
@@ -2045,6 +2260,9 @@ impl WorkbenchApp {
             }
             Action::WorkspaceResultView => {
                 self.inspector_open = false;
+                if self.layout_mode == LayoutMode::Compact {
+                    self.compact_pane = Some(CompactPane::Workspace);
+                }
                 self.request_pane_focus(Pane::Workspace, ctx);
                 if let Some(id) = self.workspace_tab_ids[0] {
                     ctx.memory_mut(|memory| memory.request_focus(id));
@@ -2053,6 +2271,9 @@ impl WorkbenchApp {
             }
             Action::WorkspaceInspectorView => {
                 self.inspector_open = true;
+                if self.layout_mode == LayoutMode::Compact {
+                    self.compact_pane = Some(CompactPane::Workspace);
+                }
                 self.request_pane_focus(Pane::Workspace, ctx);
                 if let Some(id) = self.workspace_tab_ids[1] {
                     ctx.memory_mut(|memory| memory.request_focus(id));
@@ -2529,6 +2750,9 @@ impl WorkbenchApp {
     /// The file bar: New / Open / Save / Save As / Recent / Close / Quit and the active
     /// document's encoding and path.
     fn file_bar(&mut self, ui: &mut Ui) {
+        if self.layout_mode != LayoutMode::Split {
+            return self.file_bar_compact(ui);
+        }
         let ctx = ui.ctx().clone();
         self.file_buttons.clear();
         // A11Y-004: the file bar wraps instead of running under the window edge at a high scale.
@@ -2615,6 +2839,84 @@ impl WorkbenchApp {
         let response = ui.button(label).on_hover_text(hover);
         self.file_buttons.push((label, response.rect));
         response.clicked()
+    }
+
+    /// LAY-011: the one-row file bar used when the compact layout is in force.
+    ///
+    /// The long path label is what makes the full bar wrap to two or three rows at 200%; here it
+    /// is truncated to whatever width remains. Every action of the full bar is still one click
+    /// away: Save stays visible and the rest live in the File menu (whose items are ordinary
+    /// buttons once it is open, so UI Automation finds them by name).
+    fn file_bar_compact(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        self.file_buttons.clear();
+        ui.horizontal(|ui| {
+            ui.menu_button("File", |ui| {
+                ui.set_min_width(220.0);
+                if ui.button("New").clicked() {
+                    self.apply_file_command(FileCommand::New, &ctx);
+                    ui.close();
+                }
+                if ui.button("Open...").clicked() {
+                    self.apply_file_command(FileCommand::Open, &ctx);
+                    ui.close();
+                }
+                if ui.button("Save As...").clicked() {
+                    self.apply_file_command(FileCommand::SaveAs, &ctx);
+                    ui.close();
+                }
+                let recent = self.workbench.recent_files().to_vec();
+                if recent.is_empty() {
+                    ui.add_enabled(false, egui::Button::new("Recent"));
+                } else {
+                    ui.menu_button("Recent", |ui| {
+                        ui.set_min_width(360.0);
+                        for path in &recent {
+                            if ui.button(path).clicked() {
+                                if let Ok(index) = self.workbench.open(std::path::Path::new(path)) {
+                                    self.sync_after_tab_change(index, &ctx);
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+                ui.separator();
+                if ui.button("Close").clicked() {
+                    self.apply_file_command(FileCommand::CloseTab, &ctx);
+                    ui.close();
+                }
+                if ui.button("Quit").clicked() {
+                    self.request_close(CloseTarget::Window, &ctx);
+                    ui.close();
+                }
+            });
+            if self.file_bar_button(
+                ui,
+                "Save",
+                "Save the active document (Ctrl+S); asks for a path when it has none",
+            ) {
+                self.save_active(false, &ctx);
+            }
+            let document = self.workbench.active_document();
+            ui.label(
+                RichText::new(document.encoding_label())
+                    .monospace()
+                    .small()
+                    .color(theme::dim()),
+            )
+            .on_hover_text("The encoding and newline style this document saves with");
+            let name = document.tab_label();
+            ui.add(
+                egui::Label::new(
+                    RichText::new(name)
+                        .monospace()
+                        .small()
+                        .color(theme::dim()),
+                )
+                .truncate(),
+            );
+        });
     }
 
     /// VIS-002: switches the window to `theme` at runtime.
@@ -2982,6 +3284,13 @@ impl WorkbenchApp {
             }
         }
 
+        // LAY-011: the layout is chosen from the client size in points before any chrome is
+        // drawn, so the compact chrome (one row per bar) and the compact workbench are decided
+        // together. 900x600 and 1280x800 at 100% keep the split; the same windows at a scale that
+        // leaves fewer than 760x340 points use the compact layout instead of overflowing.
+        self.layout_mode =
+            LayoutMode::for_window(ui.max_rect().size(), ui.ctx().pixels_per_point());
+
         egui::Panel::top("filebar").show(ui, |ui| {
             ui.scope_builder(
                 UiBuilder::new()
@@ -3072,6 +3381,9 @@ impl WorkbenchApp {
     }
 
     fn toolbar(&mut self, ui: &mut Ui) {
+        if self.layout_mode != LayoutMode::Split {
+            return self.toolbar_compact(ui);
+        }
         // A11Y-004: at 125-200% the toolbar's controls wrap onto extra rows instead of being
         // clipped by the window edge.
         ui.horizontal_wrapped(|ui| {
@@ -3084,79 +3396,7 @@ impl WorkbenchApp {
             ui.label(RichText::new(self.workbench.engine_name()).color(theme::dim()));
             ui.separator();
 
-            let toolbar = self.workbench.toolbar_state();
-            let run = ui
-                .add_enabled(
-                    toolbar.run_enabled,
-                    egui::Button::new(RichText::new("Run").strong()),
-                )
-                .on_hover_text(
-                    "Run (Ctrl+Enter): evaluate the active document on a worker (the window never blocks)",
-                );
-            // A11Y-001: the toolbar group's first control. Its id is remembered so F6 / Ctrl+1 can
-            // put the keyboard here, and a focus request that arrived before this pane painted is
-            // satisfied now.
-            self.run_button_id = Some(run.id);
-            if self.pane_focus == Some(Pane::Toolbar) {
-                self.pane_focus = None;
-                run.request_focus();
-            }
-            if run.clicked() {
-                self.workbench.run_active();
-            }
-            if toolbar.cancel_visible {
-                let cancel = ui
-                    .add_enabled(
-                        toolbar.cancel_enabled,
-                        egui::Button::new(RichText::new("Cancel").color(theme::error())),
-                    )
-                    .on_hover_text("Cancel (Esc): stop the active run at the next statement boundary");
-                if cancel.clicked() {
-                    self.workbench.cancel_active();
-                }
-            }
-            ui.separator();
-
-            // RUN-019: one visibly labelled precision input. It accepts text so an invalid value
-            // is rejected with guidance instead of being silently clamped by a spinner; the
-            // document precision is only changed when the value is valid.
-            ui.label(RichText::new("Precision").color(theme::dim()));
-            let field = ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.precision_input)
-                        .desired_width(64.0)
-                        .hint_text("digits"),
-                )
-                .on_hover_text(format!(
-                    "Display precision for the active document: a whole number of digits from {MIN_PRECISION} to {MAX_PRECISION}"
-                ));
-            label_input(ui, &field, "Precision (digits)");
-            let apply = ui
-                .add(egui::Button::new("Apply"))
-                .on_hover_text("Apply the typed precision to the active document");
-            let submitted = apply.clicked()
-                || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
-            if submitted {
-                match self
-                    .workbench
-                    .set_active_precision_text(&self.precision_input)
-                {
-                    Ok(decimals) => {
-                        self.precision_seen = decimals;
-                        self.precision_input = decimals.to_string();
-                        self.precision_error = None;
-                    }
-                    Err(guidance) => self.precision_error = Some(guidance),
-                }
-            }
-            ui.label(
-                RichText::new(format!("{} digits", self.view.precision)).color(theme::dim()),
-            )
-            .on_hover_text("The active document's applied display precision");
-            if let Some(guidance) = &self.precision_error {
-                ui.label(RichText::new(guidance).color(theme::error()))
-                    .on_hover_text("The precision was not changed; the run uses the last valid value.");
-            }
+            self.run_precision_controls(ui);
             ui.separator();
 
             if ui
@@ -3277,6 +3517,166 @@ impl WorkbenchApp {
         });
     }
 
+    /// LAY-011: the shared Run / Cancel / Precision group.
+    ///
+    /// Extracted so the normal and compact toolbars show the same controls, with the same ids,
+    /// shortcuts and validation: the compact layout must never make Run, Cancel or the precision
+    /// field harder to reach than the split layout does.
+    fn run_precision_controls(&mut self, ui: &mut Ui) {
+        let toolbar = self.workbench.toolbar_state();
+        let run = ui
+            .add_enabled(
+                toolbar.run_enabled,
+                egui::Button::new(RichText::new("Run").strong()),
+            )
+            .on_hover_text(
+                "Run (Ctrl+Enter): evaluate the active document on a worker (the window never blocks)",
+            );
+        // A11Y-001: the toolbar group's first control. Its id is remembered so F6 / Ctrl+1 can
+        // put the keyboard here, and a focus request that arrived before this pane painted is
+        // satisfied now.
+        self.run_button_id = Some(run.id);
+        if self.pane_focus == Some(Pane::Toolbar) {
+            self.pane_focus = None;
+            run.request_focus();
+        }
+        if run.clicked() {
+            self.workbench.run_active();
+        }
+        if toolbar.cancel_visible {
+            let cancel = ui
+                .add_enabled(
+                    toolbar.cancel_enabled,
+                    egui::Button::new(RichText::new("Cancel").color(theme::error())),
+                )
+                .on_hover_text("Cancel (Esc): stop the active run at the next statement boundary");
+            if cancel.clicked() {
+                self.workbench.cancel_active();
+            }
+        }
+        ui.separator();
+
+        // RUN-019: one visibly labelled precision input. It accepts text so an invalid value
+        // is rejected with guidance instead of being silently clamped by a spinner; the
+        // document precision is only changed when the value is valid.
+        ui.label(RichText::new("Precision").color(theme::dim()));
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.precision_input)
+                    .desired_width(64.0)
+                    .hint_text("digits"),
+            )
+            .on_hover_text(format!(
+                "Display precision for the active document: a whole number of digits from {MIN_PRECISION} to {MAX_PRECISION}"
+            ));
+        label_input(ui, &field, "Precision (digits)");
+        let apply = ui
+            .add(egui::Button::new("Apply"))
+            .on_hover_text("Apply the typed precision to the active document");
+        let submitted = apply.clicked()
+            || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+        if submitted {
+            match self
+                .workbench
+                .set_active_precision_text(&self.precision_input)
+            {
+                Ok(decimals) => {
+                    self.precision_seen = decimals;
+                    self.precision_input = decimals.to_string();
+                    self.precision_error = None;
+                }
+                Err(guidance) => self.precision_error = Some(guidance),
+            }
+        }
+        ui.label(RichText::new(format!("{} digits", self.view.precision)).color(theme::dim()))
+            .on_hover_text("The active document's applied display precision");
+        if let Some(guidance) = &self.precision_error {
+            ui.label(RichText::new(guidance).color(theme::error()))
+                .on_hover_text("The precision was not changed; the run uses the last valid value.");
+        }
+    }
+
+    /// LAY-011: the one-row toolbar used when the compact layout is in force.
+    ///
+    /// Run, Cancel and the precision field stay visible; the navigation, Help and Theme controls
+    /// move into the Actions menu, one click away and still named for UI Automation. The editor's
+    /// own row/byte counters move to the status strip so they do not force a second row.
+    fn toolbar_compact(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            self.run_precision_controls(ui);
+            ui.separator();
+            ui.menu_button("Actions", |ui| {
+                ui.set_min_width(240.0);
+                if ui.button("Editor settings").clicked() {
+                    self.editor_settings_open = true;
+                    ui.close();
+                }
+                if ui.button("Go to line").clicked() {
+                    self.find_symbol = None;
+                    self.goto_line = Some(GoToLinePrompt {
+                        text: String::new(),
+                        error: None,
+                        focus: true,
+                    });
+                    ui.close();
+                }
+                if ui.button("Find symbol").clicked() {
+                    self.goto_line = None;
+                    self.find_symbol = Some(SymbolPrompt {
+                        query: String::new(),
+                        selected: 0,
+                        focus: true,
+                    });
+                    ui.close();
+                }
+                if ui.button("Find...").clicked() {
+                    let active = self.workbench.active();
+                    self.editors[active].find_open();
+                    self.find_focus = true;
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .button(format!(
+                        "Keyboard Shortcuts ({})",
+                        keyboard::chord_of(Action::ShortcutsHelp)
+                    ))
+                    .clicked()
+                {
+                    self.open_shortcuts();
+                    ui.close();
+                }
+                let mut unicode = self.settings.unicode_glyphs;
+                if ui
+                    .checkbox(&mut unicode, "Unicode mathematical glyphs")
+                    .changed()
+                {
+                    self.set_unicode_glyphs(unicode, ui.ctx());
+                }
+                ui.separator();
+                let theme_label = self.theme_button_label();
+                if ui.button(theme_label).clicked() {
+                    let next = self.theme.toggled();
+                    self.set_theme(next, ui.ctx());
+                    ui.close();
+                }
+                ui.separator();
+                let active = self.workbench.active();
+                let editor = &self.editors[active];
+                ui.label(
+                    RichText::new(format!(
+                        "{} lines / {} bytes",
+                        editor.line_count(),
+                        editor.bytes()
+                    ))
+                    .color(theme::dim()),
+                );
+            })
+            .response
+            .on_hover_text("Editor navigation, Help, the Unicode setting and the theme");
+        });
+    }
+
     fn tab_strip(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             let tabs: Vec<String> = self
@@ -3323,6 +3723,9 @@ impl WorkbenchApp {
     }
 
     fn status_bar(&mut self, ui: &mut Ui) {
+        if self.layout_mode != LayoutMode::Split {
+            return self.status_bar_compact(ui);
+        }
         let active = self.workbench.active();
         let (line, column) = self.editors[active].line_col_1based();
         let status = self.workbench.status_text(line, column);
@@ -3426,53 +3829,349 @@ impl WorkbenchApp {
         });
     }
 
-    fn panes(&mut self, ui: &mut Ui, full: Rect) {
-        let layout = compute_layout(full, self.editor_frac, self.workspace_frac, self.logs_frac);
-        self.layout = Some(layout);
-        ui.painter()
-            .rect_filled(full, 0.0, theme::app_bg());
+    /// LAY-011: the one-row status strip used when the compact layout is in force.
+    ///
+    /// The accessible status name still carries the whole state (marker, file, revision,
+    /// precision, caret, run state and the committed count); the visible row states the same
+    /// facts compactly enough to stay on one line at the minimum window.
+    fn status_bar_compact(&mut self, ui: &mut Ui) {
+        let active = self.workbench.active();
+        let (line, column) = self.editors[active].line_col_1based();
+        let status = self.workbench.status_text(line, column);
+        let marker = match self.view.run_state {
+            crate::run_state::RunState::Failed => Some("[ERR]"),
+            crate::run_state::RunState::Finished => Some("[OK]"),
+            crate::run_state::RunState::Stale => Some("[STALE]"),
+            _ => None,
+        };
+        let diagnostic = self.view.diagnostic.clone();
+        let mut accessible = match marker {
+            Some(marker) => format!("{marker} {status}"),
+            None => status.clone(),
+        };
+        if let Some(diagnostic) = &diagnostic {
+            accessible.push_str(&format!(
+                " | error at Ln {}, Col {}: {}",
+                diagnostic.line, diagnostic.column, diagnostic.message
+            ));
+        }
+        label_ui_node_as(ui, egui::Role::Status, &accessible);
+        let title = self.workbench.active_document().tab_label();
+        let state = self.view.run_state.label();
+        let mut short = match marker {
+            Some(marker) => format!("{marker} {title} · Ln {line}, Col {column} · {state}"),
+            None => format!("{title} · Ln {line}, Col {column} · {state}"),
+        };
+        if self.view.total > 0 {
+            short.push_str(&format!(
+                " · {}/{}",
+                self.view.committed_steps.min(self.view.total),
+                self.view.total
+            ));
+        }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(short).monospace().small().color(
+                status_state_color(self.view.run_state),
+            ));
+            if let Some(diagnostic) = &diagnostic {
+                ui.separator();
+                ui.label(
+                    RichText::new(format!(
+                        "error at Ln {}, Col {}",
+                        diagnostic.line, diagnostic.column
+                    ))
+                    .monospace()
+                    .small()
+                    .color(theme::error()),
+                );
+            }
+        });
+    }
 
+    fn panes(&mut self, ui: &mut Ui, full: Rect) {
+        ui.painter().rect_filled(full, 0.0, theme::app_bg());
         // RUN-003: one view for the whole frame. The clone is what a pane closure can borrow
         // while another pane mutates `self`; no pane reads pane data from the workbench.
         let view = self.view.clone();
-        self.editor_pane(ui, layout.editor, &view);
-        self.plot_pane(ui, layout.plot, &view);
-        self.workspace_pane(ui, layout.workspace, &view);
-        self.logs_pane(ui, layout.logs, &view);
+        match self.layout_mode {
+            LayoutMode::Split | LayoutMode::DenseSplit => {
+                let dense = self.layout_mode == LayoutMode::DenseSplit;
+                let layout = compute_layout(
+                    full,
+                    self.editor_frac,
+                    self.workspace_frac,
+                    self.logs_frac,
+                    dense,
+                );
+                self.layout = Some(layout);
+                self.compact_tabs.clear();
+                self.compact_hide = None;
+                self.compact_inspector = None;
+                self.editor_pane(ui, layout.editor, &view);
+                self.plot_pane(ui, layout.plot, &view);
+                self.workspace_pane(ui, layout.workspace, &view);
+                self.logs_pane(ui, layout.logs, &view);
 
-        let drag_a = splitter(
-            ui,
-            layout.split_a,
-            "split_editor",
-            true,
-            "Editor / plot splitter",
-        );
-        let drag_b = splitter(
-            ui,
-            layout.split_b,
-            "split_workspace",
-            true,
-            "Plot / workspace splitter",
-        );
-        let drag_c = splitter(
-            ui,
-            layout.split_c,
-            "split_logs",
-            false,
-            "Workspace / logs splitter",
-        );
+                let drag_a = splitter(
+                    ui,
+                    layout.split_a,
+                    "split_editor",
+                    true,
+                    "Editor / plot splitter",
+                );
+                let drag_b = splitter(
+                    ui,
+                    layout.split_b,
+                    "split_workspace",
+                    true,
+                    "Plot / workspace splitter",
+                );
+                let drag_c = splitter(
+                    ui,
+                    layout.split_c,
+                    "split_logs",
+                    false,
+                    "Workspace / logs splitter",
+                );
 
-        if drag_a != 0.0 {
-            self.editor_frac =
-                (self.editor_frac + drag_a / full.width().max(1.0)).clamp(0.02, 0.95);
+                if drag_a != 0.0 {
+                    self.editor_frac =
+                        (self.editor_frac + drag_a / full.width().max(1.0)).clamp(0.02, 0.95);
+                }
+                if drag_b != 0.0 {
+                    self.workspace_frac =
+                        (self.workspace_frac - drag_b / full.width().max(1.0)).clamp(0.02, 0.95);
+                }
+                if drag_c != 0.0 {
+                    self.logs_frac =
+                        (self.logs_frac - drag_c / full.height().max(1.0)).clamp(0.02, 0.9);
+                }
+            }
+            LayoutMode::Compact => self.compact_panes(ui, full, &view),
         }
-        if drag_b != 0.0 {
-            self.workspace_frac =
-                (self.workspace_frac - drag_b / full.width().max(1.0)).clamp(0.02, 0.95);
+    }
+
+    /// LAY-011: the minimum-window layout.
+    ///
+    /// The editor stays on the left and keeps at least [`COMPACT_EDITOR_MIN`] of the width whether
+    /// the drawer is open or closed. The ancillary panes live in one drawer selected from the tab
+    /// row, so nothing is squeezed into a column too narrow to read and no pane can be pushed out
+    /// of the window. Every pane's rectangle is inside `full`, and the drawer is one click away.
+    fn compact_panes(&mut self, ui: &mut Ui, full: Rect, view: &DocumentView) {
+        let layout = compute_compact_layout(full, self.compact_pane, self.compact_editor_frac);
+        self.layout = Some(PaneLayout {
+            full,
+            mode: LayoutMode::Compact,
+            editor: layout.editor,
+            plot: match layout.pane {
+                Some(CompactPane::Plot) => layout.drawer.unwrap_or(Rect::NOTHING),
+                _ => Rect::NOTHING,
+            },
+            workspace: match layout.pane {
+                Some(CompactPane::Workspace) => layout.drawer.unwrap_or(Rect::NOTHING),
+                _ => Rect::NOTHING,
+            },
+            logs: match layout.pane {
+                Some(CompactPane::Logs) => layout.drawer.unwrap_or(Rect::NOTHING),
+                _ => Rect::NOTHING,
+            },
+            split_a: Rect::NOTHING,
+            split_b: Rect::NOTHING,
+            split_c: Rect::NOTHING,
+            compact: Some(layout),
+        });
+        self.compact_tabs.clear();
+        self.compact_hide = None;
+        self.compact_inspector = None;
+        self.compact_pane_tabs(ui, layout.tab_bar);
+        self.editor_pane(ui, layout.editor, view);
+        match (layout.pane, layout.drawer) {
+            (Some(CompactPane::Plot), Some(drawer)) => self.plot_pane(ui, drawer, view),
+            (Some(CompactPane::Workspace), Some(drawer)) => self.workspace_pane(ui, drawer, view),
+            (Some(CompactPane::Logs), Some(drawer)) => self.logs_pane_compact(ui, drawer, view),
+            _ => {}
         }
-        if drag_c != 0.0 {
-            self.logs_frac = (self.logs_frac - drag_c / full.height().max(1.0)).clamp(0.02, 0.9);
+        if let (Some(splitter_rect), Some(drawer)) = (layout.splitter, layout.drawer) {
+            let drag = splitter(
+                ui,
+                splitter_rect,
+                "compact_split_editor",
+                true,
+                "Editor / pane drawer splitter",
+            );
+            if drag != 0.0 {
+                let usable = (layout.editor.width() + drawer.width()).max(1.0);
+                self.compact_editor_frac =
+                    (self.compact_editor_frac + drag / usable).clamp(COMPACT_EDITOR_MIN, 0.82);
+            }
         }
+    }
+
+    /// LAY-011: the compact pane switcher. Every collapsed pane is one pointer action away and
+    /// every button is named for UI Automation; the Inspector button selects the Workspace pane
+    /// in its Inspector view, so the inspector is also one action away.
+    fn compact_pane_tabs(&mut self, ui: &mut Ui, rect: Rect) {
+        ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::left_to_right(Align::Center))
+                .accessibility_role(egui::Role::TabList)
+                .accessibility_label("Collapsed panes"),
+            |ui| {
+                ui.add_space(4.0);
+                for pane in [CompactPane::Plot, CompactPane::Workspace, CompactPane::Logs] {
+                    let selected = self.compact_pane == Some(pane);
+                    let response = ui.selectable_label(selected, pane.label());
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Tab,
+                            true,
+                            pane.label().to_string(),
+                        )
+                    });
+                    ui.ctx().accesskit_node_builder(response.id, |node| {
+                        node.set_selected(selected);
+                    });
+                    self.compact_tabs.push((pane, response.rect));
+                    if response.clicked() {
+                        self.compact_pane = Some(pane);
+                    }
+                }
+                // The Inspector is a view of the Workspace pane, not a fourth pane; the tab opens
+                // Workspace and selects the Inspector view in the same action.
+                let inspector_selected =
+                    self.compact_pane == Some(CompactPane::Workspace) && self.inspector_open;
+                let inspector = ui.selectable_label(inspector_selected, "Inspector");
+                inspector.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Tab, true, "Inspector".to_string())
+                });
+                ui.ctx().accesskit_node_builder(inspector.id, |node| {
+                    node.set_selected(inspector_selected);
+                });
+                self.compact_inspector = Some(inspector.rect);
+                if inspector.clicked() {
+                    self.inspector_open = true;
+                    self.compact_pane = Some(CompactPane::Workspace);
+                }
+                if self.compact_pane.is_some() {
+                    let hide = ui.button("Hide panes");
+                    self.compact_hide = Some(hide.rect);
+                    if hide.clicked() {
+                        self.compact_pane = None;
+                    }
+                }
+            },
+        );
+    }
+
+    /// LAY-011: the logs drawer. The compact drawer is narrow, so its log lines wrap instead of
+    /// being clipped at the drawer edge and the quick-eval field shrinks to the space it has.
+    fn logs_pane_compact(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
+        if self.pane_focus == Some(Pane::Logs) {
+            self.pane_focus = None;
+            ui.ctx()
+                .memory_mut(|memory| memory.request_focus(quick_eval_id()));
+        }
+        let active = self.workbench.active();
+        let legend = log_kind_legend();
+        let header_line = {
+            let (line, column) = self.editors[active].line_col_1based();
+            format!("run log · Ln {line}, Col {column}")
+        };
+        let header_hint = header_text_width(&header_line) + 8.0;
+        with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
+            header_row(ui, header, |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(&header_line).color(theme::dim())).truncate(),
+                )
+                .on_hover_text(format!("Log kinds: {legend}"));
+            });
+            ui.scope_builder(
+                UiBuilder::new()
+                    .max_rect(body.shrink2(vec2(6.0, 2.0)))
+                    .layout(Layout::top_down(Align::Min)),
+                |ui| {
+                    self.quick_eval_row_compact(ui);
+                    let logs = &view.logs;
+                    if logs.is_empty() {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("No log entries yet. Run the document.")
+                                    .color(theme::dim()),
+                            )
+                            .truncate(),
+                        );
+                        return;
+                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt("logs_scroll_compact")
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for entry in logs {
+                                let color = match entry.kind {
+                                    LogKind::Echo => theme::log_echo(),
+                                    LogKind::Stdout => theme::text(),
+                                    LogKind::Result => theme::accent(),
+                                    LogKind::Diagnostic => theme::error(),
+                                    LogKind::Timing => theme::warning(),
+                                    LogKind::Progress => theme::progress(),
+                                    LogKind::Info => theme::dim(),
+                                };
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(entry.render()).monospace().color(color),
+                                    )
+                                    .wrap(),
+                                );
+                            }
+                        });
+                },
+            );
+        });
+    }
+
+    /// LAY-011: the quick-eval row in the narrow drawer: the field takes what is left and log
+    /// wrapping keeps every line inside the pane.
+    fn quick_eval_row_compact(&mut self, ui: &mut Ui) {
+        let mut submit = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Quick eval").strong().color(theme::text()));
+            let id = quick_eval_id();
+            let width = (ui.available_width() - 24.0).max(60.0);
+            let response = ui.add(
+                egui::TextEdit::singleline(self.quick_eval.text_mut())
+                    .id(id)
+                    .hint_text("quick eval")
+                    .desired_width(width),
+            );
+            label_input(ui, &response, "Quick eval expression");
+            self.quick_eval_rect = Some(response.rect);
+            if response.has_focus() {
+                ui.memory_mut(|memory| {
+                    memory.set_focus_lock_filter(
+                        id,
+                        egui::EventFilter {
+                            tab: false,
+                            escape: true,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                        },
+                    );
+                });
+                if ui.input(|input| input.key_pressed(Key::Escape)) {
+                    response.surrender_focus();
+                }
+            }
+            if response.lost_focus() && key_pressed_without_modifiers(ui, Key::Enter) {
+                submit = true;
+            }
+        });
+        if submit {
+            self.submit_quick_eval();
+            ui.ctx()
+                .memory_mut(|memory| memory.request_focus(quick_eval_id()));
+        }
+        ui.add_space(2.0);
     }
 
     fn editor_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
@@ -3508,11 +4207,15 @@ impl WorkbenchApp {
         // The header's natural width decides how many rows it is given; the strings are built
         // once here so the estimate and the painted labels cannot disagree.
         let header_lines = format!("{lines} lines / {bytes} bytes");
+        // LAY-011: at the minimum window the compact editor header keeps only the facts that are
+        // needed to identify the buffer; the typography summary and the fixed editing-state
+        // allowance would otherwise take half of the pane's height away from the text.
+        let compact = self.layout_mode.compact_headers();
         // A11Y-005: the header states the resolved typography, so a UIA capture proves which
         // font, size, line height and ligature choice the frame is painted with. At a narrow
         // pane it is the first label dropped: it is the least important header fact and keeping
         // it would force a fourth header row at 200% interface scale.
-        let typography_line = (rect.width() >= 420.0)
+        let typography_line = (!compact && rect.width() >= 420.0)
             .then(|| typography::Typography::new(&self.settings.editor.typography).summary());
         let diagnostic_line = diagnostic
             .as_ref()
@@ -3531,8 +4234,9 @@ impl WorkbenchApp {
         // every pass; their widths are deliberately not measured, because a hint that changed
         // when a status appeared would resize the header and shift the whole pane between two
         // frames (which also moves a pointer target out from under a click). A fixed allowance
-        // covers all four at once.
-        header_hint += 280.0;
+        // covers all four at once; the compact layout keeps only a token allowance so the text
+        // body, not the header, owns the pane.
+        header_hint += if compact { 90.0 } else { 280.0 };
         if let Some(extra) = diagnostic_line.as_deref() {
             header_hint += 8.0 + header_text_width(extra);
         }
@@ -3835,17 +4539,25 @@ impl WorkbenchApp {
         let plot_title = view.plot.as_ref().map(|plot| plot.title.clone());
         let empty = self.plot.is_empty();
         let zoom_label = format!("{:.0}%", self.plot.zoom_percent());
-        let mut header_hint = 36.0
-            + 48.0
-            + 78.0
-            + 72.0
-            + 8.0
-            + header_text_width(&zoom_label)
-            + 8.0
-            + header_text_width(plot_title.as_deref().unwrap_or("no engine plot"))
-            + 8.0
-            + 100.0
-            + 105.0;
+        // LAY-011: in the compact drawer the plot header carries the six plot actions and nothing
+        // else; the zoom readout, the engine title and the raster diagnostics would each cost a
+        // wrapped row and leave less canvas than the actions themselves.
+        let compact = self.layout_mode.compact_headers();
+        let mut header_hint = if compact {
+            36.0 + 48.0 + 78.0 + 72.0 + 100.0 + 105.0 + 16.0
+        } else {
+            36.0
+                + 48.0
+                + 78.0
+                + 72.0
+                + 8.0
+                + header_text_width(&zoom_label)
+                + 8.0
+                + header_text_width(plot_title.as_deref().unwrap_or("no engine plot"))
+                + 8.0
+                + 100.0
+                + 105.0
+        };
         if let Some((status, _)) = &self.plot_export_status {
             header_hint += header_text_width(status);
         }
@@ -3888,22 +4600,27 @@ impl WorkbenchApp {
                 {
                     self.plot.zoom_step(plot::WHEEL_STEP);
                 }
-                ui.label(
-                    RichText::new(&zoom_label)
-                        .monospace()
-                        .color(theme::dim()),
-                )
-                .on_hover_text("Zoom as a percentage of natural size");
-                ui.separator();
-                match &plot_title {
-                    Some(title) => {
-                        ui.label(RichText::new(title).color(theme::accent()));
+                if !compact {
+                    ui.label(
+                        RichText::new(&zoom_label)
+                            .monospace()
+                            .color(theme::dim()),
+                    )
+                    .on_hover_text("Zoom as a percentage of natural size");
+                    ui.separator();
+                    match &plot_title {
+                        Some(title) => {
+                            ui.add(
+                                egui::Label::new(RichText::new(title).color(theme::accent()))
+                                    .truncate(),
+                            );
+                        }
+                        None => {
+                            ui.label(RichText::new("no engine plot").color(theme::dim()));
+                        }
                     }
-                    None => {
-                        ui.label(RichText::new("no engine plot").color(theme::dim()));
-                    }
+                    ui.separator();
                 }
-                ui.separator();
                 // PLT-006: both exports go through the native save dialog. SVG copies the
                 // engine's captured bytes; PNG opens an in-window options step first.
                 if ui
@@ -3920,12 +4637,17 @@ impl WorkbenchApp {
                 {
                     self.plot_export = Some(PngExport::default());
                 }
-                if let Some((status, error)) = &self.plot_export_status {
-                    ui.label(RichText::new(status).small().color(if *error {
-                        theme::error()
-                    } else {
-                        theme::accent()
-                    }));
+                if !compact {
+                    if let Some((status, error)) = &self.plot_export_status {
+                        ui.add(
+                            egui::Label::new(RichText::new(status).small().color(if *error {
+                                theme::error()
+                            } else {
+                                theme::accent()
+                            }))
+                            .truncate(),
+                        );
+                    }
                 }
             });
             if empty {
@@ -3933,6 +4655,12 @@ impl WorkbenchApp {
                 return;
             }
             self.plot.title = plot_title.clone();
+            if compact {
+                // LAY-011: the raster diagnostics are a development readout; in the narrow drawer
+                // the whole body is the canvas.
+                self.plot.ui(ui, body);
+                return;
+            }
             let info = format!(
                 "raster {}x{} @ {:.2}x · {:.2} ms raster · {:.2} ms upload",
                 self.plot.raster_px[0],
@@ -4310,11 +5038,14 @@ impl WorkbenchApp {
         with_pane(ui, rect, "Workspace", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 let label = ui.label("Filter");
+                // LAY-011: the field never asks for more width than the header has left, so the
+                // dense split's narrower Workspace column still paints the whole control.
+                let field_width = 130.0_f32.min((ui.available_width() - 12.0).max(70.0));
                 let filter_field = ui
                     .add(
                         egui::TextEdit::singleline(&mut filter)
                             .hint_text("variable or function")
-                            .desired_width(130.0),
+                            .desired_width(field_width),
                     )
                     .labelled_by(label.id)
                     .on_hover_text("Filter the variables and functions by name (Ctrl+Alt+F)");
@@ -4338,8 +5069,10 @@ impl WorkbenchApp {
                     // its widest child would let them widen the content and clip at the border.
                     // The 96 px reserve covers the nested record/array indentation: egui's
                     // indents move the cursor without shrinking the wrap width, so a label
-                    // wrapping at the full pane width would still end under the border.
-                    let result_width = (body.width() - 96.0).max(120.0);
+                    // wrapping at the full pane width would still end under the border. The extra
+                    // 16 points cover the scroll bar the vertical ScrollArea reserves, so a
+                    // wrapped line cannot be clipped horizontally at the viewport edge.
+                    let result_width = (body.width() - 112.0).max(100.0);
                     // SYM-001: the Workspace pane has two views over the same committed
                     // snapshot. The Inspector tab never reads the editor buffer; it renders
                     // only `view.result_inspection`, which came from the last commit.
@@ -4911,11 +5644,16 @@ fn paint_inspector(
     expansion: &mut InspectorExpansion,
     toggles: &mut Vec<(String, Rect)>,
 ) {
-    ui.set_max_width(width.max(120.0));
-    ui.label(
-        RichText::new("INSPECTOR · last committed result")
-            .small()
-            .color(theme::dim()),
+    // LAY-011: the caller already reserves the indent and scrollbar; do not floor this back up to
+    // a width the narrow pane cannot hold.
+    ui.set_max_width(width.max(80.0));
+    ui.add(
+        egui::Label::new(
+            RichText::new("INSPECTOR · last committed result")
+                .small()
+                .color(theme::dim()),
+        )
+        .wrap(),
     );
     if !view.has_snapshot {
         ui.label(RichText::new("No run has published a result yet.").color(theme::dim()));
@@ -4954,13 +5692,16 @@ fn paint_inspector(
         .as_deref()
         .map(|detail| format!(" · {detail}"))
         .unwrap_or_default();
-    ui.label(
-        RichText::new(format!(
-            "subject  {} · {}{detail}",
-            subject.kind, subject.path
-        ))
-        .monospace()
-        .color(theme::accent()),
+    ui.add(
+        egui::Label::new(
+            RichText::new(format!(
+                "subject  {} · {}{detail}",
+                subject.kind, subject.path
+            ))
+            .monospace()
+            .color(theme::accent()),
+        )
+        .wrap(),
     );
 
     paint_inspector_heading(ui, "Pretty", "");
@@ -5247,7 +5988,9 @@ fn paint_result_section(
     expansion: &mut ExpansionState,
     toggles: &mut Vec<(String, Rect)>,
 ) {
-    ui.set_max_width(width.max(120.0));
+    // LAY-011: the caller already reserves the indent and scrollbar; do not floor this back up to
+    // a width the narrow pane cannot hold.
+    ui.set_max_width(width.max(80.0));
     ui.label(
         RichText::new("RESULT · structured projection")
             .small()
@@ -5826,9 +6569,12 @@ fn header_text_width(text: &str) -> f32 {
 /// the body starts below it. Five rows is the cap (the plot header at 200% is the widest).
 fn header_height(width: f32, hint: f32) -> f32 {
     let available = (width - 16.0).max(80.0);
-    let rows = (1.35 * hint / available).ceil().clamp(1.0, 5.0);
-    // 20 points per painted row (the header text is 16-20 points tall) plus a 4 point pad.
-    4.0 + rows * 20.0
+    let rows = (1.35 * hint / available).ceil().clamp(1.0, 6.0);
+    // LAY-011: 24 points per painted row, not 20: a 20 pt button plus egui's item spacing and the
+    // header's own padding occupy a little more than the control's height, and a dense split at
+    // 200% wrapped the plot header onto four rows, whose last row overlapped the canvas when the
+    // allowance was only the button height.
+    4.0 + rows * 24.0
 }
 
 fn header_ui(header: Rect) -> UiBuilder {
@@ -5890,20 +6636,25 @@ fn with_pane<R>(
     header_hint: f32,
     add: impl FnOnce(&mut Ui, Rect, Rect) -> R,
 ) -> R {
-    let header_h = header_height(rect.width(), header_hint);
+    // LAY-011: a header never takes more than the pane has, so a compressed pane cannot push its
+    // body (and the controls painted in it) below the client. The clip keeps every painted shape
+    // inside the pane as a second line of defence.
+    let header_h = header_height(rect.width(), header_hint).min((rect.height() - 4.0).max(0.0));
     ui.scope_builder(
         UiBuilder::new()
             .max_rect(rect)
             .accessibility_role(egui::Role::Pane)
             .accessibility_label(title),
         |ui| {
+            ui.shrink_clip_rect(rect);
             ui.painter().rect_filled(rect, 4.0, theme::panel_bg());
             ui.painter()
                 .rect_stroke(rect, 4.0, Stroke::new(1.0, theme::border()), StrokeKind::Inside);
             let header = Rect::from_min_size(rect.min, vec2(rect.width(), header_h));
             ui.painter().rect_filled(header, 4.0, theme::header_bg());
+            let body_top = (header.bottom() + 1.0).min(rect.bottom() - 1.0);
             let body = Rect::from_min_max(
-                pos2(rect.left() + 1.0, header.bottom() + 1.0),
+                pos2(rect.left() + 1.0, body_top),
                 pos2(rect.right() - 1.0, rect.bottom() - 1.0),
             );
             add(ui, header, body)
@@ -12109,6 +12860,320 @@ mod tests {
             "success must also be identifiable without hue: {}",
             good_status.name
         );
+    }
+
+    /// LAY-011 / VIS-016: the measured adaptive layout at the supported window sizes and scales.
+    ///
+    /// For every (window, scale) pair this asserts, from the frame the window really painted:
+    /// the chosen mode, that the workbench and every pane rectangle are inside the client, that
+    /// the editor keeps at least 45% of the workbench width, that Run/Apply/the precision field
+    /// (and Cancel while in flight, see the test below) are inside the client, and that no
+    /// non-scrolling interactive control or painted text leaves the client. In the compact mode
+    /// it also opens each collapsed pane with one pointer click and re-checks the drawer.
+    #[test]
+    fn lay_011_adaptive_layout_keeps_every_pane_inside_every_supported_client() {
+        let mut app = structural_app();
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let _ = press_action(
+            &ctx,
+            &mut app,
+            Action::Workbench(keyboard::WorkbenchCommand::Run),
+        );
+        pump_until_terminal(&ctx, &mut app);
+        let mut report = String::new();
+        for physical in [vec2(900.0, 600.0), vec2(1280.0, 800.0)] {
+            for percent in [100u32, 150, 200] {
+                app.settings.ui_scale_percent = percent;
+                let scale = percent as f32 / 100.0;
+                let screen = physical / scale;
+                // The zoom setting becomes active on the next pass and rescales that pass's
+                // screen rect; three passes settle on the requested client size.
+                frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+                for _ in 0..3 {
+                    frame_sized(&ctx, &mut app, screen, Vec::new());
+                }
+                assert!(
+                    (ctx.zoom_factor() - scale).abs() < 1e-4,
+                    "the scale is applied: {} != {scale}",
+                    ctx.zoom_factor()
+                );
+                let layout = app.layout.expect("the frame paints the layout");
+                assert_eq!(
+                    layout.mode,
+                    LayoutMode::for_window(screen, ctx.pixels_per_point()),
+                    "mode at {:.0}x{:.0} points",
+                    screen.x,
+                    screen.y
+                );
+                let window = Rect::from_min_size(pos2(0.0, 0.0), screen);
+                assert!(
+                    window.expand(0.5).contains_rect(layout.full),
+                    "the workbench itself is inside the client: {:?}",
+                    layout.full
+                );
+                let visible: Vec<(&str, Rect)> = match layout.mode {
+                    LayoutMode::Split | LayoutMode::DenseSplit => vec![
+                        ("editor", layout.editor),
+                        ("plot", layout.plot),
+                        ("workspace", layout.workspace),
+                        ("logs", layout.logs),
+                        ("split_a", layout.split_a),
+                        ("split_b", layout.split_b),
+                        ("split_c", layout.split_c),
+                    ],
+                    LayoutMode::Compact => {
+                        let compact = layout.compact.expect("compact rectangles");
+                        assert!(
+                            window.expand(0.5).contains_rect(compact.tab_bar),
+                            "the pane tab row is inside the client: {:?}",
+                            compact.tab_bar
+                        );
+                        let mut rects = vec![("editor", compact.editor)];
+                        if let Some(drawer) = compact.drawer {
+                            rects.push(("drawer", drawer));
+                        }
+                        if let Some(splitter) = compact.splitter {
+                            rects.push(("compact_splitter", splitter));
+                        }
+                        rects
+                    }
+                };
+                for (name, rect) in &visible {
+                    assert!(
+                        rect.is_positive(),
+                        "{percent}% {:.0}x{:.0}: the {name} pane has no area: {rect:?}",
+                        physical.x,
+                        physical.y
+                    );
+                    assert!(
+                        window.expand(0.5).contains_rect(*rect),
+                        "{percent}% {:.0}x{:.0}: the {name} pane {rect:?} leaves the client {window:?}",
+                        physical.x,
+                        physical.y
+                    );
+                }
+                // LAY-011: the editor keeps at least ~45% of the workbench width.
+                let editor_share = layout.editor.width() / layout.full.width().max(1.0);
+                assert!(
+                    editor_share >= 0.45,
+                    "{percent}% {:.0}x{:.0}: the editor has {:.1}% of the width, needs 45%",
+                    physical.x,
+                    physical.y,
+                    editor_share * 100.0
+                );
+                let rows = accessibility_rows(&ctx, &mut app, screen);
+                let required_actions: &[&str] = match layout.mode {
+                    LayoutMode::Split => &["Run", "Apply", "Precision (digits)", "Save", "New"],
+                    LayoutMode::DenseSplit | LayoutMode::Compact => {
+                        &["Run", "Apply", "Precision (digits)", "Save", "File"]
+                    }
+                };
+                for required in required_actions {
+                    let row = rows
+                        .iter()
+                        .find(|row| row.name == *required && row.interactive())
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{percent}% {:.0}x{:.0}: the primary action {required:?} is missing",
+                                physical.x, physical.y
+                            )
+                        });
+                    assert!(
+                        window.expand(0.5).contains_rect(row.bounds),
+                        "{percent}% {:.0}x{:.0}: {required:?} at {:?} is outside the client",
+                        physical.x,
+                        physical.y,
+                        row.bounds
+                    );
+                }
+                // The dense split keeps all four panes on screen; the compact layout replaces
+                // them with its drawer, so only the dense split is asserted here.
+                if layout.mode == LayoutMode::DenseSplit {
+                    for title in ["Plot - engine SVG", "Workspace", "Logs"] {
+                        assert!(
+                            rows.iter().any(|row| row.role == egui::Role::Pane
+                                && row.name == title),
+                            "{percent}% {:.0}x{:.0}: the dense split must paint the {title} pane",
+                            physical.x,
+                            physical.y
+                        );
+                    }
+                }
+                // Every pane tab is visible and one click opens its pane.
+                if layout.mode == LayoutMode::Compact {
+                    for tab in ["Plot", "Workspace", "Logs", "Inspector"] {
+                        assert!(
+                            rows.iter().any(|row| row.name == tab && row.interactive()),
+                            "{percent}%: the collapsed pane tab {tab:?} is missing"
+                        );
+                    }
+                    assert_eq!(app.compact_tabs.len(), 3, "three pane tabs are painted");
+                    for (pane, rect) in app.compact_tabs.clone() {
+                        let pos = rect.center();
+                        frame_sized(&ctx, &mut app, screen, vec![egui::Event::PointerMoved(pos)]);
+                        frame_sized(&ctx, &mut app, screen, vec![pointer_button(pos, true)]);
+                        frame_sized(&ctx, &mut app, screen, vec![pointer_button(pos, false)]);
+                        assert_eq!(
+                            app.compact_pane,
+                            Some(pane),
+                            "{percent}%: one click must open the {} drawer",
+                            pane.label()
+                        );
+                        for _ in 0..2 {
+                            frame_sized(&ctx, &mut app, screen, Vec::new());
+                        }
+                        let opened = app.layout.expect("drawer layout");
+                        let compact = opened.compact.expect("compact rectangles");
+                        let drawer = compact.drawer.expect("the drawer is open");
+                        assert!(
+                            window.expand(0.5).contains_rect(drawer),
+                            "{percent}%: the {} drawer leaves the client: {drawer:?}",
+                            pane.label()
+                        );
+                        assert!(
+                            compact.editor.width() / opened.full.width().max(1.0) >= 0.45,
+                            "{percent}%: the {} drawer shrinks the editor below 45%",
+                            pane.label()
+                        );
+                        report.push_str(&format!(
+                            "  drawer={} window={:.0}x{:.0} scale={percent}% editor_drawer={:.1}%\n",
+                            pane.label(),
+                            physical.x,
+                            physical.y,
+                            compact.editor.width() / opened.full.width().max(1.0) * 100.0
+                        ));
+                        // The pane is painted with its own titled frame.
+                        let pane_rows = accessibility_rows(&ctx, &mut app, screen);
+                        let title = match pane {
+                            CompactPane::Plot => "Plot - engine SVG",
+                            CompactPane::Workspace => "Workspace",
+                            CompactPane::Logs => "Logs",
+                        };
+                        assert!(
+                            pane_rows.iter().any(|row| row.role == egui::Role::Pane
+                                && row.name == title),
+                            "{percent}%: the {} pane is not painted\n{}",
+                            pane.label(),
+                            a11y::dump_table(&pane_rows)
+                        );
+                    }
+                    // The Inspector tab opens the Workspace drawer in the Inspector view.
+                    let inspector = app
+                        .compact_inspector
+                        .expect("the Inspector tab is painted");
+                    let pos = inspector.center();
+                    frame_sized(&ctx, &mut app, screen, vec![egui::Event::PointerMoved(pos)]);
+                    frame_sized(&ctx, &mut app, screen, vec![pointer_button(pos, true)]);
+                    frame_sized(&ctx, &mut app, screen, vec![pointer_button(pos, false)]);
+                    assert!(
+                        app.inspector_open && app.compact_pane == Some(CompactPane::Workspace),
+                        "{percent}%: one click on Inspector must show the inspector in the drawer"
+                    );
+                    app.compact_pane = None;
+                    app.inspector_open = false;
+                }
+                // No non-scrolling interactive control may leave the client, and no painted
+                // text may be cut horizontally at any edge it is clipped to.
+                for row in &rows {
+                    if row.bounds == Rect::NOTHING || !row.bounds.is_positive() {
+                        continue;
+                    }
+                    if row.interactive() && !a11y::in_scroll_container(&rows, row) {
+                        assert!(
+                            window.expand(0.5).contains_rect(row.bounds),
+                            "{percent}% {:.0}x{:.0}: {:?} '{}' at {:?} leaves the client",
+                            physical.x,
+                            physical.y,
+                            row.role,
+                            row.name,
+                            row.bounds
+                        );
+                    }
+                }
+                let output = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+                let mut shapes = 0usize;
+                for clipped in &output.shapes {
+                    let mut painted = Painted::default();
+                    collect_painted(&clipped.shape, &mut painted);
+                    for (text, rect) in painted.texts {
+                        if !rect.intersects(window) || !rect.is_positive() {
+                            continue;
+                        }
+                        shapes += 1;
+                        let clip = clipped.clip_rect;
+                        assert!(
+                            rect.left() >= clip.left() - 0.5 && rect.right() <= clip.right() + 0.5,
+                            "{percent}% {:.0}x{:.0}: the text {text:?} at {rect:?} is \
+                             horizontally clipped by {clip:?}",
+                            physical.x,
+                            physical.y
+                        );
+                    }
+                }
+                assert!(shapes > 20, "{percent}%: only {shapes} text shapes painted");
+                report.push_str(&format!(
+                    "window={:.0}x{:.0} scale={percent}% points={:.0}x{:.0} mode={:?} \
+                     editor={:.1}% panes={} text_shapes={shapes}\n",
+                    physical.x,
+                    physical.y,
+                    screen.x,
+                    screen.y,
+                    layout.mode,
+                    editor_share * 100.0,
+                    visible.len(),
+                ));
+            }
+        }
+        eprintln!("LAY-011 layout assertions:\n{report}");
+    }
+
+    /// LAY-011: Cancel joins Run and the precision controls in the visible toolbar while a run is
+    /// in flight, at both minimum-window scales, without any of them leaving the client.
+    #[test]
+    fn lay_011_run_cancel_and_precision_stay_visible_while_running() {
+        let ctx = egui::Context::default();
+        let gate = Arc::new(Gate::default());
+        let workbench = gated_workbench(gate.clone());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        for (physical, percent) in [
+            (vec2(900.0, 600.0), 200u32),
+            (vec2(1280.0, 800.0), 200u32),
+            (vec2(900.0, 600.0), 150u32),
+        ] {
+            app.settings.ui_scale_percent = percent;
+            let screen = physical / (percent as f32 / 100.0);
+            frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+            for _ in 0..3 {
+                frame_sized(&ctx, &mut app, screen, Vec::new());
+            }
+            let _ = press_action(
+                &ctx,
+                &mut app,
+                Action::Workbench(keyboard::WorkbenchCommand::Run),
+            );
+            frame_sized(&ctx, &mut app, screen, Vec::new());
+            let rows = accessibility_rows(&ctx, &mut app, screen);
+            let window = Rect::from_min_size(pos2(0.0, 0.0), screen);
+            for required in ["Run", "Cancel", "Apply", "Precision (digits)"] {
+                let row = rows
+                    .iter()
+                    .find(|row| row.name == required && row.interactive())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{percent}% {:.0}x{:.0}: {required:?} is missing while running",
+                            physical.x, physical.y
+                        )
+                    });
+                assert!(
+                    window.expand(0.5).contains_rect(row.bounds),
+                    "{percent}%: {required:?} at {:?} leaves the client",
+                    row.bounds
+                );
+            }
+            app.workbench.cancel_active();
+        }
+        gate.release();
     }
 }
 
