@@ -36,6 +36,7 @@ mod diagnostic_map;
 mod document_io;
 mod engine;
 mod execution;
+mod find;
 mod gui_selftest;
 mod history;
 mod incremental;
@@ -50,6 +51,7 @@ mod netcheck;
 mod precision_default;
 mod quick_eval;
 mod recovery;
+mod regex_lite;
 mod results_tree;
 mod run_state;
 mod run_trace;
@@ -66,6 +68,9 @@ mod workspace_table;
 
 #[cfg(windows)]
 fn main() {
+    // EDT-016: the measurement window reports the open time from this point, so the number
+    // includes process entry and the native window's creation, not only the app constructor.
+    let started = std::time::Instant::now();
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|arg| arg == "--gui-selftest") {
@@ -76,6 +81,18 @@ fn main() {
     }
     if let Some(index) = args.iter().position(|arg| arg == "--raster-svg") {
         std::process::exit(ui::plot::raster_cli(&args[index + 1..]));
+    }
+    if let Some(index) = args.iter().position(|arg| arg == "--measure-large") {
+        let script = args
+            .get(index + 1)
+            .filter(|arg| !arg.starts_with("--"))
+            .map(std::path::PathBuf::from);
+        let out = args
+            .iter()
+            .position(|arg| arg == "--measure-out")
+            .and_then(|index| args.get(index + 1))
+            .map(std::path::PathBuf::from);
+        std::process::exit(ui::measure::run(script, out, started));
     }
     if args.iter().any(|arg| arg == "--selftest") {
         std::process::exit(selftest::run());
@@ -112,6 +129,10 @@ fn main() {
         eprintln!("--journey requires the Windows build");
         std::process::exit(2);
     }
+    if args.iter().any(|arg| arg == "--measure-large") {
+        eprintln!("--measure-large requires the Windows build");
+        std::process::exit(2);
+    }
     if args.iter().any(|arg| arg == "--selftest") {
         std::process::exit(selftest::run());
     }
@@ -142,6 +163,13 @@ fn usage() -> String {
     text.push_str(
         "                                      rasterise one SVG exactly as the plot pane does\n",
     );
+    text.push_str("  lovelace-desktop --measure-large <script> --measure-out <report>\n");
+    text.push_str(
+        "                                      open the real window on <script>, measure open,\n",
+    );
+    text.push_str(
+        "                                      typing and scroll-frame budgets, write <report>\n",
+    );
     text.push_str("  lovelace-desktop --legacy-win32 [script.ls]\n");
     text.push_str(
         "                                      open the old Win32 shell (explicit fallback only)\n",
@@ -164,6 +192,9 @@ fn usage() -> String {
     text.push_str("  Ctrl+G                              go to a 1-based line or line:column\n");
     text.push_str("  Ctrl+M                              jump to the bracket matching the caret's\n");
     text.push_str("  Ctrl+Shift+O                        find a symbol in the active document\n");
+    text.push_str(
+        "  Ctrl+F                              find and replace in the active document\n",
+    );
     text.push_str("  Ctrl+Tab, Ctrl+Shift+Tab            next / previous document tab\n");
     text.push_str("  Ctrl+,                              editor settings (indent, tabs, auto-close)\n");
     text.push_str(

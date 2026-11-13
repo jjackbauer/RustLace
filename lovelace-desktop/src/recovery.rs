@@ -537,6 +537,22 @@ impl RecoveryJournal {
         }
     }
 
+    /// True when a dirty document's newest revision must be written now.
+    ///
+    /// This is the same rule [`RecoveryJournal::write_if_due`] applies, factored out so the
+    /// caller can skip building the record (and cloning its buffer) when nothing is due.
+    fn write_due(&self, document_id: u64, revision: u64, now: Instant) -> bool {
+        match self.tracked.get(&document_id) {
+            Some(tracked) if tracked.revision == revision => false,
+            Some(tracked) => {
+                now.checked_duration_since(tracked.last_write)
+                    .unwrap_or_default()
+                    >= self.debounce
+            }
+            None => true,
+        }
+    }
+
     /// Writes one document's record when the debounce allows it.
     ///
     /// Returns true when a file was written. The first dirty revision of a document is written
@@ -593,6 +609,13 @@ impl RecoveryJournal {
         for document in documents {
             let document_id = document.id.0;
             if document.dirty() {
+                // EDT-016: ask whether a write is due before building the record. Building it
+                // clones the whole buffer (`RecoveryRecord::source`), which for a 500 KB document
+                // is the most expensive part of the frame; inside the debounce window there is
+                // nothing to write, so the clone is dropped instead of made every frame.
+                if !self.write_due(document_id, document.revision, now) {
+                    continue;
+                }
                 let record = RecoveryRecord::from_document(document, saved_at);
                 match self.write_if_due(&record, now) {
                     Ok(true) => report.written.push(document_id),
@@ -852,5 +875,34 @@ mod tests {
         let report = journal.sync(&[], Instant::now());
         assert!(report.is_empty());
         assert!(journal.forget(1).is_none());
+    }
+
+    /// EDT-016: the cheap pre-check `sync_at` uses to avoid cloning a large buffer when no write
+    /// is due. It must agree with `write_if_due`: a current revision is never due, a changed one
+    /// waits for the debounce, and an untracked document is due immediately.
+    #[test]
+    fn a_write_is_due_only_for_an_untracked_or_changed_revision_after_the_debounce() {
+        let directory = scratch("due");
+        let mut journal =
+            RecoveryJournal::with_debounce(directory.clone(), Duration::from_secs(1));
+        let start = Instant::now();
+        journal.track(7, 3, start);
+        assert!(
+            !journal.write_due(7, 3, start + Duration::from_secs(30)),
+            "the newest revision is already journaled"
+        );
+        assert!(
+            !journal.write_due(7, 4, start + Duration::from_millis(500)),
+            "a changed revision waits for the debounce"
+        );
+        assert!(
+            journal.write_due(7, 4, start + Duration::from_millis(1_001)),
+            "after the debounce the changed revision is written"
+        );
+        assert!(
+            journal.write_due(8, 1, start),
+            "an untracked document is due immediately"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

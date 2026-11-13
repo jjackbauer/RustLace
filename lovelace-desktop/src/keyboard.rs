@@ -92,6 +92,8 @@ pub enum EditorCommand {
     GoToMatchingBracket,
     /// Ctrl+Shift+O: filter the document's identifiers and jump to one.
     FindSymbol,
+    /// Ctrl+F: open the find bar and focus its find field (EDT-009).
+    Find,
     /// Ctrl+Tab: select the next document tab.
     NextTab,
     /// Ctrl+Shift+Tab: select the previous document tab.
@@ -105,6 +107,7 @@ impl EditorCommand {
             EditorCommand::GoToLine => "Go to line",
             EditorCommand::GoToMatchingBracket => "Go to matching bracket",
             EditorCommand::FindSymbol => "Find symbol",
+            EditorCommand::Find => "Find",
             EditorCommand::NextTab => "Next tab",
             EditorCommand::PreviousTab => "Previous tab",
         }
@@ -116,7 +119,8 @@ impl EditorCommand {
 /// `key` is the character of the pressed key (`"\t"` for Tab), matched case-insensitively;
 /// `modifier` is Ctrl on Windows and Linux (Command on macOS) and must be held for every editor
 /// command. Ctrl+Shift+Tab is Previous Tab; Ctrl+Tab is Next Tab. Ctrl+Shift+O is Find Symbol;
-/// Ctrl+O without Shift remains the file-open command and is not claimed here.
+/// Ctrl+O without Shift remains the file-open command and is not claimed here. Ctrl+F is Find
+/// (EDT-009); Ctrl+Shift+F is not claimed.
 pub fn editor_command_for_shortcut(
     key: char,
     modifier: bool,
@@ -131,6 +135,7 @@ pub fn editor_command_for_shortcut(
         'g' if !shift => Some(EditorCommand::GoToLine),
         'm' if !shift => Some(EditorCommand::GoToMatchingBracket),
         'o' if shift => Some(EditorCommand::FindSymbol),
+        'f' if !shift => Some(EditorCommand::Find),
         _ => None,
     }
 }
@@ -265,6 +270,15 @@ mod tests {
             Some(EditorCommand::FindSymbol)
         );
         assert_eq!(
+            editor_command_for_shortcut('f', true, false),
+            Some(EditorCommand::Find)
+        );
+        assert_eq!(
+            editor_command_for_shortcut('F', true, false),
+            Some(EditorCommand::Find),
+            "the letter is matched case-insensitively"
+        );
+        assert_eq!(
             editor_command_for_shortcut('\t', true, false),
             Some(EditorCommand::NextTab)
         );
@@ -282,6 +296,11 @@ mod tests {
         }
         assert_eq!(editor_command_for_shortcut('o', true, false), None);
         assert_eq!(editor_command_for_shortcut('g', true, true), None);
+        assert_eq!(
+            editor_command_for_shortcut('f', true, true),
+            None,
+            "Ctrl+Shift+F is not Find"
+        );
         assert_eq!(editor_command_for_shortcut('x', true, false), None);
     }
 
@@ -293,6 +312,7 @@ mod tests {
             "Go to matching bracket"
         );
         assert_eq!(EditorCommand::FindSymbol.label(), "Find symbol");
+        assert_eq!(EditorCommand::Find.label(), "Find");
         assert_eq!(EditorCommand::NextTab.label(), "Next tab");
         assert_eq!(EditorCommand::PreviousTab.label(), "Previous tab");
     }

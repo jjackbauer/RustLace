@@ -356,6 +356,8 @@ pub struct WorkbenchApp {
     prompt_buttons: Vec<(UnsavedAnswer, Rect)>,
     /// DOC-002 test seam: the File bar buttons painted in the last pass and their rectangles.
     file_buttons: Vec<(&'static str, Rect)>,
+    /// EDT-009 test seam: the find bar buttons painted in the last pass and their rectangles.
+    find_buttons: Vec<(&'static str, Rect)>,
     plot: Plot,
     loaded_plot_svg: Option<String>,
     /// PLT-006: the open PNG export options window, if any.
@@ -369,6 +371,8 @@ pub struct WorkbenchApp {
     find_symbol: Option<SymbolPrompt>,
     /// EDT-008: true while the editor-settings window is open.
     editor_settings_open: bool,
+    /// EDT-009: true until the find bar's find field has taken keyboard focus.
+    find_focus: bool,
     editor_frac: f32,
     workspace_frac: f32,
     logs_frac: f32,
@@ -574,6 +578,7 @@ impl WorkbenchApp {
             pending_focus: None,
             prompt_buttons: Vec::new(),
             file_buttons: Vec::new(),
+            find_buttons: Vec::new(),
             plot: Plot::new(),
             loaded_plot_svg: None,
             plot_export: None,
@@ -581,6 +586,7 @@ impl WorkbenchApp {
             goto_line: None,
             find_symbol: None,
             editor_settings_open: false,
+            find_focus: false,
             editor_frac: 0.40,
             workspace_frac: 0.20,
             logs_frac: 0.18,
@@ -1362,6 +1368,16 @@ impl WorkbenchApp {
                     focus: true,
                 });
             }
+            keyboard::EditorCommand::Find => {
+                // EDT-009: Ctrl+F opens the docked find bar over the active document and focuses
+                // its find field. The bar edits the same `FindSession` the renderer highlights,
+                // so the first typed character is already highlighted.
+                self.goto_line = None;
+                self.find_symbol = None;
+                let active = self.workbench.active();
+                self.editors[active].find_open();
+                self.find_focus = true;
+            }
         }
     }
 
@@ -1371,6 +1387,16 @@ impl WorkbenchApp {
             editor.completion.dismiss();
         }
         ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+    }
+
+    /// EDT-016: the active editor, for the `--measure-large` driver.
+    ///
+    /// The measurement mode is a wrapper around this same app; it drives the editor's own caret
+    /// and scroll fields rather than a second rendering path, so the numbers describe the
+    /// shipped widget.
+    pub(crate) fn measure_editor(&mut self) -> &mut TextEditor {
+        let active = self.workbench.active();
+        &mut self.editors[active]
     }
 
     /// EDT-010: the go-to-line prompt.
@@ -1808,9 +1834,10 @@ impl WorkbenchApp {
             }
             // An open completion popup owns Escape for dismissal; it must not also cancel the
             // document's run. The editor closes the popup later in this same frame. An open
-            // go-to-line or find-symbol prompt owns Escape for cancelling itself.
+            // go-to-line, find-symbol or find bar also owns Escape for closing itself.
             let completion_open = self.editors[self.workbench.active()].completion.is_open();
             let prompt_open = self.goto_line.is_some() || self.find_symbol.is_some();
+            let find_open = self.editors[self.workbench.active()].find.is_open();
             // While the quick-eval field owns focus, a bare Enter belongs to the field, not to
             // Run. The fallback to the frame's modifier state is only for the editor/other
             // panes: a stale Ctrl bit must not turn the field's submit key into Ctrl+Enter.
@@ -1818,7 +1845,7 @@ impl WorkbenchApp {
                 || (!quick_eval_focused && (input.modifiers.command || input.modifiers.ctrl));
             keyboard::command_for_shortcut(
                 enter,
-                escape && !completion_open && !quick_eval_focused && !prompt_open,
+                escape && !completion_open && !quick_eval_focused && !prompt_open && !find_open,
                 command_modifier,
             )
         });
@@ -1829,6 +1856,25 @@ impl WorkbenchApp {
                 self.trace_pending = true;
             }
             self.workbench.command(command);
+        }
+
+        // EDT-009: Escape closes the find bar from anywhere in the window (the find field, the
+        // editor or a toolbar button) and returns keyboard focus to the editor. It is consumed
+        // here, before any pane, so it cannot also reach the buffer or cancel a run. When no
+        // find bar is open, the same press dismisses the EDT-004 signature popup for the call it
+        // belongs to.
+        if ui.input(|input| input.key_pressed(Key::Escape))
+            && self.close.is_none()
+            && self.recovery_prompt.is_none()
+        {
+            let active = self.workbench.active();
+            if self.editors[active].find.is_open() {
+                self.editors[active].find_close();
+                self.find_focus = false;
+                self.focus_editor(ui.ctx());
+            } else {
+                self.editors[active].dismiss_signature();
+            }
         }
 
         // DOC-002: the file shortcuts are window-level commands because each of them may open a
@@ -1853,6 +1899,7 @@ impl WorkbenchApp {
                 };
                 let letter = match key {
                     Key::Tab => '\t',
+                    Key::F => 'F',
                     Key::G => 'G',
                     Key::M => 'M',
                     Key::O => 'O',
@@ -2112,6 +2159,18 @@ impl WorkbenchApp {
                     focus: true,
                 });
             }
+            if ui
+                .button("Find...")
+                .on_hover_text(
+                    "Find and replace in the active document: next/previous, replace, replace all, \
+                     case/whole-word/regex toggles (Ctrl+F)",
+                )
+                .clicked()
+            {
+                let active = self.workbench.active();
+                self.editors[active].find_open();
+                self.find_focus = true;
+            }
             ui.separator();
 
             let active = self.workbench.active();
@@ -2301,7 +2360,38 @@ impl WorkbenchApp {
                              an unmatched bracket is a distinct red state",
                         );
                 }
+                // EDT-004: the signature popup is painted over the text; the header states the
+                // same signature and active parameter for accessibility clients and UIA captures.
+                if let Some(status) = self.editors[active].signature_summary() {
+                    ui.separator();
+                    ui.label(RichText::new(status).monospace().color(ACCENT))
+                        .on_hover_text(
+                            "The engine-registered signature of the call the caret is inside; \
+                             the active parameter is the argument being typed",
+                        );
+                }
+                // EDT-009: the match count and the toggles are restated in the header so a UIA
+                // capture can assert them; the bar itself paints the same text.
+                if let Some(status) = self.editors[active].find_summary() {
+                    ui.separator();
+                    let color = if status.contains("invalid regex") {
+                        ERROR
+                    } else {
+                        ACCENT
+                    };
+                    ui.label(RichText::new(status).monospace().color(color));
+                }
             });
+            let mut body = body;
+            if self.editors[active].find.is_open() {
+                // EDT-009: the bar is docked at the top of the editor body, not a floating
+                // window, so it never covers the text it searches. The editor lays out the rest
+                // of the body, and its virtualisation keeps the reduced viewport cheap.
+                let bar = Rect::from_min_size(body.min, vec2(body.width(), 60.0));
+                self.find_bar(ui, bar, active);
+                let top = bar.bottom() + 2.0;
+                body = Rect::from_min_max(pos2(body.left(), top), body.max);
+            }
             let before = self.editors[active].edits;
             let metrics = self.editors[active].ui(ui, body, &catalogue, &engine_state);
             if self.editors[active].edits != before {
@@ -2322,6 +2412,197 @@ impl WorkbenchApp {
                 );
             }
         });
+    }
+
+    /// EDT-009: the docked find/replace bar.
+    ///
+    /// The bar is drawn inside the editor pane body, so it never covers the text and the match
+    /// count is visible beside the fields. Every edit it makes goes through the editor's own
+    /// `replace_current` / `replace_all`, which record exactly one history step each; the bar
+    /// then republishes the buffer through the same path a typed edit uses.
+    fn find_bar(&mut self, ui: &mut Ui, rect: Rect, active: usize) {
+        if !self.editors[active].find.is_open() {
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        self.find_buttons.clear();
+        let mut next = false;
+        let mut previous = false;
+        let mut replace = false;
+        let mut replace_all = false;
+        let mut close = false;
+        ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::top_down(Align::LEFT)),
+            |ui| {
+                ui.painter().rect_filled(rect, 3.0, HEADER_BG);
+                ui.painter().rect_stroke(
+                    rect,
+                    3.0,
+                    Stroke::new(1.0, BORDER),
+                    StrokeKind::Inside,
+                );
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Find").small().color(DIM));
+                    let find = &mut self.editors[active].find;
+                    let query = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut find.query)
+                                .id_salt("find_query")
+                                .desired_width(190.0)
+                                .hint_text("Find text"),
+                        )
+                        .on_hover_text("The text or pattern to find");
+                    if query.changed() {
+                        find.query_changed();
+                    }
+                    if self.find_focus {
+                        // Retry until the field really owns the keyboard focus, the same rule
+                        // the go-to-line prompt uses.
+                        query.request_focus();
+                        if query.has_focus() {
+                            self.find_focus = false;
+                        }
+                    }
+                    if query.has_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
+                        if ui.input(|input| input.modifiers.shift) {
+                            previous = true;
+                        } else {
+                            next = true;
+                        }
+                    }
+                    let mut case = find.options.case_sensitive;
+                    let mut whole = find.options.whole_word;
+                    let mut regex = find.options.regex;
+                    let case_button = ui
+                        .selectable_label(case, "Aa")
+                        .on_hover_text("Case sensitive");
+                    self.find_buttons.push(("Aa", case_button.rect));
+                    if case_button.clicked() {
+                        case = !case;
+                    }
+                    let whole_button = ui
+                        .selectable_label(whole, "W")
+                        .on_hover_text("Whole word: both ends must be identifier boundaries");
+                    self.find_buttons.push(("W", whole_button.rect));
+                    if whole_button.clicked() {
+                        whole = !whole;
+                    }
+                    let regex_button = ui
+                        .selectable_label(regex, ".*")
+                        .on_hover_text("Regular expression (invalid patterns show an error)");
+                    self.find_buttons.push((".*", regex_button.rect));
+                    if regex_button.clicked() {
+                        regex = !regex;
+                    }
+                    find.set_option(case, whole, regex);
+                    ui.separator();
+                    match find.error() {
+                        Some(reason) => {
+                            let mut short: String = reason.chars().take(58).collect();
+                            if reason.chars().count() > 58 {
+                                short.push('…');
+                            }
+                            ui.label(
+                                RichText::new(format!("Invalid regex: {short}"))
+                                    .monospace()
+                                    .small()
+                                    .color(ERROR),
+                            )
+                            .on_hover_text(reason);
+                        }
+                        None => {
+                            let text = find.count_text().unwrap_or_default();
+                            ui.label(RichText::new(text).monospace().small().color(DIM));
+                        }
+                    }
+                    let previous_button = ui
+                        .button("Previous")
+                        .on_hover_text("Previous match, wrapping at the start (Shift+Enter)");
+                    self.find_buttons.push(("Previous", previous_button.rect));
+                    if previous_button.clicked() {
+                        previous = true;
+                    }
+                    let next_button = ui
+                        .button("Next")
+                        .on_hover_text("Next match, wrapping at the end (Enter)");
+                    self.find_buttons.push(("Next", next_button.rect));
+                    if next_button.clicked() {
+                        next = true;
+                    }
+                    let close_button = ui
+                        .button("Close")
+                        .on_hover_text("Close the find bar and return to the editor (Esc)");
+                    self.find_buttons.push(("Close", close_button.rect));
+                    if close_button.clicked() {
+                        close = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Replace").small().color(DIM));
+                    let find = &mut self.editors[active].find;
+                    let replacement = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut find.replacement)
+                                .id_salt("find_replace")
+                                .desired_width(190.0)
+                                .hint_text("Replace with"),
+                        )
+                        .on_hover_text("The literal replacement text");
+                    if replacement.has_focus()
+                        && ui.input(|input| input.key_pressed(Key::Enter))
+                    {
+                        replace = true;
+                    }
+                    let replace_button = ui
+                        .button("Replace")
+                        .on_hover_text("Replace the highlighted match (one undo step)");
+                    self.find_buttons.push(("Replace", replace_button.rect));
+                    if replace_button.clicked() {
+                        replace = true;
+                    }
+                    let replace_all_button = ui.button("Replace all").on_hover_text(
+                        "Replace every match in one undo step; each match is rewritten once",
+                    );
+                    self.find_buttons.push(("Replace all", replace_all_button.rect));
+                    if replace_all_button.clicked() {
+                        replace_all = true;
+                    }
+                });
+            },
+        );
+        if close {
+            self.editors[active].find_close();
+            self.find_focus = false;
+            self.focus_editor(&ctx);
+            return;
+        }
+        let before = self.editors[active].edits;
+        if previous {
+            self.editors[active].find_previous();
+        } else if next {
+            self.editors[active].find_next();
+        }
+        if replace {
+            self.editors[active].replace_current();
+        }
+        if replace_all {
+            self.editors[active].replace_all();
+        }
+        self.editors[active].find_refresh();
+        if self.editors[active].edits != before {
+            // The same publication a typed edit uses: the workbench revision advances, and the
+            // result/run state sees the buffer change.
+            self.editors[active].diagnostic = None;
+            let source = self.editors[active].source();
+            self.workbench.set_source(active, source);
+            self.loaded_revisions[active] = self.workbench.documents()[active].revision;
+        }
+        if replace || replace_all || next || previous {
+            self.find_focus = true;
+        }
     }
 
     fn plot_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
@@ -3977,6 +4258,17 @@ fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &
     delta
 }
 
+/// The native window options shared by the workbench and the EDT-016 measurement mode.
+pub(crate) fn native_options() -> eframe::NativeOptions {
+    eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 800.0])
+            .with_min_inner_size([900.0, 600.0])
+            .with_title("Lovelace Desktop"),
+        ..Default::default()
+    }
+}
+
 /// Opens the native workbench window and runs it until the user closes it.
 pub fn run(initial_path: Option<PathBuf>) -> i32 {
     // Printed at startup so a launch with redirected stderr shows where the engine will write.
@@ -3984,13 +4276,7 @@ pub fn run(initial_path: Option<PathBuf>) -> i32 {
         "lovelace-desktop: plot directory {}",
         crate::engine::default_plot_dir().display()
     );
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
-            .with_min_inner_size([900.0, 600.0])
-            .with_title("Lovelace Desktop"),
-        ..Default::default()
-    };
+    let options = native_options();
     match eframe::run_native(
         "Lovelace Desktop",
         options,
@@ -4466,6 +4752,233 @@ mod tests {
             "Enter jumps to beta's first occurrence on line 2"
         );
         assert!(app.find_symbol.is_none());
+    }
+
+    fn find_bar_button(app: &WorkbenchApp, label: &str) -> egui::Pos2 {
+        app.find_buttons
+            .iter()
+            .find(|(painted, _)| *painted == label)
+            .map(|(_, rect)| rect.center())
+            .unwrap_or_else(|| panic!("the {label} button was not painted"))
+    }
+
+    #[test]
+    fn ctrl_f_opens_the_find_bar_and_escape_closes_it_with_focus_on_the_editor() {
+        let mut app = app_with_source("alpha beta alpha", 0, 0);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let ctrl = ctrl_modifiers();
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::F, ctrl)],
+        );
+        assert!(
+            app.editors[0].find.is_open(),
+            "Ctrl+F must open the docked find bar"
+        );
+
+        // The bar's find field takes focus on the pass after it appears, exactly like the
+        // go-to-line prompt; the query then lands in the field and not in the document.
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, vec![egui::Event::Text("alpha".to_string())]);
+        assert_eq!(app.editors[0].find.query, "alpha");
+        assert_eq!(app.editors[0].find.matches().len(), 2);
+        assert_eq!(
+            app.editors[0].find.count_text().as_deref(),
+            Some("1 of 2"),
+            "the bar shows a sensible match count"
+        );
+        assert_eq!(
+            app.editors[0].source(),
+            "alpha beta alpha",
+            "typing in the find field must not edit the document"
+        );
+        assert!(
+            app.find_buttons.iter().any(|(label, _)| *label == "Replace all"),
+            "the bar paints the replace actions"
+        );
+
+        frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::Escape, egui::Modifiers::default())],
+        );
+        assert!(
+            !app.editors[0].find.is_open(),
+            "Esc closes the find bar instead of cancelling a run"
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(surface_id()),
+            "Esc returns keyboard focus to the editor"
+        );
+        assert_eq!(app.editors[0].source(), "alpha beta alpha");
+    }
+
+    #[test]
+    fn find_next_wraps_through_the_bar_buttons() {
+        let mut app = app_with_source("alpha beta alpha", 0, 0);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let ctrl = ctrl_modifiers();
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::F, ctrl)],
+        );
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, vec![egui::Event::Text("alpha".to_string())]);
+        assert_eq!(app.editors[0].find.selected_index(), 0);
+
+        let next = find_bar_button(&app, "Next");
+        pointer_click(&ctx, &mut app, next);
+        assert_eq!(app.editors[0].find.selected_index(), 1);
+        assert_eq!(app.editors[0].line_col_1based(), (1, 12));
+
+        let next = find_bar_button(&app, "Next");
+        pointer_click(&ctx, &mut app, next);
+        assert_eq!(
+            app.editors[0].find.selected_index(),
+            0,
+            "the second Next wraps back to the first match"
+        );
+        assert_eq!(app.editors[0].line_col_1based(), (1, 1));
+    }
+
+    #[test]
+    fn find_bar_replace_all_rewrites_the_buffer_and_one_undo_restores_it() {
+        let mut app = app_with_source("one two one two one", 0, 0);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let ctrl = ctrl_modifiers();
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::F, ctrl)],
+        );
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, vec![egui::Event::Text("one".to_string())]);
+        app.editors[0].find.set_replacement("1");
+        let revision_before = app.workbench.documents()[0].revision;
+
+        let replace_all = find_bar_button(&app, "Replace all");
+        pointer_click(&ctx, &mut app, replace_all);
+        assert_eq!(app.editors[0].source(), "1 two 1 two 1");
+        assert_eq!(
+            app.workbench.documents()[0].source, "1 two 1 two 1",
+            "the bar publishes the rewritten buffer through the same path as a typed edit"
+        );
+        assert_eq!(
+            app.workbench.documents()[0].revision,
+            revision_before + 1,
+            "one replace-all advances the document revision exactly once"
+        );
+
+        // Esc closes the bar and restores editor focus; then one Ctrl+Z restores the buffer.
+        frame(
+            &ctx,
+            &mut app,
+            vec![key(Key::Escape, egui::Modifiers::default())],
+        );
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), ctrl_z()],
+        );
+        assert_eq!(
+            app.editors[0].source(),
+            "one two one two one",
+            "one undo step restores the pre-replace buffer"
+        );
+        assert_eq!(app.editors[0].find.matches().len(), 0, "the bar is closed");
+    }
+
+    #[test]
+    fn an_invalid_regex_shows_the_error_in_the_bar_and_never_edits_the_buffer() {
+        let mut app = app_with_source("alpha beta alpha", 0, 0);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let ctrl = ctrl_modifiers();
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::F, ctrl)],
+        );
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, vec![egui::Event::Text("(".to_string())]);
+        let regex = find_bar_button(&app, ".*");
+        pointer_click(&ctx, &mut app, regex);
+        assert_eq!(
+            app.editors[0].find.error().map(|error| {
+                error.contains("Invalid regular expression")
+            }),
+            Some(true),
+            "the invalid pattern is a visible error state"
+        );
+        assert!(app.editors[0]
+            .find_summary()
+            .expect("open")
+            .starts_with("Find: invalid regex"));
+        assert_eq!(app.editors[0].find.count_text(), None);
+
+        // Replace all with an invalid pattern must be a no-op, not a panic.
+        let replace_all = find_bar_button(&app, "Replace all");
+        pointer_click(&ctx, &mut app, replace_all);
+        assert_eq!(app.editors[0].source(), "alpha beta alpha");
+        assert_eq!(app.workbench.documents()[0].source, "alpha beta alpha");
+    }
+
+    #[test]
+    fn signature_popup_for_sqrt_and_compile_reads_the_engine_catalogue() {
+        let mut app = completion_app("", 0, 0, vec![sqrt_function()]);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        for ch in "sqrt(".chars() {
+            frame(&ctx, &mut app, vec![egui::Event::Text(ch.to_string())]);
+        }
+        assert_eq!(
+            app.editors[0].signature_summary().as_deref(),
+            Some("Signature: sqrt(x) - parameter 1/1 'x'"),
+            "the popup and the header carry the engine's sqrt(x) signature"
+        );
+
+        let mut compile = completion_app(
+            "",
+            0,
+            0,
+            vec![builtin("compile", &["f", "params"])],
+        );
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut compile, Vec::new());
+        for ch in "compile(".chars() {
+            frame(&ctx, &mut compile, vec![egui::Event::Text(ch.to_string())]);
+        }
+        assert_eq!(
+            compile.editors[0].signature_summary().as_deref(),
+            Some("Signature: compile(f, params) - parameter 1/2 'f'")
+        );
+        for ch in "x^2, ".chars() {
+            frame(&ctx, &mut compile, vec![egui::Event::Text(ch.to_string())]);
+        }
+        assert_eq!(
+            compile.editors[0].signature_summary().as_deref(),
+            Some("Signature: compile(f, params) - parameter 2/2 'params'"),
+            "the comma advances the active parameter to params"
+        );
+
+        // Escape dismisses the popup for this call without touching the buffer.
+        frame(
+            &ctx,
+            &mut compile,
+            vec![key(Key::Escape, egui::Modifiers::default())],
+        );
+        assert_eq!(compile.editors[0].signature_summary(), None);
+        assert_eq!(
+            compile.editors[0].source(),
+            "compile(x^2, )",
+            "Escape dismisses the popup without editing the buffer"
+        );
     }
 
     #[test]

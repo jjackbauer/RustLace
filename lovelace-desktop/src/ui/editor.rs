@@ -20,6 +20,7 @@ use crate::completion::{self, CaretContext, CompletionItem, CompletionKind, Comp
 use crate::diagnostic_map::{self, DiagnosticRange};
 use crate::document_io::NewlineStyle;
 use crate::execution::Diagnostic;
+use crate::find::{FindSession, MatchSpan};
 use crate::history::{self, Caret, EditKind, History, HistoryCommand, Snapshot};
 use crate::settings::EditorSettings;
 
@@ -57,6 +58,20 @@ pub const COMPLETION_BORDER: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
 pub const COMPLETION_SELECTED: Color32 = Color32::from_rgb(0x2b, 0x4a, 0x47);
 /// The detail column of a completion row.
 pub const COMPLETION_DETAIL: Color32 = Color32::from_rgb(0x8b, 0x98, 0xa9);
+/// EDT-009: the background of every match in the buffer.
+pub const FIND_MATCH_BG: Color32 = Color32::from_rgb(0x4a, 0x3f, 0x1f);
+/// EDT-009: the background of the highlighted (current) match.
+pub const FIND_CURRENT_BG: Color32 = Color32::from_rgb(0x7a, 0x64, 0x20);
+/// EDT-009: the underline of the highlighted match, so it stays distinct from the other hits.
+pub const FIND_CURRENT_MARK: Color32 = Color32::from_rgb(0xf0, 0xc8, 0x60);
+/// EDT-004: signature popup background, one step above the pane background.
+pub const SIGNATURE_BG: Color32 = Color32::from_rgb(0x1b, 0x22, 0x2a);
+/// EDT-004: signature popup border, in the accent colour.
+pub const SIGNATURE_BORDER: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
+/// EDT-004: the parameter name the caret is currently editing.
+pub const SIGNATURE_ACTIVE: Color32 = Color32::from_rgb(0xf0, 0xc8, 0x60);
+/// EDT-004: the rest of the signature.
+pub const SIGNATURE_TEXT: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
 /// User-defined and host functions: a distinct accent from the builtins, which use the
 /// highlighter's builtin blue. This is how the popup marks user functions apart.
 pub const COMPLETION_FUNCTION: Color32 = Color32::from_rgb(0x4e, 0xc9, 0xb0);
@@ -85,6 +100,10 @@ pub struct EditorMetrics {
     pub gutter_w: f32,
     /// Vertical scroll offset in pixels.
     pub scroll_y: f32,
+    /// Time the syntax refresh took this pass, in milliseconds (EDT-016 instrumentation).
+    pub syntax_ms: f64,
+    /// Time the visible rows' layout and paint took this pass, in milliseconds.
+    pub rows_ms: f64,
 }
 
 /// EDT-007: the bracket next to the caret and, when one exists, its mate.
@@ -118,6 +137,52 @@ impl BracketMatch {
     /// True when the bracket has a mate and therefore paints in the matched colour.
     pub fn is_matched(&self) -> bool {
         self.mate.is_some()
+    }
+}
+
+/// EDT-004: one function's live signature help, built from the engine's registered metadata.
+///
+/// `name` and `parameters` are copied from the engine snapshot's [`crate::engine::EngineFunction`]
+/// for the call the caret is inside; there is no signature table in the desktop crate. `active`
+/// is the zero-based parameter the caret's argument position selects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureHelp {
+    /// The function's registered name.
+    pub name: String,
+    /// Its declared parameter names, in declaration order.
+    pub parameters: Vec<String>,
+    /// The active parameter's index, clamped into `parameters`.
+    pub active: usize,
+    /// The registry's own one-line summary, when the engine published one.
+    pub summary: Option<String>,
+    /// Buffer position of the call's opening `(`, used to keep an Escape dismissal scoped to
+    /// this call instead of suppressing the next one.
+    pub open: (usize, usize),
+}
+
+impl SignatureHelp {
+    /// The signature as `name(p1, p2)`, exactly the parameter names the engine registered.
+    pub fn signature(&self) -> String {
+        format!("{}({})", self.name, self.parameters.join(", "))
+    }
+
+    /// The active parameter's name, if there is one.
+    pub fn active_parameter(&self) -> Option<&str> {
+        self.parameters.get(self.active).map(String::as_str)
+    }
+
+    /// The one-line state the pane header publishes (and a UIA capture records).
+    pub fn status(&self) -> String {
+        match self.active_parameter() {
+            Some(parameter) => format!(
+                "Signature: {} - parameter {}/{} '{}'",
+                self.signature(),
+                self.active + 1,
+                self.parameters.len(),
+                parameter
+            ),
+            None => format!("Signature: {} - no parameters", self.signature()),
+        }
     }
 }
 
@@ -164,12 +229,29 @@ pub struct TextEditor {
     pub selection: Option<(usize, usize)>,
     /// EDT-008: indentation and auto-close behaviour copied from the persisted settings.
     pub preferences: EditorSettings,
+    /// EDT-009: the find bar's query, toggles, matches and highlighted match for this document.
+    pub find: FindSession,
+    /// EDT-004: the signature help drawn by the last pass, if any.
+    ///
+    /// It is kept so the pane header can publish the same signature the popup paints; the popup
+    /// itself is painter-only, like the completion popup.
+    pub last_signature: Option<SignatureHelp>,
+    /// EDT-004: the opening parenthesis of a signature the user dismissed with Escape.
+    ///
+    /// The dismissal belongs to that one call. Typing a new `(` (or leaving the call) computes a
+    /// different open position and the help appears again.
+    signature_dismissed: Option<(usize, usize)>,
     /// The builtins and symbols the current paint pass classifies. Refreshed from the live
     /// engine snapshot and the document's `symbol("...")` calls, so the highlighter holds no
     /// second builtin or symbol list.
     syntax: syntax::SyntaxContext,
-    /// The `edits` counter the cached symbol set was discovered at; `u64::MAX` forces a refresh.
-    syntax_edits: u64,
+    /// True when an edit could have changed a `symbol("...")` declaration.
+    ///
+    /// EDT-016: rediscovering the whole document's symbols on every keystroke costs the same as
+    /// a full-document scan (about 20 ms in a debug build for 500 KB). Only edits that touch the
+    /// `symbol(` name can change that set, so typing an ordinary character leaves the cache
+    /// valid and the frame cheap. Undo, redo and replacement set the flag unconditionally.
+    symbols_dirty: bool,
     /// The builtin labels the cached context was built from, for the per-pass change check.
     syntax_builtins: Vec<String>,
 }
@@ -217,8 +299,11 @@ impl TextEditor {
             history: History::new(),
             selection: None,
             preferences: EditorSettings::default(),
+            find: FindSession::default(),
+            last_signature: None,
+            signature_dismissed: None,
             syntax: syntax::SyntaxContext::new(),
-            syntax_edits: u64::MAX,
+            symbols_dirty: true,
             syntax_builtins: Vec::new(),
         }
     }
@@ -246,9 +331,12 @@ impl TextEditor {
         self.selection = None;
         self.history.reset();
         self.completion.dismiss();
+        self.find.mark_dirty();
+        self.last_signature = None;
+        self.signature_dismissed = None;
         // The source changed without going through an edit method, so the cached symbol set must
         // be rediscovered on the next paint pass.
-        self.syntax_edits = u64::MAX;
+        self.symbols_dirty = true;
     }
 
     /// The current buffer as source text, with the document's own line endings.
@@ -679,6 +767,10 @@ impl TextEditor {
             self.selection = None;
         }
         self.completion.dismiss();
+        self.find.mark_dirty();
+        self.signature_dismissed = None;
+        self.last_signature = None;
+        self.symbols_dirty = true;
         self.edits += 1;
     }
 
@@ -692,6 +784,9 @@ impl TextEditor {
 
     /// [`TextEditor::begin_edit`] with an explicit clock, for deterministic burst tests.
     fn begin_edit_at(&mut self, kind: EditKind, now: Instant) {
+        // EDT-009: every edit can invalidate the find bar's cached matches, so the next pass
+        // rescans them. `FindSession::refresh` is a no-op while the bar is closed.
+        self.find.mark_dirty();
         if self.history.begin(kind, now) {
             let before = self.snapshot();
             self.history.push(before);
@@ -820,6 +915,17 @@ impl TextEditor {
         let Some(((start_row, start_col), (end_row, end_col))) = self.ordered_selection() else {
             return false;
         };
+        // A selection that covers `symbol` text, or whose boundary lines mention it, can change
+        // the document's symbol declarations even when the remaining text does not say so
+        // (`symbol("x")` losing its quote). Mark the cache stale before the splice.
+        if self.lines[start_row].contains("symbol")
+            || self.lines[end_row].contains("symbol")
+            || self
+                .selected_text()
+                .is_some_and(|text| text.contains("symbol"))
+        {
+            self.symbols_dirty = true;
+        }
         let prefix: String = self.lines[start_row].chars().take(start_col).collect();
         let suffix: String = self.lines[end_row].chars().skip(end_col).collect();
         self.lines
@@ -851,6 +957,7 @@ impl TextEditor {
         } else {
             self.insert_raw(text);
         }
+        self.note_symbol_edit(text);
         self.edits += 1;
     }
 
@@ -934,6 +1041,7 @@ impl TextEditor {
         self.begin_edit_at(kind, now);
         self.delete_selection();
         self.insert_raw(text);
+        self.note_symbol_edit(text);
         self.edits += 1;
     }
 
@@ -958,6 +1066,10 @@ impl TextEditor {
     pub fn newline(&mut self) {
         self.begin_edit(EditKind::Atomic);
         self.delete_selection();
+        if self.lines[self.caret_row].contains("symbol") {
+            // Splitting a `symbol(` call across lines must be re-examined.
+            self.symbols_dirty = true;
+        }
         let indent: String = self.lines[self.caret_row]
             .chars()
             .take_while(|ch| *ch == ' ' || *ch == '\t')
@@ -1070,6 +1182,7 @@ impl TextEditor {
         if self.ordered_selection().is_some() {
             self.begin_edit(EditKind::Atomic);
             self.delete_selection();
+            self.note_symbol_edit("");
             self.edits += 1;
             return;
         }
@@ -1098,6 +1211,7 @@ impl TextEditor {
             self.caret_row = row - 1;
             self.caret_col = previous_len;
         }
+        self.note_symbol_edit("");
         self.edits += 1;
     }
 
@@ -1106,6 +1220,7 @@ impl TextEditor {
         if self.ordered_selection().is_some() {
             self.begin_edit(EditKind::Atomic);
             self.delete_selection();
+            self.note_symbol_edit("");
             self.edits += 1;
             return;
         }
@@ -1130,6 +1245,7 @@ impl TextEditor {
             let tail = self.lines.remove(row + 1);
             self.lines[row].push_str(&tail);
         }
+        self.note_symbol_edit("");
         self.edits += 1;
     }
 
@@ -1235,9 +1351,11 @@ impl TextEditor {
             if self.history.begin(EditKind::Atomic, Instant::now()) {
                 self.history.push(before);
             }
+            self.find.mark_dirty();
             self.caret_row = row;
             self.caret_col = col;
             self.selection = None;
+            self.note_symbol_edit("");
             self.edits += 1;
         }
     }
@@ -1257,6 +1375,269 @@ impl TextEditor {
             self.completion.selected_index() + 1,
             self.completion.items().len()
         ))
+    }
+
+    /// EDT-009: opens the find bar with the caret as the search anchor.
+    pub fn find_open(&mut self) {
+        self.find.begin((self.caret_row, self.caret_col));
+        self.find_refresh();
+        self.history.break_burst();
+    }
+
+    /// EDT-009: closes the find bar and drops its highlights.
+    pub fn find_close(&mut self) {
+        self.find.close();
+    }
+
+    /// EDT-009: recomputes the cached matches when the buffer or the query changed.
+    pub fn find_refresh(&mut self) {
+        self.find
+            .refresh(&self.lines, (self.caret_row, self.caret_col));
+    }
+
+    /// EDT-009: moves the highlight to the next match, wrapping at the end of the document.
+    pub fn find_next(&mut self) -> bool {
+        self.find_refresh();
+        let Some(span) = self.find.select_next() else {
+            return false;
+        };
+        self.reveal_find_match(span);
+        true
+    }
+
+    /// EDT-009: moves the highlight to the previous match, wrapping at the start.
+    pub fn find_previous(&mut self) -> bool {
+        self.find_refresh();
+        let Some(span) = self.find.select_previous() else {
+            return false;
+        };
+        self.reveal_find_match(span);
+        true
+    }
+
+    /// Moves the caret to the match the find bar is pointing at; the caret move ends a burst.
+    fn reveal_find_match(&mut self, span: MatchSpan) {
+        if span.row >= self.line_count() {
+            return;
+        }
+        self.caret_row = span.row;
+        self.caret_col = span.start.min(self.line_chars(span.row));
+        self.selection = None;
+        self.history.break_burst();
+    }
+
+    /// EDT-009: replaces the highlighted match as exactly one undo step.
+    ///
+    /// Returns true when a match was replaced. The replacement is literal text; the find bar's
+    /// fields are single-line, so a replacement can never span lines.
+    pub fn replace_current(&mut self) -> bool {
+        self.find_refresh();
+        let Some(span) = self.find.selected() else {
+            return false;
+        };
+        let Some(line) = self.lines.get(span.row) else {
+            return false;
+        };
+        let chars: Vec<char> = line.chars().collect();
+        if span.start > span.end || span.end > chars.len() {
+            return false;
+        }
+        let replacement = self.find.replacement.clone();
+        // One snapshot for this replacement: Ctrl+Z restores the pre-replace buffer and caret.
+        self.begin_edit(EditKind::Atomic);
+        let mut rebuilt: String = chars[..span.start].iter().collect();
+        rebuilt.push_str(&replacement);
+        rebuilt.extend(chars[span.end..].iter());
+        self.lines[span.row] = rebuilt;
+        self.caret_row = span.row;
+        self.caret_col = span.start + replacement.chars().count();
+        self.selection = None;
+        self.symbols_dirty = true;
+        self.edits += 1;
+        let caret = (self.caret_row, self.caret_col);
+        self.find.reselect_from(caret);
+        self.find_refresh();
+        true
+    }
+
+    /// EDT-009: replaces every match and records the whole rewrite as one undo step.
+    ///
+    /// Returns the number of replacements. Each line is rebuilt from its pre-replace characters
+    /// and the matches are applied left to right, so a replacement can never be matched again in
+    /// the same pass: every match is rewritten exactly once.
+    pub fn replace_all(&mut self) -> usize {
+        self.find_refresh();
+        let rows = self.find.by_row();
+        let Some(first) = rows
+            .values()
+            .next()
+            .and_then(|spans| spans.first())
+            .copied()
+        else {
+            return 0;
+        };
+        let replacement = self.find.replacement.clone();
+        // One snapshot for the whole operation: the undo step is the complete rewrite.
+        self.begin_edit(EditKind::Atomic);
+        let mut replaced = 0usize;
+        for (row, spans) in rows {
+            let Some(line) = self.lines.get(row) else {
+                continue;
+            };
+            let chars: Vec<char> = line.chars().collect();
+            let mut out = String::with_capacity(line.len());
+            let mut cursor = 0usize;
+            for span in spans {
+                if span.start < cursor || span.end > chars.len() {
+                    continue;
+                }
+                out.extend(chars[cursor..span.start].iter());
+                out.push_str(&replacement);
+                cursor = span.end;
+                replaced += 1;
+            }
+            out.extend(chars[cursor..].iter());
+            self.lines[row] = out;
+        }
+        self.caret_row = first.row;
+        self.caret_col = first.start.min(self.line_chars(first.row));
+        self.selection = None;
+        self.symbols_dirty = true;
+        self.edits += 1;
+        let caret = (self.caret_row, self.caret_col);
+        self.find.reselect_from(caret);
+        self.find_refresh();
+        replaced
+    }
+
+    /// EDT-009: the find bar's one-line state for the pane header (and the UIA capture).
+    pub fn find_summary(&self) -> Option<String> {
+        self.find.summary()
+    }
+
+    /// EDT-004: the innermost call the caret is inside, as its open parenthesis, callee name and
+    /// the number of top-level commas between the two.
+    ///
+    /// The scan is bounded to the caret's line and the 20 lines above it, ignores parentheses
+    /// inside string literals and `#` comments, and treats a closed call as no call. That bound
+    /// keeps the per-pass cost independent of a 5 000-line document's size.
+    fn call_context(&self) -> Option<((usize, usize), String, usize)> {
+        // A caret inside a string or comment is inside text, not inside an argument list.
+        if completion::caret_context(&self.lines[self.caret_row], self.caret_col) != CaretContext::Code
+        {
+            return None;
+        }
+        let start_row = self.caret_row.saturating_sub(20);
+        let mut depth = 0usize;
+        let mut open: Option<(usize, usize)> = None;
+        'rows: for row in (start_row..=self.caret_row).rev() {
+            let Some(line) = self.lines.get(row) else {
+                continue;
+            };
+            let chars: Vec<char> = line.chars().collect();
+            let mask = code_mask(line);
+            let end = if row == self.caret_row {
+                self.caret_col.min(chars.len())
+            } else {
+                chars.len()
+            };
+            for col in (0..end).rev() {
+                if !mask.get(col).copied().unwrap_or(false) {
+                    continue;
+                }
+                match chars[col] {
+                    ')' => depth += 1,
+                    '(' if depth == 0 => {
+                        open = Some((row, col));
+                        break 'rows;
+                    }
+                    '(' => depth -= 1,
+                    _ => {}
+                }
+            }
+        }
+        let (open_row, open_col) = open?;
+        let chars: Vec<char> = self.lines.get(open_row)?.chars().collect();
+        let mut name_end = open_col;
+        while name_end > 0 && chars[name_end - 1].is_whitespace() {
+            name_end -= 1;
+        }
+        let mut name_start = name_end;
+        while name_start > 0 && is_ident_continue(chars[name_start - 1]) {
+            name_start -= 1;
+        }
+        if name_start == name_end || !is_ident_start(chars[name_start]) {
+            return None;
+        }
+        let name: String = chars[name_start..name_end].iter().collect();
+        // Count the commas that separate arguments: only depth-zero commas after the open paren.
+        let mut commas = 0usize;
+        let mut call_depth = 0usize;
+        for row in open_row..=self.caret_row {
+            let Some(line) = self.lines.get(row) else {
+                continue;
+            };
+            let chars: Vec<char> = line.chars().collect();
+            let mask = code_mask(line);
+            let from = if row == open_row { open_col + 1 } else { 0 };
+            let to = if row == self.caret_row {
+                self.caret_col.min(chars.len())
+            } else {
+                chars.len()
+            };
+            for col in from..to {
+                if !mask.get(col).copied().unwrap_or(false) {
+                    continue;
+                }
+                match chars[col] {
+                    '(' => call_depth += 1,
+                    ')' => call_depth = call_depth.saturating_sub(1),
+                    ',' if call_depth == 0 => commas += 1,
+                    _ => {}
+                }
+            }
+        }
+        Some(((open_row, open_col), name, commas))
+    }
+
+    /// EDT-004: signature help for the call at the caret, sourced from the engine snapshot.
+    ///
+    /// The parameter names are the `EngineFunction.parameters` the engine's own registry
+    /// published (and the summary is the registry's `summary`); the desktop has no signature
+    /// table. `None` outside a call or for a name the engine does not register.
+    pub fn signature_help(&self, engine: &crate::engine::EngineState) -> Option<SignatureHelp> {
+        let (open, name, commas) = self.call_context()?;
+        let function = engine.functions.iter().find(|function| function.name == name)?;
+        let parameters = function.parameters.clone();
+        let active = if parameters.is_empty() {
+            0
+        } else {
+            commas.min(parameters.len() - 1)
+        };
+        Some(SignatureHelp {
+            name,
+            parameters,
+            active,
+            summary: function.summary.clone(),
+            open,
+        })
+    }
+
+    /// EDT-004: the signature help the last paint pass showed, for the pane header.
+    pub fn signature_summary(&self) -> Option<String> {
+        self.last_signature.as_ref().map(SignatureHelp::status)
+    }
+
+    /// EDT-004: dismisses the visible signature help for this call (Escape).
+    ///
+    /// The window calls this for an Escape press that reaches the window before the editor's
+    /// own event loop; the editor's loop calls the same rule directly. Either path records the
+    /// call's opening parenthesis, so only this call is suppressed and the next `(` shows help
+    /// again.
+    pub fn dismiss_signature(&mut self) {
+        if let Some(help) = self.last_signature.take() {
+            self.signature_dismissed = Some(help.open);
+        }
     }
 
     /// The buffer position under a pointer position, clamped into the buffer.
@@ -1312,10 +1693,25 @@ impl TextEditor {
             self.syntax.set_builtins(builtins.iter().copied());
             self.syntax_builtins = builtins.into_iter().map(str::to_string).collect();
         }
-        if self.syntax_edits != self.edits {
+        if self.symbols_dirty {
             self.syntax
                 .set_symbols(syntax::discover_symbols(&self.source()));
-            self.syntax_edits = self.edits;
+            self.symbols_dirty = false;
+        }
+    }
+
+    /// Marks the cached symbol set stale when `text` or the caret's line mentions `symbol`.
+    ///
+    /// `symbol("name")` is line-local text in this language, so a line that never mentions the
+    /// word cannot declare a symbol; an edit elsewhere leaves the cached set valid.
+    fn note_symbol_edit(&mut self, text: &str) {
+        if text.contains("symbol")
+            || self
+                .lines
+                .get(self.caret_row)
+                .is_some_and(|line| line.contains("symbol"))
+        {
+            self.symbols_dirty = true;
         }
     }
 
@@ -1334,6 +1730,11 @@ impl TextEditor {
     ) -> EditorMetrics {
         let started = Instant::now();
         let edits_before = self.edits;
+        // EDT-009/EDT-016: the caret is only forced into the viewport when it actually moved (or
+        // the buffer was edited). A wheel scroll that leaves the caret where it is must be able
+        // to move the view; otherwise every scroll snaps straight back to the caret's row and a
+        // 5 000-line document cannot be scrolled at all.
+        let caret_before = (self.caret_row, self.caret_col);
         let font = FontId::monospace(13.0);
         let row_h = ui.text_style_height(&TextStyle::Monospace) + 3.0;
         let char_w = ui
@@ -1453,9 +1854,14 @@ impl TextEditor {
                             }
                             egui::Key::Escape => {
                                 // Dismiss only: the buffer and the caret stay exactly as they
-                                // were.
+                                // were. A visible signature belongs to the call at the caret, so
+                                // the dismissal is scoped to that one opening parenthesis.
                                 self.history.break_burst();
                                 self.completion.dismiss();
+                                if let Some(help) = self.signature_help(engine) {
+                                    self.signature_dismissed = Some(help.open);
+                                    self.last_signature = None;
+                                }
                             }
                             egui::Key::ArrowLeft => {
                                 self.history.break_burst();
@@ -1542,15 +1948,16 @@ impl TextEditor {
             // arrow as "move keyboard focus to the closest widget in that direction" before the
             // editor can consume it, which drops focus out of the editor after one Up/Down
             // (DEF-002). Tab is always locked too: EDT-008 makes Tab indent the selection (and
-            // Shift+Tab outdent it), so egui must not use it for focus traversal. While the
-            // popup is open, Escape belongs to it as well.
-            let completion_open = self.completion.is_open();
+            // Shift+Tab outdent it), so egui must not use it for focus traversal. Escape is
+            // locked as well: the editor uses it to dismiss the completion and signature popups
+            // (EDT-004/EDT-009), and losing focus to egui's "surrender focus" rule would mean the
+            // key never reaches the editor at all.
             ui.memory_mut(|memory| {
                 memory.set_focus_lock_filter(
                     id,
                     egui::EventFilter {
                         tab: true,
-                        escape: completion_open,
+                        escape: true,
                         horizontal_arrows: true,
                         vertical_arrows: true,
                     },
@@ -1632,12 +2039,16 @@ impl TextEditor {
             self.selection = None;
         }
 
-        // Keep the caret inside the viewport.
+        // Keep the caret inside the viewport when it moved or the text was edited. A scroll
+        // gesture that did not move the caret is left alone (see `caret_before`).
         let caret_y = self.caret_row as f32 * row_h;
-        if caret_y < self.scroll_y {
-            self.scroll_y = caret_y;
-        } else if caret_y + row_h > self.scroll_y + rect.height() {
-            self.scroll_y = caret_y + row_h - rect.height();
+        let caret_moved = (self.caret_row, self.caret_col) != caret_before;
+        if caret_moved || self.edits != edits_before {
+            if caret_y < self.scroll_y {
+                self.scroll_y = caret_y;
+            } else if caret_y + row_h > self.scroll_y + rect.height() {
+                self.scroll_y = caret_y + row_h - rect.height();
+            }
         }
         self.scroll_y = self.scroll_y.clamp(0.0, max_scroll);
 
@@ -1647,7 +2058,29 @@ impl TextEditor {
 
         // Refresh after this pass's typing events, so a symbol declared by the character just
         // typed is painted in the same frame rather than one frame late.
+        let syntax_started = Instant::now();
         self.refresh_syntax(engine);
+        let syntax_ms = syntax_started.elapsed().as_secs_f64() * 1000.0;
+        // EDT-009: recompute the find matches after this pass's edits and caret moves. `refresh`
+        // is a no-op unless the query, a toggle or the buffer changed.
+        self.find_refresh();
+        // EDT-004: the signature help for the call at the caret, from the engine snapshot. An
+        // Escape dismissal suppresses exactly the call it was pressed in.
+        let call = self.call_context();
+        let dismissed = self.signature_dismissed;
+        self.last_signature = match (&call, dismissed) {
+            (None, _) => {
+                self.signature_dismissed = None;
+                None
+            }
+            (Some((open, _, _)), Some(dismissed)) if *open == dismissed => None,
+            _ => self.signature_help(engine),
+        };
+
+        // EDT-009: every match paints its own background; the highlighted one has the amber
+        // highlight and underline so "current" is distinguishable from "also matched".
+        let find_matches: &[MatchSpan] = self.find.matches();
+        let find_selected = self.find.selected();
 
         let painter = ui.painter();
         painter.rect_filled(rect, 0.0, EDITOR_BG);
@@ -1673,10 +2106,37 @@ impl TextEditor {
         // The selection is painted under the text, one row at a time, so a multi-line range
         // reads as one continuous highlight and never covers a glyph.
         let selection = self.selection_range();
+        let rows_started = Instant::now();
         for row in first_row..last_row {
             let y = rect.top() - self.scroll_y + row as f32 * row_h;
             if y + row_h < rect.top() || y > rect.bottom() {
                 continue;
+            }
+            // EDT-009: paint every match on this row first, then the selection and the bracket
+            // decoration above it, so the highlighted (current) match keeps its amber underline.
+            for span in find_matches.iter().filter(|span| span.row == row) {
+                let x0 = text_left + self.display_column(row, span.start) as f32 * char_w;
+                let x1 = text_left + self.display_column(row, span.end) as f32 * char_w;
+                let current = find_selected == Some(*span);
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + row_h - 1.0)),
+                    1.0,
+                    if current {
+                        FIND_CURRENT_BG
+                    } else {
+                        FIND_MATCH_BG
+                    },
+                );
+                if current {
+                    painter.rect_filled(
+                        Rect::from_min_max(
+                            pos2(x0, y + row_h - 2.0),
+                            pos2(x1, y + row_h - 1.0),
+                        ),
+                        1.0,
+                        FIND_CURRENT_MARK,
+                    );
+                }
             }
             if let Some((start, end)) = selection {
                 if row >= start.0 && row <= end.0 {
@@ -1771,6 +2231,7 @@ impl TextEditor {
                 }
             }
         }
+        let rows_ms = rows_started.elapsed().as_secs_f64() * 1000.0;
 
         // Hovering the underlined line (or its gutter marker) shows the diagnostic message. This
         // is a tooltip attached to the pointer, not a widget, so it cannot steal the editor's
@@ -1824,6 +2285,20 @@ impl TextEditor {
         // a click. It is anchored one row BELOW the caret line (or, when that side has no room,
         // above it), so it does not cover the line being typed on.
         self.paint_completion(ui, rect, text_left, row_h, char_w);
+        // EDT-004: the signature popup paints after the completion popup (the two never appear
+        // together: typing an identifier closes completion, and `(` then opens signature help).
+        if let Some(help) = self.last_signature.as_ref() {
+            paint_signature(
+                ui,
+                rect,
+                text_left,
+                row_h,
+                char_w,
+                self.caret_row,
+                self.scroll_y,
+                help,
+            );
+        }
         #[cfg(test)]
         eprintln!(
             "[dbg] editor end open={} items={} pass={}",
@@ -1849,6 +2324,8 @@ impl TextEditor {
             char_w,
             gutter_w,
             scroll_y: self.scroll_y,
+            syntax_ms,
+            rows_ms,
         };
         self.last_ui_ms = started.elapsed().as_secs_f64() * 1000.0;
         self.metrics
@@ -2001,6 +2478,160 @@ fn completion_colour(kind: CompletionKind) -> Color32 {
     }
 }
 
+/// EDT-004: paints the signature popup above or below the caret row.
+///
+/// The popup is painter-only, like the completion popup: no widget, no focus, no pointer sense,
+/// so it can never block typing. The active parameter is painted in the amber accent with an
+/// underline; the status line names it with its engine-declared name, and the registry's summary
+/// is shown (truncated to the popup) when the engine published one.
+#[allow(clippy::too_many_arguments)]
+fn paint_signature(
+    ui: &Ui,
+    rect: Rect,
+    text_left: f32,
+    row_h: f32,
+    char_w: f32,
+    caret_row: usize,
+    scroll_y: f32,
+    help: &SignatureHelp,
+) {
+    let font = FontId::monospace(12.0);
+    let detail_font = FontId::monospace(10.5);
+    let label_char_w = ui
+        .painter()
+        .layout_no_wrap("M".to_owned(), font.clone(), Color32::WHITE)
+        .size()
+        .x
+        .max(1.0);
+    let detail_char_w = ui
+        .painter()
+        .layout_no_wrap("M".to_owned(), detail_font.clone(), Color32::WHITE)
+        .size()
+        .x
+        .max(1.0);
+    let padding = 8.0;
+    let signature = help.signature();
+    let status = match help.active_parameter() {
+        Some(parameter) => format!(
+            "parameter {} of {}: {}",
+            help.active + 1,
+            help.parameters.len(),
+            parameter
+        ),
+        None => "no parameters".to_string(),
+    };
+    let summary = help.summary.clone().unwrap_or_default();
+    let max_width = (rect.width() - 8.0).max(160.0);
+    let signature_width = signature.chars().count() as f32 * label_char_w;
+    let status_width = status.chars().count() as f32 * detail_char_w;
+    let summary_width = summary.chars().count() as f32 * detail_char_w;
+    let wanted = signature_width.max(status_width).max(summary_width) + padding * 2.0 + 4.0;
+    let width = wanted.clamp(220.0f32.min(max_width), max_width);
+    let height = if summary.is_empty() { 36.0 } else { 50.0 };
+
+    let caret_top = rect.top() - scroll_y + caret_row as f32 * row_h;
+    let below_top = caret_top + row_h + 3.0;
+    let above_top = rect.top() + 4.0;
+    let below_space = (rect.bottom() - 4.0 - below_top).max(0.0);
+    let above_space = (caret_top - 3.0 - above_top).max(0.0);
+    let place_below = below_space >= height || below_space >= above_space;
+    let y = if place_below {
+        below_top.min(rect.bottom() - height - 2.0).max(rect.top() + 2.0)
+    } else {
+        (caret_top - height - 3.0)
+            .max(rect.top() + 2.0)
+            .min(rect.bottom() - height - 2.0)
+    };
+    let caret_x = text_left + help.open.1 as f32 * char_w;
+    let mut x = caret_x;
+    let right_limit = rect.right() - 4.0 - width;
+    if x > right_limit {
+        x = right_limit;
+    }
+    x = x.max(rect.left() + 4.0);
+
+    let painter = ui.painter().with_clip_rect(rect);
+    let popup = Rect::from_min_size(pos2(x, y), vec2(width, height));
+    painter.rect_filled(popup, 3.0, SIGNATURE_BG);
+    painter.rect_stroke(
+        popup,
+        3.0,
+        Stroke::new(1.0, SIGNATURE_BORDER),
+        egui::StrokeKind::Inside,
+    );
+
+    let mut before = format!("{}(", help.name);
+    for parameter in help.parameters.iter().take(help.active) {
+        before.push_str(parameter);
+        before.push_str(", ");
+    }
+    let active_text = help.active_parameter().unwrap_or("").to_string();
+    let mut after = String::new();
+    for parameter in help.parameters.iter().skip(help.active + 1) {
+        after.push_str(", ");
+        after.push_str(parameter);
+    }
+    after.push(')');
+
+    let text_y = popup.top() + 5.0;
+    let mut text_x = popup.left() + padding;
+    painter.text(
+        pos2(text_x, text_y),
+        Align2::LEFT_TOP,
+        &before,
+        font.clone(),
+        SIGNATURE_TEXT,
+    );
+    text_x += before.chars().count() as f32 * label_char_w;
+    if !active_text.is_empty() {
+        painter.text(
+            pos2(text_x, text_y),
+            Align2::LEFT_TOP,
+            &active_text,
+            font.clone(),
+            SIGNATURE_ACTIVE,
+        );
+        let active_w = active_text.chars().count() as f32 * label_char_w;
+        painter.rect_filled(
+            Rect::from_min_max(
+                pos2(text_x, text_y + 15.0),
+                pos2(text_x + active_w, text_y + 16.0),
+            ),
+            0.0,
+            SIGNATURE_ACTIVE,
+        );
+        text_x += active_w;
+    }
+    painter.text(
+        pos2(text_x, text_y),
+        Align2::LEFT_TOP,
+        &after,
+        font,
+        SIGNATURE_TEXT,
+    );
+    painter.text(
+        pos2(popup.left() + padding, text_y + 19.0),
+        Align2::LEFT_TOP,
+        &status,
+        detail_font.clone(),
+        COMPLETION_DETAIL,
+    );
+    if !summary.is_empty() {
+        let max_chars = (((width - padding * 2.0) / detail_char_w).floor() as usize).max(8);
+        let mut shortened: String = summary.chars().take(max_chars).collect();
+        if summary.chars().count() > max_chars {
+            shortened.push('…');
+        }
+        painter.text(
+            pos2(popup.left() + padding, text_y + 33.0),
+            Align2::LEFT_TOP,
+            shortened,
+            detail_font,
+            COMPLETION_DETAIL,
+        );
+    }
+}
+
 /// True for the three bracket pairs EDT-007 matches.
 fn is_bracket(ch: char) -> bool {
     matches!(ch, '(' | ')' | '[' | ']' | '{' | '}')
@@ -2057,6 +2688,40 @@ fn is_ident_continue(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+/// True for each character that is code: outside a string literal and outside a `#` comment.
+///
+/// The language's strings and comments are line-local, so a per-line mask is exact. Signature
+/// help uses it so a parenthesis written inside `"..."` or after `#` is never read as a call.
+fn code_mask(line: &str) -> Vec<bool> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut mask = vec![true; chars.len()];
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in chars.iter().enumerate() {
+        if in_string {
+            mask[index] = false;
+            if escaped {
+                escaped = false;
+            } else if *ch == '\\' {
+                escaped = true;
+            } else if *ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if *ch == '"' {
+            mask[index] = false;
+            in_string = true;
+        } else if *ch == '#' {
+            for slot in mask.iter_mut().skip(index) {
+                *slot = false;
+            }
+            break;
+        }
+    }
+    mask
+}
+
 /// How many leading characters one outdent removes: one tab, or up to `indent_width` spaces.
 fn outdent_amount(line: &str, indent_width: usize) -> usize {
     let mut removed = 0usize;
@@ -2102,7 +2767,7 @@ fn row_at(rect: Rect, scroll_y: f32, row_h: f32, total: usize, y: f32) -> usize 
 mod tests {
     use super::*;
     use crate::completion::build_catalogue;
-    use crate::engine::EngineFunction;
+    use crate::engine::{EngineFunction, EngineState};
     use std::time::Duration;
 
     fn builtin(name: &str, parameters: &[&str]) -> EngineFunction {
@@ -2755,5 +3420,334 @@ mod tests {
         assert!(editor.jump_to_symbol(&beta));
         assert_eq!(caret(&editor), (1, 4));
         assert_eq!(editor.line_col_1based(), (2, 5));
+    }
+
+    // -------------------------------------------------------------------------------------
+    // EDT-009: find and replace
+    // -------------------------------------------------------------------------------------
+
+    fn find_editor(source: &str, query: &str) -> TextEditor {
+        let mut editor = TextEditor::from_source(source);
+        editor.find_open();
+        editor.find.set_query(query);
+        editor.find_refresh();
+        editor
+    }
+
+    #[test]
+    fn find_next_wraps_from_the_last_match_to_the_first() {
+        let mut editor = find_editor("alpha beta alpha", "alpha");
+        assert_eq!(editor.find.matches().len(), 2);
+        assert_eq!(editor.find.selected_index(), 0);
+        assert_eq!(editor.find.count_text().as_deref(), Some("1 of 2"));
+
+        assert!(editor.find_next());
+        assert_eq!(caret(&editor), (0, 11), "the second match is revealed");
+        assert_eq!(editor.find.count_text().as_deref(), Some("2 of 2"));
+
+        assert!(editor.find_next());
+        assert_eq!(
+            (editor.caret_row, editor.caret_col),
+            (0, 0),
+            "next past the last match wraps to the first"
+        );
+        assert_eq!(editor.find.count_text().as_deref(), Some("1 of 2"));
+
+        assert!(editor.find_previous());
+        assert_eq!(
+            (editor.caret_row, editor.caret_col),
+            (0, 11),
+            "previous before the first match wraps to the last"
+        );
+    }
+
+    #[test]
+    fn find_is_case_sensitive_only_when_the_toggle_is_on() {
+        let mut editor = find_editor("Alpha alpha ALPHA", "alpha");
+        assert_eq!(editor.find.matches().len(), 3, "the default is insensitive");
+        assert_eq!(editor.find.count_text().as_deref(), Some("1 of 3"));
+
+        editor.find.set_option(true, false, false);
+        editor.find_refresh();
+        assert_eq!(editor.find.matches().len(), 1, "the toggle isolates 'alpha'");
+        assert_eq!(editor.find.matches()[0].start, 6);
+        assert_eq!(editor.find.count_text().as_deref(), Some("1 of 1"));
+    }
+
+    #[test]
+    fn whole_word_matches_only_identifier_boundaries() {
+        let mut editor = find_editor("cat category cat_1 cat2 cat", "cat");
+        editor.find.set_option(false, true, false);
+        editor.find_refresh();
+        assert_eq!(
+            editor
+                .find
+                .matches()
+                .iter()
+                .map(|span| (span.start, span.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 3), (24, 27)],
+            "category, cat_1 and cat2 are not whole-word matches"
+        );
+        assert!(editor.find_next());
+        assert_eq!((editor.caret_row, editor.caret_col), (0, 24));
+    }
+
+    #[test]
+    fn an_invalid_regex_shows_an_error_and_never_panics() {
+        let mut editor = find_editor("alpha beta\ngamma", "(");
+        editor.find.set_option(false, false, true);
+        editor.find_refresh();
+        let error = editor.find.error().expect("the invalid pattern has a reason");
+        assert!(error.contains("Invalid regular expression"), "{error}");
+        assert!(editor.find.matches().is_empty(), "no match list is published");
+        assert_eq!(editor.find.count_text(), None, "no count is shown");
+        assert!(!editor.find_next(), "there is nowhere to move");
+        assert_eq!(
+            editor.source(),
+            "alpha beta\ngamma",
+            "an invalid pattern never edits the buffer"
+        );
+        assert!(editor.find_summary().expect("open").starts_with("Find: invalid regex"));
+
+        // A valid pattern in the same session recovers the count and clears the error.
+        editor.find.set_query("a+");
+        editor.find_refresh();
+        assert!(editor.find.error().is_none());
+        assert!(!editor.find.matches().is_empty());
+    }
+
+    #[test]
+    fn replace_all_rewrites_every_match_exactly_once() {
+        let mut editor = find_editor("one two one two one", "one");
+        editor.find.set_replacement("1");
+        assert_eq!(editor.replace_all(), 3);
+        assert_eq!(editor.source(), "1 two 1 two 1");
+        assert_eq!(
+            editor.find.matches().len(),
+            0,
+            "the replacement text is not itself rematched in the same operation"
+        );
+    }
+
+    #[test]
+    fn one_undo_restores_the_pre_replace_buffer_in_one_step() {
+        let mut editor = find_editor("one two one two one", "one");
+        editor.find.set_replacement("1");
+        let steps_before = editor.history.undo_steps();
+        assert_eq!(editor.replace_all(), 3);
+        assert_eq!(editor.source(), "1 two 1 two 1");
+        assert_eq!(
+            editor.history.undo_steps(),
+            steps_before + 1,
+            "replace-all is exactly one history step"
+        );
+        assert!(editor.undo());
+        assert_eq!(
+            editor.source(),
+            "one two one two one",
+            "one Ctrl+Z restores the whole pre-replace buffer"
+        );
+        assert_eq!(editor.history.undo_steps(), steps_before);
+    }
+
+    #[test]
+    fn replace_current_is_one_undo_step_and_moves_to_the_next_match() {
+        let mut editor = find_editor("a a a", "a");
+        editor.find.set_replacement("X");
+        let steps_before = editor.history.undo_steps();
+        assert!(editor.replace_current());
+        assert_eq!(editor.source(), "X a a");
+        assert_eq!(editor.history.undo_steps(), steps_before + 1);
+        assert_eq!(caret(&editor), (0, 1), "the caret is after the replacement");
+        assert_eq!(editor.find.count_text().as_deref(), Some("1 of 2"));
+
+        assert!(editor.replace_current());
+        assert_eq!(editor.source(), "X X a");
+        assert!(editor.undo());
+        assert_eq!(editor.source(), "X a a", "one undo undoes one replacement");
+    }
+
+    #[test]
+    fn regex_replace_all_uses_the_engine_and_counts_each_match() {
+        let mut editor = find_editor("a1 b22 c333", "\\d+");
+        editor.find.set_option(true, false, true);
+        editor.find_refresh();
+        editor.find.set_replacement("#");
+        assert_eq!(editor.find.matches().len(), 3);
+        assert_eq!(editor.replace_all(), 3);
+        assert_eq!(editor.source(), "a# b# c#");
+    }
+
+    #[test]
+    fn find_matches_refresh_after_a_buffer_edit_while_the_bar_is_open() {
+        let mut editor = find_editor("alpha beta", "alpha");
+        assert_eq!(editor.find.matches().len(), 1);
+        editor.set_caret(0, 0);
+        editor.insert_str("alpha ");
+        editor.find_refresh();
+        assert_eq!(
+            editor.find.matches().len(),
+            2,
+            "an edit marks the cached matches stale and the next refresh sees the new match"
+        );
+        assert_eq!(editor.find.count_text().as_deref(), Some("1 of 2"));
+    }
+
+    #[test]
+    fn find_close_removes_the_highlights_and_keeps_the_buffer() {
+        let mut editor = find_editor("alpha beta alpha", "alpha");
+        assert_eq!(editor.find.matches().len(), 2);
+        editor.find_close();
+        assert!(editor.find.matches().is_empty());
+        assert_eq!(editor.source(), "alpha beta alpha");
+        assert_eq!(editor.find_summary(), None);
+    }
+
+    // -------------------------------------------------------------------------------------
+    // EDT-004: signature help
+    // -------------------------------------------------------------------------------------
+
+    fn signature_function(name: &str, parameters: &[&str]) -> EngineFunction {
+        EngineFunction {
+            name: name.to_string(),
+            parameters: parameters.iter().map(|p| p.to_string()).collect(),
+            is_builtin: true,
+            plugin: None,
+            summary: Some(format!("{name} is described by the engine registry.")),
+        }
+    }
+
+    #[test]
+    fn signature_help_comes_from_the_engine_function_metadata() {
+        let state = EngineState {
+            variables: Vec::new(),
+            functions: vec![signature_function("transform", &["alpha", "beta", "gamma"])],
+        };
+        let mut editor = TextEditor::from_source("transform(");
+        editor.set_caret(0, 10);
+        let help = editor.signature_help(&state).expect("a call to a known function");
+        assert_eq!(help.name, "transform");
+        assert_eq!(
+            help.parameters,
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
+            "the parameter names are the engine's, not a desktop table"
+        );
+        assert_eq!(help.signature(), "transform(alpha, beta, gamma)");
+        assert_eq!(help.active, 0);
+        assert_eq!(help.active_parameter(), Some("alpha"));
+        assert!(help.status().contains("parameter 1/3 'alpha'"));
+    }
+
+    #[test]
+    fn signature_help_advances_the_active_parameter_with_commas() {
+        let state = EngineState {
+            variables: Vec::new(),
+            functions: vec![signature_function("transform", &["alpha", "beta", "gamma"])],
+        };
+        let mut editor = TextEditor::from_source("transform(");
+        editor.set_caret(0, 10);
+        assert_eq!(
+            editor.signature_help(&state).map(|help| help.active),
+            Some(0)
+        );
+
+        editor.insert_str("1, ");
+        assert_eq!(
+            editor.signature_help(&state).map(|help| help.active),
+            Some(1),
+            "the first comma activates beta"
+        );
+        editor.insert_str("2, ");
+        assert_eq!(
+            editor.signature_help(&state).map(|help| help.active),
+            Some(2),
+            "the second comma activates gamma"
+        );
+        editor.insert_str("3, ");
+        assert_eq!(
+            editor.signature_help(&state).map(|help| help.active),
+            Some(2),
+            "an extra comma stays on the last parameter"
+        );
+
+        editor.insert_str("4)");
+        assert!(
+            editor.signature_help(&state).is_none(),
+            "a closed call dismisses the signature"
+        );
+    }
+
+    #[test]
+    fn a_parenthesis_inside_a_string_is_not_a_call() {
+        let state = EngineState {
+            variables: Vec::new(),
+            functions: vec![signature_function("transform", &["alpha"])],
+        };
+        let mut editor = TextEditor::from_source("\"transform(\"");
+        editor.set_caret(0, 11);
+        assert!(
+            editor.signature_help(&state).is_none(),
+            "the parenthesis is string text, not a call"
+        );
+
+        let mut commented = TextEditor::from_source("# transform(");
+        commented.set_caret(0, 12);
+        assert!(commented.signature_help(&state).is_none());
+    }
+
+    #[test]
+    fn an_unknown_function_name_shows_no_signature() {
+        let state = EngineState {
+            variables: Vec::new(),
+            functions: vec![signature_function("transform", &["alpha"])],
+        };
+        let mut editor = TextEditor::from_source("unknown(");
+        editor.set_caret(0, 8);
+        assert!(editor.signature_help(&state).is_none());
+    }
+
+    /// The known builtin's signature is read from the real engine's own registry: the parameter
+    /// names asserted here are not written anywhere in the desktop crate.
+    #[cfg(feature = "real-engine")]
+    #[test]
+    fn known_builtins_sqrt_and_compile_read_their_parameters_from_the_engine_registry() {
+        use crate::engine::Evaluator;
+        let engine = crate::engine::RealEngine::new();
+        let state = engine.state().expect("the real engine captures its registry");
+
+        let sqrt = state
+            .functions
+            .iter()
+            .find(|function| function.name == "sqrt")
+            .expect("sqrt is a registered builtin");
+        assert_eq!(sqrt.parameters, vec!["x".to_string()]);
+
+        let mut editor = TextEditor::from_source("sqrt(");
+        editor.set_caret(0, 5);
+        let help = editor
+            .signature_help(&state)
+            .expect("signature help for the registered sqrt");
+        assert_eq!(help.signature(), "sqrt(x)");
+        assert_eq!(help.active_parameter(), Some("x"));
+
+        let compile = state
+            .functions
+            .iter()
+            .find(|function| function.name == "compile")
+            .expect("compile is a registered builtin");
+        assert_eq!(
+            compile.parameters,
+            vec!["f".to_string(), "params".to_string()]
+        );
+        let mut editor = TextEditor::from_source("compile(");
+        editor.set_caret(0, 8);
+        let help = editor.signature_help(&state).expect("compile's signature");
+        assert_eq!(help.signature(), "compile(f, params)");
+        assert_eq!(help.active, 0);
+        editor.insert_str("x^2, ");
+        let help = editor.signature_help(&state).expect("still inside the call");
+        assert_eq!(help.active, 1, "the comma advances to the params parameter");
+        assert_eq!(help.active_parameter(), Some("params"));
     }
 }
