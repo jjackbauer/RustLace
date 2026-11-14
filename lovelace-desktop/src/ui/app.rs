@@ -5926,13 +5926,21 @@ impl WorkbenchApp {
                                 // RES-001: the last committed result's typed tree, built only from
                                 // the engine's structured projection. The display text is a caption;
                                 // it is never parsed for structure.
-                                let result_action = paint_result_section(
-                                    ui,
-                                    view,
-                                    result_width,
-                                    expansion,
-                                    &mut result_toggle_rects,
-                                );
+                                // VIS-001 review: the result tree reserves 112 pt for its nested
+                                // indentation and scrollbar. That reserve must not leak to the
+                                // variables/functions tables below it, or both tables render in a
+                                // two-thirds-width strip and truncate their Kind/Value columns.
+                                let result_action = ui
+                                    .scope(|ui| {
+                                        paint_result_section(
+                                            ui,
+                                            view,
+                                            result_width,
+                                            expansion,
+                                            &mut result_toggle_rects,
+                                        )
+                                    })
+                                    .inner;
                                 if result_action == Some(empty::EmptyAction::Run) {
                                     self.workbench.run_active();
                                 }
@@ -5991,34 +5999,6 @@ impl WorkbenchApp {
                             let widths = variable_column_widths(
                                 (ui.available_width() - row_actions_width).max(120.0),
                             );
-                            ui.horizontal(|ui| {
-                                for column in VariableColumn::ALL {
-                                    let response = ui.add_sized(
-                                        [widths[column.index()], 18.0],
-                                        egui::Button::new(
-                                            RichText::new(
-                                                variable_sort.header_text(column, column.label()),
-                                            )
-                                            .small(),
-                                        )
-                                        .frame(false),
-                                    );
-                                    let direction = if variable_sort.is_active(column) {
-                                        variable_sort.direction_label()
-                                    } else {
-                                        "not sorted"
-                                    };
-                                    variable_header_rects[column.index()] = Some(response.rect);
-                                    response.clone().on_hover_text(format!(
-                                        "Sort variables by {} ({direction})",
-                                        column.label().to_lowercase()
-                                    ));
-                                    if response.clicked() {
-                                        variable_sort.clicked(column);
-                                    }
-                                }
-                            });
-                            ui.add_space(1.0);
 
                             let visible_variables: Vec<&crate::workspace_table::VariableRow> =
                                 ordered_variables(&variable_rows, variable_sort)
@@ -6258,34 +6238,6 @@ impl WorkbenchApp {
                                     .color(theme::dim()),
                             );
                             let widths = function_column_widths(ui.available_width());
-                            ui.horizontal(|ui| {
-                                for column in FunctionColumn::ALL {
-                                    let response = ui.add_sized(
-                                        [widths[column.index()], 18.0],
-                                        egui::Button::new(
-                                            RichText::new(
-                                                function_sort.header_text(column, column.label()),
-                                            )
-                                            .small(),
-                                        )
-                                        .frame(false),
-                                    );
-                                    let direction = if function_sort.is_active(column) {
-                                        function_sort.direction_label()
-                                    } else {
-                                        "not sorted"
-                                    };
-                                    function_header_rects[column.index()] = Some(response.rect);
-                                    response.clone().on_hover_text(format!(
-                                        "Sort functions by {} ({direction})",
-                                        column.label().to_lowercase()
-                                    ));
-                                    if response.clicked() {
-                                        function_sort.clicked(column);
-                                    }
-                                }
-                            });
-                            ui.add_space(1.0);
 
                             let visible_functions: Vec<&crate::workspace_table::FunctionRow> =
                                 ordered_functions(&function_rows, function_sort)
@@ -8858,11 +8810,16 @@ fn paint_focus_ring(ctx: &egui::Context) {
 }
 
 /// The fixed widths of the variables table's three columns, fitted to the pane.
+///
+/// VIS-001 review: the kind column must fit the engine's own kind names (`Natural`, `Integer`,
+/// `Symbolic`, `Record`, `Complex`) at 13 pt monospace, not abbreviate every row to `Nat…`.
+/// The name column gives up a little width for that; a long name still has its hover text and
+/// the detail view.
 fn variable_column_widths(available: f32) -> [f32; 3] {
     let usable = (available - 16.0).max(96.0);
-    let name = (usable * 0.34).max(40.0);
-    let kind = (usable * 0.26).max(34.0);
-    let display = (usable - name - kind).max(40.0);
+    let name = (usable * 0.28).max(32.0);
+    let kind = (usable * 0.36).max(46.0);
+    let display = (usable - name - kind).max(16.0);
     [name, kind, display]
 }
 
@@ -16089,6 +16046,31 @@ mod tests {
             "both tables' sort headers must be ColumnHeader nodes, got {}\n{dump}",
             headers.len()
         );
+        // VIS-001 review: each table paints exactly ONE header row. The pane used to paint a
+        // plain Button row above the table and then the semantic ColumnHeader row inside it, so
+        // every screen showed the headers twice. The extra row is gone; a regression would add
+        // plain buttons with the same labels back.
+        assert_eq!(
+            headers.len(),
+            6,
+            "each workspace table paints exactly one header row\n{dump}"
+        );
+        let duplicate_header_buttons: Vec<&str> = rows
+            .iter()
+            .filter(|row| row.role == Role::Button)
+            .map(|row| row.name.as_str())
+            .filter(|name| {
+                matches!(
+                    *name,
+                    "Name ▲" | "Kind" | "Value" | "Parameters" | "Origin"
+                )
+            })
+            .collect();
+        assert!(
+            duplicate_header_buttons.is_empty(),
+            "the sortable headers must be the table's ColumnHeader row only, not extra buttons: \
+             {duplicate_header_buttons:?}\n{dump}"
+        );
         for header in &headers {
             assert!(!header.name.is_empty(), "a column header has no name");
             assert!(
@@ -19190,6 +19172,36 @@ mod tests {
                 .iter()
                 .any(|line| line.text.contains("Precision 20000 digits confirmed (≈ 200 ms")),
             "the log carries the estimate with the confirmed change"
+        );
+    }
+
+    /// VIS-001 review: the variables table's Kind column must show the engine's kinds at the
+    /// shipped default workspace width, and the three columns plus the row actions must never
+    /// overflow at the 900x600 minimum window.
+    #[test]
+    fn vis_001_the_variable_columns_fit_the_engine_kinds_and_never_overflow_the_pane() {
+        // 294 px is the Workspace body width observed in the 1600x1000 final captures.
+        let default_available = 294.0 - ROW_ACTION_WIDTH * 2.0;
+        let [name, kind, display] = variable_column_widths(default_available);
+        let usable = (default_available - 16.0).max(96.0);
+        assert!(
+            name + kind + display <= usable + 0.5,
+            "the default columns overflow their usable width: {name} + {kind} + {display} > {usable}"
+        );
+        // 13 pt monospace at the shipped font: "Symbolic" (8 chars) advances about 62.4 points;
+        // 70 leaves room for the cell's padding and the truncate guard, so no kind is cut.
+        assert!(
+            kind >= 70.0,
+            "the Kind column ({kind} pt) cannot fit 'Symbolic'; the table would paint Sym…"
+        );
+
+        // 900x600 at 100%: the Workspace column is 180 px, its body loses 16 px of padding.
+        let minimum_available = 164.0 - ROW_ACTION_WIDTH * 2.0;
+        let [n, k, d] = variable_column_widths(minimum_available);
+        let minimum_usable = (minimum_available - 16.0).max(96.0);
+        assert!(
+            n + k + d <= minimum_usable + 0.5,
+            "the columns overflow at the 900x600 minimum: {n} + {k} + {d} > {minimum_usable}"
         );
     }
 }
