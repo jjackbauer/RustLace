@@ -8,7 +8,8 @@
 //!
 //! * TimingScaleTests — `OperationTiming.ElapsedDisplay` and `ElapsedScale` come from ONE selector.
 //! * DxStructuredResultsTests — `linsolve` on a singular symbolic system is a typed InvalidOperation.
-//! * HyperbolicBuiltinsAndNegativeIntegerPowersTests — a Symbolics+MathIR engine publishes 107 builtins.
+//! * HyperbolicBuiltinsAndNegativeIntegerPowersTests — a Symbolics+MathIR engine publishes 107
+//!   builtins in the reference (108 here, with the RustLace-only `eig_sym` core builtin).
 //! * InfiniteFamilyCompletenessTests — `exp(x) = c` over the complexes is the ImageSet family
 //!   `log(c) + 2*k*pi*i`; over the reals it is `log(5)`.
 //! * InverseBranchCandidateVerificationTests #4 — `sqrt(x^2 + 1) = 2` is Solved with two roots.
@@ -198,14 +199,16 @@ fn dxstructuredresultstests_linsolvefull_singularsystem_reportsstatusnotthrow() 
 #[test]
 fn hyperbolicbuiltinsandnegativeintegerpowerstests_builtincount_includesthethreehyperbolicfunctions()
  {
-    // C#: a SuiteEngine with SymbolicsPlugin + MathIRPlugin publishes 107 builtins.
+    // C#: a SuiteEngine with SymbolicsPlugin + MathIRPlugin publishes 107 builtins. The RustLace
+    // registry adds one core builtin the reference does not have (eig_sym, the Jacobi symmetric
+    // eigensolver), so the same plugin set now publishes 108; the plugin delta is unchanged.
     assert_eq!(
-        107,
+        108,
         crate::registry::builtin_count_for_plugins(&["Lovelace.Symbolics", "Lovelace.MathIR"])
     );
-    // The runner loads the DSP plugin too, and its 123 is the count the --functions surface
-    // reports; the difference is exactly the 16 DSP descriptors, not a drift in the core set.
-    assert_eq!(123, crate::registry::BUILTINS.len());
+    // The runner loads the DSP plugin too, and its count is what the --functions surface reports;
+    // the difference is still exactly the 16 DSP descriptors, not a drift in the core set.
+    assert_eq!(124, crate::registry::BUILTINS.len());
     for name in ["asinh", "acosh", "atanh"] {
         let info = crate::registry::find(name).unwrap_or_else(|| panic!("{name} is registered"));
         assert_eq!(Some("Lovelace.Symbolics"), info.plugin);

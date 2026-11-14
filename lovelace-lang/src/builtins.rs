@@ -3701,6 +3701,13 @@ pub fn call(
                 other => Err(shape_failure("det", 1, "a square matrix", other)),
             }
         }
+        "eig_sym" => {
+            arity(1)?;
+            match &args[0] {
+                Value::Array(a) => eig_sym(engine, a, pos),
+                other => Err(shape_failure("eig_sym", 1, "a square matrix", other)),
+            }
+        }
         "trace" => {
             arity(1)?;
             match &args[0] {
@@ -12039,4 +12046,315 @@ impl RewriteBudget {
     fn exhausted(&self) -> bool {
         self.exhausted
     }
+}
+
+// ---------------------------------------------------------------------------
+// eig_sym: the symmetric eigensolver
+// ---------------------------------------------------------------------------
+
+/// The hard cap on Jacobi sweeps. Real symmetric matrices converge quadratically and the
+/// prototype never needed more than six; a matrix that hits this cap is reported, never silently
+/// answered with an unconverged diagonal.
+const MAX_EIG_SWEEPS: usize = 100;
+
+/// The exact decimal `10^-exponent`, used for the convergence and symmetry tolerances.
+///
+/// The literal is parsed rather than built as `1 / 10^exponent`: the `Real` reciprocal path caps
+/// its expansion at 1000 fractional digits, which would turn the tolerance into zero whenever the
+/// engine precision (and therefore the exponent) is above 1000. A `0.00…1` literal is exact at any
+/// exponent.
+fn ten_to_the_minus(exponent: usize) -> Real {
+    if exponent == 0 {
+        return Real::from_i64(1);
+    }
+    let mut text = String::with_capacity(exponent + 2);
+    text.push_str("0.");
+    for _ in 1..exponent {
+        text.push('0');
+    }
+    text.push('1');
+    Real::from_str(&text).expect("a power of ten has an exact decimal reciprocal")
+}
+
+/// The largest off-diagonal magnitude of a square matrix.
+fn max_off_diagonal(matrix: &[Vec<Real>], n: usize) -> Real {
+    let mut max = Real::zero();
+    for p in 0..n {
+        for q in (p + 1)..n {
+            let magnitude = matrix[p][q].abs();
+            if magnitude > max {
+                max = magnitude;
+            }
+        }
+    }
+    max
+}
+
+/// `eig_sym(a)`: the eigenvalues and eigenvectors of a real symmetric matrix.
+///
+/// Classical Jacobi with the trig-free rotation
+/// `tau = (a_qq - a_pp) / (2 a_pq)`, `t = sign(tau) / (|tau| + sqrt(1 + tau^2))`,
+/// `c = 1 / sqrt(1 + t^2)`, `s = t c`. Two guards are load-bearing:
+///
+/// * `a_pq == 0` skips the rotation (the pivot is already zero), and
+/// * `tau == 0` must select the positive root `t = 1`, not `t = 0`: `sign(0) = 0` would make the
+///   rotation the identity while the pivot is zeroed, silently destroying the off-diagonal
+///   without rotating it (the prototype's trap).
+///
+/// The engine's computation precision is `digits`. Rotations are carried at `work = digits + 8`
+/// fractional places (truncated after every update so the exact-decimal `Real` operands cannot grow
+/// without bound) and a sweep repeats until `max |a_pq| <= 10^-(work - 2)`. The returned values and
+/// vectors are truncated to `digits + 2` fractional places, and `residual` is then
+/// `max_j ||A v_j - lambda_j v_j||_inf`, recomputed from the ORIGINAL matrix and those returned
+/// vectors. `exact` is always false: the rotations introduce square roots.
+fn eig_sym(engine: &Engine, array: &NdArray<Value>, pos: usize) -> Result<Value, LangError> {
+    let shape = array.shape().to_vec();
+    if shape.len() != 2 {
+        return Err(LangError::coded(
+            format!(
+                "eig_sym needs a rank-2 square matrix; got a rank-{} array.",
+                shape.len()
+            ),
+            pos,
+            "InvalidArgument",
+            "TypeMismatch",
+        ));
+    }
+    let (n, columns) = (shape[0], shape[1]);
+    if n != columns {
+        return Err(LangError::coded(
+            format!("eig_sym needs a square matrix; got a {n}x{columns} matrix."),
+            pos,
+            "InvalidArgument",
+            "TypeMismatch",
+        ));
+    }
+    if n == 0 {
+        return Err(LangError::coded(
+            "eig_sym needs a non-empty matrix; got a 0x0 matrix.",
+            pos,
+            "InvalidArgument",
+            "TypeMismatch",
+        ));
+    }
+
+    let digits = engine.precision_value().max(1);
+    let work = digits + 8;
+    let output_digits = digits + 2;
+
+    let mut matrix: Vec<Vec<Real>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = Vec::with_capacity(n);
+        for j in 0..n {
+            let element = array
+                .get(&[i, j])
+                .expect("a rank-2 shape covers every index");
+            match element {
+                Value::Complex(_, _) => {
+                    return Err(LangError::coded(
+                        format!(
+                            "eig_sym is a real symmetric solver; complex entries are not supported (found Complex at [{i}][{j}])."
+                        ),
+                        pos,
+                        "InvalidArgument",
+                        "TypeMismatch",
+                    ));
+                }
+                other => {
+                    let real = as_real(other).ok_or_else(|| {
+                        LangError::coded(
+                            format!(
+                                "eig_sym needs a numeric matrix; got {} at [{i}][{j}].",
+                                other.kind_name()
+                            ),
+                            pos,
+                            "InvalidArgument",
+                            "TypeMismatch",
+                        )
+                    })?;
+                    row.push(real);
+                }
+            }
+        }
+        matrix.push(row);
+    }
+
+    // Symmetry is accepted within the computation precision, relative to the matrix's largest
+    // magnitude (a fixed absolute tolerance would reject a legitimately symmetric large matrix).
+    let mut scale = Real::from_i64(1);
+    for row in &matrix {
+        for value in row {
+            let magnitude = value.abs();
+            if magnitude > scale {
+                scale = magnitude;
+            }
+        }
+    }
+    let symmetry_tolerance = scale.mul(&ten_to_the_minus(digits));
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let difference = matrix[i][j].sub(&matrix[j][i]).abs();
+            if difference > symmetry_tolerance {
+                return Err(LangError::coded(
+                    format!(
+                        "eig_sym needs a symmetric matrix; a[{i}][{j}] and a[{j}][{i}] differ by {} at precision {digits}.",
+                        difference.truncated_frac(output_digits)
+                    ),
+                    pos,
+                    "InvalidArgument",
+                    "TypeMismatch",
+                ));
+            }
+        }
+    }
+    // The rotation assumes exact symmetry; the accepted asymmetry is below the computation
+    // precision, so the upper triangle is the canonical operator.
+    for i in 0..n {
+        for j in 0..i {
+            matrix[i][j] = matrix[j][i].clone();
+        }
+    }
+    let original = matrix.clone();
+
+    // `vectors[column][component]`: the columns are the eigenvectors, so rotations update columns
+    // p and q of the accumulator exactly as they update columns p and q of the matrix.
+    let mut vectors: Vec<Vec<Real>> = (0..n)
+        .map(|column| {
+            (0..n)
+                .map(|row| {
+                    if column == row {
+                        Real::from_i64(1)
+                    } else {
+                        Real::zero()
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    let tolerance = ten_to_the_minus(work - 2);
+    let mut off_diagonal = max_off_diagonal(&matrix, n);
+    let mut sweeps = 0usize;
+    let mut iteration = 0u64;
+    while off_diagonal > tolerance {
+        if sweeps == MAX_EIG_SWEEPS {
+            return Err(LangError::coded(
+                format!(
+                    "eig_sym did not converge within {MAX_EIG_SWEEPS} sweeps at precision {digits}."
+                ),
+                pos,
+                "InvalidOperation",
+                "DomainError",
+            ));
+        }
+        for p in 0..n {
+            for q in (p + 1)..n {
+                iteration = iteration.wrapping_add(1);
+                poll(iteration)?;
+                let pivot = matrix[p][q].clone();
+                if pivot.is_zero() {
+                    continue;
+                }
+                let app = matrix[p][p].clone();
+                let aqq = matrix[q][q].clone();
+                let denominator = Real::from_i64(2).mul(&pivot);
+                let tau = aqq
+                    .sub(&app)
+                    .div(&denominator, work)
+                    .ok_or_else(|| LangError::plain("eig_sym rotation divisor vanished."))?;
+                // The tau == 0 guard: sign(0) = 0 would make t = 0 and the "rotation" the
+                // identity while the pivot is zeroed, silently returning the old diagonal.
+                let magnitude = tau.abs();
+                let root = Real::from_i64(1).add(&tau.mul(&tau)).sqrt(work);
+                let mut t = Real::from_i64(1)
+                    .div(&magnitude.add(&root), work)
+                    .ok_or_else(|| LangError::plain("eig_sym rotation divisor vanished."))?;
+                if tau.cmp(&Real::zero()) == std::cmp::Ordering::Less {
+                    t = t.neg();
+                }
+                let c = Real::from_i64(1)
+                    .div(&Real::from_i64(1).add(&t.mul(&t)).sqrt(work), work)
+                    .ok_or_else(|| LangError::plain("eig_sym rotation divisor vanished."))?;
+                let s = t.mul(&c).truncated_frac(work);
+                let t_pivot = t.mul(&pivot).truncated_frac(work);
+                matrix[p][p] = app.sub(&t_pivot).truncated_frac(work);
+                matrix[q][q] = aqq.add(&t_pivot).truncated_frac(work);
+                matrix[p][q] = Real::zero();
+                matrix[q][p] = Real::zero();
+                for i in 0..n {
+                    if i == p || i == q {
+                        continue;
+                    }
+                    let aip = matrix[i][p].clone();
+                    let aiq = matrix[i][q].clone();
+                    let new_ip = c.mul(&aip).sub(&s.mul(&aiq)).truncated_frac(work);
+                    let new_iq = s.mul(&aip).add(&c.mul(&aiq)).truncated_frac(work);
+                    matrix[i][p] = new_ip.clone();
+                    matrix[p][i] = new_ip;
+                    matrix[i][q] = new_iq.clone();
+                    matrix[q][i] = new_iq;
+                }
+                for i in 0..n {
+                    let vip = vectors[p][i].clone();
+                    let viq = vectors[q][i].clone();
+                    vectors[p][i] = c.mul(&vip).sub(&s.mul(&viq)).truncated_frac(work);
+                    vectors[q][i] = s.mul(&vip).add(&c.mul(&viq)).truncated_frac(work);
+                }
+            }
+        }
+        sweeps += 1;
+        off_diagonal = max_off_diagonal(&matrix, n);
+        checkpoint()?;
+    }
+
+    // Ascending eigenvalues, carrying the matching eigenvector column through the permutation.
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| matrix[a][a].cmp(&matrix[b][b]));
+    let mut values: Vec<Real> = Vec::with_capacity(n);
+    let mut columns: Vec<Vec<Real>> = Vec::with_capacity(n);
+    for &column in &order {
+        values.push(matrix[column][column].truncated_frac(output_digits));
+        columns.push(
+            vectors[column]
+                .iter()
+                .map(|component| component.truncated_frac(output_digits))
+                .collect(),
+        );
+    }
+
+    let mut residual = Real::zero();
+    for (j, eigenvalue) in values.iter().enumerate() {
+        for i in 0..n {
+            let mut product = Real::zero();
+            for k in 0..n {
+                product = product.add(&original[i][k].mul(&columns[j][k]));
+            }
+            let component = product.sub(&eigenvalue.mul(&columns[j][i])).abs();
+            if component > residual {
+                residual = component;
+            }
+        }
+    }
+
+    let value_vector = Value::Vector(values.into_iter().map(Value::Real).collect());
+    let mut flat_vectors: Vec<Value> = Vec::with_capacity(n * n);
+    for row in 0..n {
+        for column in 0..n {
+            flat_vectors.push(Value::Real(columns[column][row].clone()));
+        }
+    }
+    let vector_array = NdArray::from_vec(vec![n, n], flat_vectors).map_err(array_error)?;
+    Ok(Value::Record(
+        "EigenResult".to_string(),
+        vec![
+            ("values".to_string(), value_vector),
+            ("vectors".to_string(), Value::Array(vector_array)),
+            (
+                "sweeps".to_string(),
+                Value::Integer(Int::from_i64(sweeps as i64)),
+            ),
+            ("residual".to_string(), Value::Real(residual)),
+            ("exact".to_string(), Value::Boolean(false)),
+        ],
+    ))
 }
