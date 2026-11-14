@@ -616,6 +616,25 @@ unsafe extern "system" {
     ) -> i32;
 }
 
+// SAFETY: as above; DwmFlush is the documented dwmapi entry point for waiting until the desktop
+// window manager has composed the most recent frame. It takes no arguments and no handles.
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    /// Waits until the desktop window manager has composed the most recent frame.
+    pub fn DwmFlush() -> i32;
+}
+
+/// Blocks until the desktop compositor has consumed the most recently presented frame.
+///
+/// Returns `true` when the compositor acknowledged the frame. A non-zero HRESULT (for example
+/// when composition is disabled) means the call did not synchronise and the caller should not
+/// treat the wait as a frame boundary.
+pub fn flush_compositor() -> bool {
+    // SAFETY: DwmFlush takes no arguments and returns an HRESULT; the call has no preconditions
+    // beyond being made from a thread with a message queue, which the UI thread always has.
+    unsafe { DwmFlush() == 0 }
+}
+
 /// `PROCESS_MEMORY_COUNTERS` from psapi.h, field for field.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

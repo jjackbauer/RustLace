@@ -26,6 +26,7 @@ pub(crate) mod type_scale;
 pub(crate) mod typography;
 
 pub use app::run;
+pub(crate) use app::native_options;
 
 /// `--visual-audit`: the VIS-004/006/007/008 tables, printed from the same constants and
 /// constructors the window paints with.

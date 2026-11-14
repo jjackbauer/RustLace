@@ -110,6 +110,24 @@ pub struct WorkspaceSnapshot {
     pub diagnostic: Option<String>,
 }
 
+/// What happened to the statement that was in flight when a run was cancelled.
+///
+/// RUN-007: the web Studio observes cancellation only at a statement boundary, so its in-flight
+/// statement always completes and is committed. The desktop also polls a live flag inside long
+/// kernels (RUN-008), so its in-flight statement can either complete normally or stop early
+/// through that flag. This type names the two outcomes so the terminal event and the log can say
+/// which one happened instead of pretending they are the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InFlightCancellation {
+    /// Cancellation was accepted before the next statement started; nothing was in flight.
+    None,
+    /// The in-flight statement returned a value and that value is committed.
+    Completed,
+    /// The in-flight statement stopped early through the engine's live cancellation flag. Its
+    /// early-exit state is committed and it produced no new value.
+    Interrupted,
+}
+
 /// A typed notification from a running document.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DesktopEvent {
@@ -192,13 +210,20 @@ pub enum DesktopEvent {
     /// RUN-003: `snapshot` describes exactly the `committed_steps` committed statements; it is
     /// the same value the terminal publish wrote, carried in the event so the consumer applies
     /// the terminal panes from one object instead of looking the snapshot up separately.
+    ///
+    /// RUN-007: the statement that was in flight when cancellation was observed is part of that
+    /// prefix — it is never rolled back and never silently dropped. [`InFlightCancellation`]
+    /// says whether it completed with a value or stopped early through the live flag.
     Cancelled {
         /// The document that ran.
         document: DocumentId,
         /// The run's identity.
         run: RunId,
-        /// The number of statements committed before cancellation was observed.
+        /// The number of statements committed when cancellation was observed, including the
+        /// in-flight statement it was observed inside.
         committed_steps: usize,
+        /// What happened to the statement in flight when cancellation was requested.
+        in_flight: InFlightCancellation,
         /// The coherent state of the committed prefix.
         snapshot: WorkspaceSnapshot,
     },
@@ -986,9 +1011,19 @@ impl RunWorker {
     /// Ends the run as cancelled: publishes the committed snapshot, hands the cache back, retires
     /// the document and emits exactly one terminal `Cancelled` event.
     ///
+    /// RUN-007: the in-flight statement has already been committed by the caller before this is
+    /// reached — either with its returned value (`Completed`) or with the state it left at its
+    /// early exit (`Interrupted`). `None` means cancellation was observed before the next
+    /// statement started. Nothing after the in-flight statement runs on any of the three paths.
+    ///
     /// The cache goes back before the event (see [`RunWorker::return_cache`]): the event is the
     /// signal a client acts on, so everything the run leaves behind must be settled by then.
-    fn finish_cancelled(&self, progress: &mut Progress, cache: &mut DocumentCache) {
+    fn finish_cancelled(
+        &self,
+        progress: &mut Progress,
+        cache: &mut DocumentCache,
+        in_flight: InFlightCancellation,
+    ) {
         let snapshot = self.snapshot(progress, None);
         self.publish(snapshot.clone());
         self.return_cache(cache);
@@ -997,6 +1032,7 @@ impl RunWorker {
             document: self.document,
             run: self.run,
             committed_steps: snapshot.committed_steps,
+            in_flight,
             snapshot,
         });
         progress.ended = true;
@@ -1047,8 +1083,12 @@ impl RunWorker {
 
         for (index, statement) in self.statements.iter().enumerate() {
             progress.current = index;
+            // RUN-007: the boundary is checked once, before the statement starts. A cancellation
+            // that is already pending means this statement never runs; one that arrives while it
+            // is in flight is handled at the commit below, so the statement's outcome is never
+            // thrown away just because the request beat it to the engine.
             if self.cancel_requested() {
-                self.finish_cancelled(progress, cache);
+                self.finish_cancelled(progress, cache, InFlightCancellation::None);
                 return;
             }
             self.emit(DesktopEvent::StepStarted {
@@ -1071,6 +1111,17 @@ impl RunWorker {
                     if let Some(entry) = cached {
                         if self.apply_cached(&mut engine, progress, &entry) {
                             self.commit_step(progress, index, true);
+                            // RUN-007: a reused value is committed in the same place an
+                            // evaluated one is, so a cancellation that arrived during the reuse
+                            // stops the run *after* this statement, not before its commit.
+                            if self.cancel_requested() {
+                                self.finish_cancelled(
+                                    progress,
+                                    cache,
+                                    InFlightCancellation::Completed,
+                                );
+                                return;
+                            }
                             continue;
                         }
                     }
@@ -1135,23 +1186,42 @@ impl RunWorker {
                         }
                     }
                     self.commit_step(progress, index, false);
+                    // RUN-007: the in-flight statement has finished and its value is committed;
+                    // only now does the run stop, before the next statement can start. This is
+                    // the web Studio's statement-boundary contract, made explicit here instead
+                    // of being left to the next loop-top check.
+                    if self.cancel_requested() {
+                        self.finish_cancelled(progress, cache, InFlightCancellation::Completed);
+                        return;
+                    }
                 }
                 Ok(Err(message)) => {
                     self.drain_output(&mut engine, progress);
-                    // The engine reports a kernel that observed the live flag as an ordinary
-                    // statement error; the host knows the run was cancelled, so publish the
-                    // terminal `Cancelled` the caller requested instead of a failure.
-                    if self.cancel_requested() {
-                        self.finish_cancelled(progress, cache);
-                        return;
-                    }
-                    let mut diagnostic = Diagnostic::for_statement(statement, &self.source, message);
                     // RUN-014: the engine's own code/category/suggestions for exactly this
                     // failure, captured from the evaluator that returned it.
                     let classification =
                         panic::catch_unwind(AssertUnwindSafe(|| engine.last_error()))
                             .ok()
                             .flatten();
+                    // RUN-007/RUN-008: an engine that observed the live cancellation flag stops
+                    // the statement early and reports the structured `Cancelled` refusal. That is
+                    // the in-flight statement's early-exit result, not a diagnostic, and it is
+                    // committed like any other statement outcome. An engine without a
+                    // classification seam (the deterministic fake and third-party evaluators)
+                    // cannot publish the code, so the pending request itself is the discriminator
+                    // it already used before this seam existed. A *different* classified failure
+                    // still wins over a pending cancellation, matching the web Studio's
+                    // "error wins" edge.
+                    let stopped_by_cancellation = match &classification {
+                        Some(error) => error.code == "Cancelled",
+                        None => self.cancel_requested(),
+                    };
+                    if self.cancel_requested() && stopped_by_cancellation {
+                        self.commit_interrupted(&mut engine, progress, index);
+                        self.finish_cancelled(progress, cache, InFlightCancellation::Interrupted);
+                        return;
+                    }
+                    let mut diagnostic = Diagnostic::for_statement(statement, &self.source, message);
                     diagnostic.classify(classification);
                     self.fail(progress, diagnostic, cache);
                     return;
@@ -1163,6 +1233,14 @@ impl RunWorker {
                     return;
                 }
             }
+        }
+
+        // A cancellation observed after the last statement committed but before the terminal
+        // event is still honoured: the run ends `Cancelled` with the full prefix, never
+        // `Finished` while a request is pending (RUN-007).
+        if self.cancel_requested() {
+            self.finish_cancelled(progress, cache, InFlightCancellation::Completed);
+            return;
         }
 
         let snapshot = self.snapshot(progress, None);
@@ -1178,6 +1256,30 @@ impl RunWorker {
             snapshot,
         });
         progress.ended = true;
+    }
+
+    /// Commits the in-flight statement's early-exit result (RUN-007/RUN-008).
+    ///
+    /// The engine stopped the statement because it observed the live cancellation flag. It
+    /// publishes no value for it, but the state it left behind is real: a loop's completed
+    /// iterations, a kernel's partial writes, its print lines (already drained by the caller).
+    /// The statement is committed exactly like the web Studio's in-flight statement: the run
+    /// does not roll it back and the panes capture the state the engine has. `result` keeps the
+    /// last value the engine published, because the early exit produced none; the engine's own
+    /// `_` binding is untouched for the same reason, so result and `_` stay consistent.
+    fn commit_interrupted(
+        &self,
+        engine: &mut Box<dyn Evaluator>,
+        progress: &mut Progress,
+        index: usize,
+    ) {
+        progress.precision = self.engine_precision(engine);
+        self.capture_symbols(engine, progress);
+        if let Ok(Some(plot)) = panic::catch_unwind(AssertUnwindSafe(|| engine.last_plot())) {
+            progress.plot = Some(plot);
+        }
+        progress.committed += 1;
+        self.commit_step(progress, index, false);
     }
 
     /// Captures the engine's variables, functions and kind-aware state at a commit point.
@@ -1613,9 +1715,11 @@ mod tests {
             DesktopEvent::SubProgress { .. } => "SubProgress".to_string(),
             DesktopEvent::Finished { .. } => "Finished".to_string(),
             DesktopEvent::Cancelled {
-                committed_steps, ..
+                committed_steps,
+                in_flight,
+                ..
             } => {
-                format!("Cancelled({committed_steps})")
+                format!("Cancelled({committed_steps}, {in_flight:?})")
             }
             DesktopEvent::Failed { diagnostic, .. } => format!("Failed({})", diagnostic.render()),
         }
@@ -1893,6 +1997,7 @@ mod tests {
                 run,
                 committed_steps,
                 snapshot,
+                ..
             } => {
                 assert_eq!(*document, DocumentId(2));
                 assert_eq!(*run, handle.run());
@@ -1933,14 +2038,17 @@ mod tests {
         );
     }
 
-    /// The actual desktop defect: Cancel while the worker is inside ONE kernel call.
+    /// RUN-008's kernel proof, with RUN-007's prefix: Cancel while the worker is inside ONE
+    /// kernel call.
     ///
     /// `matmul(eye(400), eye(400))` is a single statement whose whole cost is one array kernel
     /// (a triple loop that polls the cancellation seam); there is no statement boundary to
     /// observe for many seconds. Cancel must reach the engine's live flag and the run must
     /// publish a terminal `Cancelled` inside the two-second budget. The measured latency is
-    /// printed. A single opaque primitive with no poll seam (`sqrt(2)` at precision 200000) is
-    /// budgeted as uninterruptible and documented in `docs/goal-desktop-v4/round-9/kernel-cancel.md`.
+    /// printed. The kernel stops early (`Interrupted`), and that early exit is the in-flight
+    /// statement's committed result: the prefix is one statement, not zero. A single opaque
+    /// primitive with no poll seam (`sqrt(2)` at precision 200000) is budgeted as
+    /// uninterruptible and documented in `docs/goal-desktop-v4/round-9/kernel-cancel.md`.
     #[cfg(feature = "real-engine")]
     #[test]
     fn t9_cancel_inside_one_kernel_is_terminal_within_two_seconds() {
@@ -2026,13 +2134,23 @@ mod tests {
                 document: stopped,
                 run,
                 committed_steps,
+                in_flight,
                 snapshot: event_snapshot,
             } => {
                 assert_eq!(*stopped, document);
                 assert_eq!(*run, handle.run());
+                // RUN-007: the statement that was in flight when Cancel was pressed is part of
+                // the committed prefix. The kernel observed the live flag and stopped early, so
+                // its early-exit state (no variables, no value) is committed and the run stops
+                // before any next statement. It is not dropped as if it had never started.
                 assert_eq!(
-                    *committed_steps, 0,
-                    "the one kernel statement did not commit"
+                    *committed_steps, 1,
+                    "the one kernel statement must be part of the committed prefix"
+                );
+                assert_eq!(
+                    *in_flight,
+                    InFlightCancellation::Interrupted,
+                    "the kernel observed the live flag and stopped early"
                 );
                 let published = host
                     .last_snapshot(document)
@@ -2041,7 +2159,7 @@ mod tests {
                     event_snapshot, &published,
                     "the Cancelled event must carry the snapshot the run published"
                 );
-                assert_eq!(event_snapshot.committed_steps, 0);
+                assert_eq!(event_snapshot.committed_steps, 1);
                 assert_eq!(event_snapshot.result, "Void");
                 assert_eq!(event_snapshot.revision, SourceRevision(1));
             }
@@ -2789,6 +2907,7 @@ mod tests {
                 document,
                 run,
                 committed_steps: 1,
+                in_flight: InFlightCancellation::None,
                 snapshot: snapshot.clone(),
             },
             DesktopEvent::Failed {

@@ -28,8 +28,9 @@ use crate::completion::{self, CompletionItem};
 use crate::document_io::{self, DiskState, DiskStatus, FileSnapshot, LoadedFile, NewlineStyle};
 use crate::engine::{self, DEFAULT_PRECISION, EngineState, PlotCapture};
 use crate::execution::{
-    DesktopEvent, Diagnostic, DocumentId, EvaluatorFactory, EventSink, ExecutionHost, RunHandle,
-    RunId, SequencedEvent, SourceRevision, SubmitError, WorkspaceSnapshot,
+    DesktopEvent, Diagnostic, DocumentId, EvaluatorFactory, EventSink, ExecutionHost,
+    InFlightCancellation, RunHandle, RunId, SequencedEvent, SourceRevision, SubmitError,
+    WorkspaceSnapshot,
 };
 use crate::keyboard::WorkbenchCommand;
 use crate::language;
@@ -2930,6 +2931,7 @@ impl Workbench {
             }
             DesktopEvent::Cancelled {
                 committed_steps,
+                in_flight,
                 snapshot,
                 ..
             } => {
@@ -2963,16 +2965,29 @@ impl Workbench {
                     debug_assert!(transitioned, "a terminal event must end the in-flight run");
                 }
                 let elapsed = self.close_run(index);
+                // RUN-007/RUN-008: the terminal line names what happened to the statement that
+                // was in flight, so a cancellation that had to wait for (or that stopped) that
+                // statement is reported instead of being presented as an instantaneous stop.
                 let text = if quick_eval {
                     format!(
                         "Run cancelled after {} statements in {} ms.",
                         committed_steps, elapsed
                     )
                 } else {
-                    format!(
-                        "Run cancelled after {} statements in {} ms; the committed statements remain in the workspace.",
-                        committed_steps, elapsed
-                    )
+                    match in_flight {
+                        InFlightCancellation::None => format!(
+                            "Run cancelled after {} statements in {} ms; no statement was in flight and the committed statements remain in the workspace.",
+                            committed_steps, elapsed
+                        ),
+                        InFlightCancellation::Completed => format!(
+                            "Run cancelled after {} statements in {} ms; the in-flight statement completed and its value is committed (the engine did not observe the request inside it — an uninterruptible kernel).",
+                            committed_steps, elapsed
+                        ),
+                        InFlightCancellation::Interrupted => format!(
+                            "Run cancelled after {} statements in {} ms; the in-flight statement stopped at the cancellation flag and its early-exit state is committed.",
+                            committed_steps, elapsed
+                        ),
+                    }
                 };
                 self.log(index, LogKind::Timing, text);
                 true
@@ -4617,13 +4632,24 @@ mod tests {
             vec!["one".to_string(), "two".to_string(), "three".to_string()],
             "the cancelled snapshot must carry the same once-only output"
         );
-        assert_eq!(snapshot.committed_steps, 3);
+        // RUN-007: the kernel statement that was in flight when Cancel was pressed is part of
+        // the committed prefix; it stopped at the flag and left no new value, so the output and
+        // variables are exactly the ones above.
+        assert_eq!(snapshot.committed_steps, 4);
         assert!(
             document
                 .logs
                 .iter()
                 .any(|line| line.text.starts_with("Run cancelled after")),
             "logs were {:?}",
+            document.logs
+        );
+        assert!(
+            document
+                .logs
+                .iter()
+                .any(|line| line.text.contains("stopped at the cancellation flag")),
+            "the terminal line must report the interrupted in-flight statement: {:?}",
             document.logs
         );
     }
@@ -4730,6 +4756,74 @@ mod tests {
                 .any(|line| line.text.starts_with("Run cancelled after"))
         );
         assert!(workbench.status_text(1, 1).contains("Cancelled"));
+    }
+
+    /// RUN-008: an uninterruptible in-flight statement is reported as such, not as an
+    /// instantaneous stop.
+    ///
+    /// The engine here sleeps for 300 ms and ignores the live flag, so the statement that was in
+    /// flight when Cancel arrived runs to completion. The round-65 ordering commits its value and
+    /// the timing line must say that it completed without observing the request — the honest
+    /// report RUN-008 asks for instead of a `Cancelled` that pretends the statement never ran.
+    #[test]
+    fn cancelling_an_uninterruptible_statement_reports_that_it_completed() {
+        let mut workbench = slow_workbench(Duration::from_millis(300));
+        workbench.set_source(0, "a = 1\nb = 2\n".to_string());
+        assert!(workbench.run_active(), "the run must start");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while workbench.documents()[0].committed == 0 {
+            workbench.poll();
+            assert!(
+                Instant::now() < deadline,
+                "statement 1 never committed; logs: {:?}",
+                workbench.documents()[0].logs
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Statement 2 sleeps for 300 ms; this request lands inside it.
+        let cancel_at = Instant::now();
+        assert!(
+            workbench.cancel_active(),
+            "the in-flight statement must accept the cancellation"
+        );
+        assert!(
+            workbench.wait_until_idle(Duration::from_secs(2)),
+            "cancel took longer than 2 s"
+        );
+        let elapsed = cancel_at.elapsed();
+
+        let document = &workbench.documents()[0];
+        assert_eq!(document.state(), RunState::Cancelled);
+        assert_eq!(
+            document.committed, 2,
+            "the uninterruptible in-flight statement completed and its value was committed"
+        );
+        let snapshot = document
+            .snapshot
+            .as_ref()
+            .expect("a cancelled run publishes its snapshot");
+        assert_eq!(snapshot.committed_steps, 2);
+        assert_eq!(snapshot.result, "ok", "the completed value is the committed one");
+        assert!(elapsed < Duration::from_secs(2), "cancel took {elapsed:?}");
+        let timing = document
+            .logs
+            .iter()
+            .find(|line| line.text.starts_with("Run cancelled after"))
+            .map(|line| line.text.as_str())
+            .unwrap_or_else(|| panic!("no cancellation line in {:?}", document.logs));
+        assert!(
+            timing.contains("completed and its value is committed"),
+            "the report must say the in-flight statement completed: {timing:?}"
+        );
+        assert!(
+            timing.contains("did not observe the request inside it"),
+            "the report must name why the cancellation waited: {timing:?}"
+        );
+        println!(
+            "uninterruptible in-flight report: cancel-to-terminal={:.1} ms committed=2/2 | {timing}",
+            elapsed.as_secs_f64() * 1000.0
+        );
     }
 
     #[test]
@@ -5843,8 +5937,11 @@ mod tests {
         }
     }
 
-    /// RUN-003: cancelling after statement 2 must keep exactly the committed prefix in every
-    /// field of the assembled view, with no variable from the cancelled statement 3.
+    /// RUN-003/RUN-007: cancelling after statement 2 must keep exactly the committed prefix in
+    /// every field of the assembled view. The statement the cancellation was observed inside is
+    /// part of that prefix (the web Studio commits its in-flight statement), so the count is 3;
+    /// the engine stopped it before it wrote `c`, so the workspace holds exactly `a` and `b` and
+    /// no value is invented for it.
     #[test]
     fn cancelling_after_statement_two_keeps_the_same_coherent_prefix() {
         let entered = Arc::new(AtomicBool::new(false));
@@ -5881,8 +5978,8 @@ mod tests {
         let view = workbench.active_view();
         assert_eq!(view.run_state, RunState::Cancelled);
         assert_eq!(view.revision, revision);
-        assert_eq!(view.committed_steps, 2);
-        assert_eq!(view.committed_statement(), Some(2));
+        assert_eq!(view.committed_steps, 3);
+        assert_eq!(view.committed_statement(), Some(3));
         assert_eq!(view.total, 4);
         assert_eq!(
             view.variables,
@@ -5890,25 +5987,32 @@ mod tests {
                 ("a".to_string(), "1".to_string()),
                 ("b".to_string(), "2".to_string()),
             ],
-            "the cancelled statement must not appear in the workspace"
+            "the interrupted statement wrote nothing, so it must not appear in the workspace"
         );
         assert_eq!(view.variable("c"), None);
-        assert_eq!(view.result, "2");
+        assert_eq!(view.result, "2", "the early exit produced no new value");
         assert_eq!(
             view.last_committed_log_statement(),
-            Some(2),
-            "the last committed log line is statement 2; logs: {:?}",
+            Some(3),
+            "the interrupted statement is inside the committed prefix; logs: {:?}",
             view.logs
         );
         assert_eq!(
             view.last_log_statement(),
             Some(3),
-            "the log narrates the cancelled attempt at statement 3"
+            "the log narrates the interrupted attempt at statement 3"
         );
         assert_eq!(view.diagnostic, None, "a cancellation is not a diagnostic");
         assert!(view.logs.iter().any(|line| {
-            line.kind == LogKind::Timing && line.text.contains("Run cancelled after 2 statements")
+            line.kind == LogKind::Timing && line.text.contains("Run cancelled after 3 statements")
         }));
+        assert!(
+            view.logs
+                .iter()
+                .any(|line| line.text.contains("stopped at the cancellation flag")),
+            "the log must say the in-flight statement was interrupted: {:?}",
+            view.logs
+        );
         let names: Vec<&str> = view
             .state
             .variables

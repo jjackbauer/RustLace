@@ -96,6 +96,41 @@ enum Phase {
     Done,
 }
 
+impl Phase {
+    fn tag(&self) -> &'static str {
+        match self {
+            Phase::Warmup { .. } => "warmup",
+            Phase::Typing { .. } => "typing",
+            Phase::Caret { .. } => "caret",
+            Phase::Scrolling { .. } => "scrolling",
+            Phase::Done => "done",
+        }
+    }
+}
+
+/// One pass of the real app, recorded only when `LOVELACE_MEASURE_TRACE` names a path.
+///
+/// This is a diagnostic beside the measurement, not part of it: the reported distributions are
+/// built from exactly the samples they always were. The trace exists so a p95 miss can be
+/// attributed to a pass that is slow, a pass that started late (pacing), or the compositor.
+struct FrameTrace {
+    pass: u64,
+    phase: &'static str,
+    /// Milliseconds since process entry, i.e. the same origin as `open_ms`.
+    at_ms: f64,
+    /// Start-to-start interval against the previous pass (0 for the first recorded pass).
+    interval_ms: f64,
+    /// Wall time this pass took (the app's own work, before eframe renders and presents).
+    pass_ms: f64,
+    /// eframe's `cpu_usage` for the *previous* frame: app + render, excluding the vsync wait.
+    cpu_ms: f64,
+    editor_ms: f64,
+    rows_ms: f64,
+    syntax_ms: f64,
+    scroll_y: f32,
+    focused: bool,
+}
+
 struct MeasureApp {
     inner: WorkbenchApp,
     out: PathBuf,
@@ -119,6 +154,10 @@ struct MeasureApp {
     bytes: usize,
     lines: usize,
     written: bool,
+    /// `LOVELACE_MEASURE_TRACE`: optional diagnostic path for the per-pass CSV.
+    trace_out: Option<PathBuf>,
+    trace: Vec<FrameTrace>,
+    last_pass_start: Option<Instant>,
 }
 
 impl MeasureApp {
@@ -147,6 +186,9 @@ impl MeasureApp {
             bytes: 0,
             lines: 0,
             written: false,
+            trace_out: std::env::var_os("LOVELACE_MEASURE_TRACE").map(PathBuf::from),
+            trace: Vec::new(),
+            last_pass_start: None,
         }
     }
 
@@ -273,11 +315,42 @@ impl MeasureApp {
                 self.out.display()
             ),
         }
+        if let Some(path) = &self.trace_out {
+            let mut csv =
+                String::from("pass,phase,at_ms,interval_ms,pass_ms,cpu_ms,editor_ms,rows_ms,syntax_ms,scroll_y,focused\n");
+            for row in &self.trace {
+                csv.push_str(&format!(
+                    "{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.1},{}\n",
+                    row.pass,
+                    row.phase,
+                    row.at_ms,
+                    row.interval_ms,
+                    row.pass_ms,
+                    row.cpu_ms,
+                    row.editor_ms,
+                    row.rows_ms,
+                    row.syntax_ms,
+                    row.scroll_y,
+                    row.focused
+                ));
+            }
+            match std::fs::write(path, csv) {
+                Ok(()) => eprintln!(
+                    "lovelace-desktop: EDT-016 diagnostic trace written to {}",
+                    path.display()
+                ),
+                Err(error) => eprintln!(
+                    "lovelace-desktop: could not write the EDT-016 diagnostic trace {}: {error}",
+                    path.display()
+                ),
+            }
+        }
     }
 }
 
-impl eframe::App for MeasureApp {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+impl MeasureApp {
+    /// One pass of the shipped app. The measurement wrapper calls this from [`eframe::App::ui`].
+    fn pass(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.mark_open();
         let ctx = ui.ctx().clone();
         // The measurement drives the editor surface directly, so it keeps keyboard focus there
@@ -466,6 +539,59 @@ impl eframe::App for MeasureApp {
                 self.scroll_rows.push(rows_ms);
                 self.scroll_syntax.push(syntax_ms);
             }
+        }
+    }
+}
+
+impl eframe::App for MeasureApp {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // EDT-016 diagnostic trace (opt-in through `LOVELACE_MEASURE_TRACE`). It records the
+        // pass itself only; the reported latency and interval samples are pushed by `pass` with
+        // exactly the same origin and endpoints they always had.
+        let pass_started = Instant::now();
+        let phase = self.phase.tag();
+        let interval_ms = self.last_pass_start.map(|previous| {
+            pass_started.saturating_duration_since(previous).as_secs_f64() * 1000.0
+        });
+        self.last_pass_start = Some(pass_started);
+        let trace = self.trace_out.is_some();
+        let cpu_ms = frame
+            .info()
+            .cpu_usage
+            .map(|seconds| f64::from(seconds) * 1000.0)
+            .unwrap_or_default();
+        let pass_nr = ui.ctx().cumulative_pass_nr() as u64;
+        let focused = ui
+            .ctx()
+            .input(|input| input.viewport().focused.unwrap_or(false));
+        self.pass(ui, frame);
+        if trace && phase != "done" {
+            let pass_ms = pass_started.elapsed().as_secs_f64() * 1000.0;
+            let (editor_ms, rows_ms, syntax_ms, scroll_y) = {
+                let editor = self.inner.measure_editor();
+                (
+                    editor.last_ui_ms,
+                    editor.metrics.rows_ms,
+                    editor.metrics.syntax_ms,
+                    editor.scroll_y,
+                )
+            };
+            self.trace.push(FrameTrace {
+                pass: pass_nr,
+                phase,
+                at_ms: pass_started
+                    .saturating_duration_since(self.started)
+                    .as_secs_f64()
+                    * 1000.0,
+                interval_ms: interval_ms.unwrap_or_default(),
+                pass_ms,
+                cpu_ms,
+                editor_ms,
+                rows_ms,
+                syntax_ms,
+                scroll_y,
+                focused,
+            });
         }
     }
 }

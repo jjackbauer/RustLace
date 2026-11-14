@@ -34,6 +34,8 @@
 #![cfg_attr(not(windows), forbid(unsafe_code))]
 
 mod app;
+#[cfg(test)]
+mod cancel_parity;
 mod completion;
 #[cfg(windows)]
 mod diagnostic_map;
@@ -41,6 +43,8 @@ mod document_io;
 mod engine;
 mod execution;
 mod find;
+#[cfg(windows)]
+mod frame_probe;
 #[cfg(windows)]
 mod glyph_audit;
 mod glyphs;
@@ -150,6 +154,21 @@ fn main() {
     }
     if let Some(index) = args.iter().position(|arg| arg == "--raster-svg") {
         std::process::exit(ui::plot::raster_cli(&args[index + 1..]));
+    }
+    // Diagnostic: the cadence of a bare eframe window on this machine, so a frame-pacing result
+    // can be attributed between the app's paint and the windowing stack. No PERF row uses it.
+    if args.iter().any(|arg| arg == "--perf-frame-probe") {
+        let out = args
+            .iter()
+            .position(|arg| arg == "--measure-out")
+            .and_then(|index| args.get(index + 1))
+            .map(std::path::PathBuf::from);
+        let mode = if args.iter().any(|arg| arg == "--probe-request=after16") {
+            frame_probe::RequestMode::After16
+        } else {
+            frame_probe::RequestMode::Immediate
+        };
+        std::process::exit(frame_probe::run(out, mode));
     }
     if let Some(index) = args.iter().position(|arg| arg == "--measure-large") {
         let script = args
@@ -383,6 +402,15 @@ fn usage() -> String {
         "                                      report what an extreme precision request does\n",
     );
     text.push_str("                                      (PERF-011; exits non-zero when nothing warns)\n");
+    text.push_str(
+        "  lovelace-desktop --perf-frame-probe --measure-out <report> [--probe-request=after16]\n",
+    );
+    text.push_str(
+        "                                      diagnostic: interval of every pass of a bare\n",
+    );
+    text.push_str(
+        "                                      eframe window (no PERF row; not the measurement)\n",
+    );
     text.push_str(
         "  lovelace-desktop --platform-claims  print the release matrix's platform verdicts and\n",
     );
