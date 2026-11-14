@@ -3008,3 +3008,8 @@ mod round98_differential_oracle;
 /// rewrite rules.
 #[cfg(test)]
 mod round66_engine_data;
+
+/// The `eig_sym` Jacobi symmetric eigensolver: the algorithm's acceptance criteria, the record
+/// shape, the precision tracking and the typed argument refusals.
+#[cfg(test)]
+mod eigen_jacobi_round;

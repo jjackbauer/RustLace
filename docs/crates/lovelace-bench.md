@@ -13,14 +13,19 @@ byte-for-byte. The digest is what proves that changing the thread budget changes
 
 ```text
 lovelace-bench <op> <digits> [reps]
-  op: add | sub | mul | div | factorial | tostring | parse | pi | sqrt
+  op: add | sub | mul | div | factorial | tostring | parse | pi | sqrt | eig_sym_5 | eig_sym_8
 ```
+
+`eig_sym_5` and `eig_sym_8` run the engine's `eig_sym` on a dense 5x5 / 8x8 symmetric matrix with
+spectrum 1..n at the requested precision. The engine is built and warmed up outside the timed
+region, so the reported milliseconds cover the `eig_sym` evaluation (including parsing the generated
+matrix literal), not engine construction.
 
 Output: `RESULT <op> <digits> <mean_ms> <median_ms>` plus a `DIGEST` line.
 
 ## Dependencies
 
-`lovelace-nat`, `lovelace-int`, `lovelace-real`.
+`lovelace-nat`, `lovelace-int`, `lovelace-real`, `lovelace-lang`.
 
 ## Tests
 

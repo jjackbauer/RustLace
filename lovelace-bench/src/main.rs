@@ -2,12 +2,13 @@
 //! on one machine with the same operations and the same operand sizes.
 //!
 //! Usage: lovelace-bench <op> <digits> [reps]
-//!   op: add | sub | mul | div | factorial | tostring | parse | pi | sqrt
+//!   op: add | sub | mul | div | factorial | tostring | parse | pi | sqrt | eig_sym_5 | eig_sym_8
 //! Output: "RESULT <op> <digits> <mean_ms> <median_ms>" plus a DIGEST line so two runs can be
 //! compared byte for byte (used to prove that changing the thread budget changes nothing).
 
 use std::time::Instant;
 
+use lovelace_lang::{Engine, Value};
 use lovelace_nat::Nat;
 use lovelace_real::Real;
 
@@ -39,6 +40,8 @@ enum Work {
     Parse,
     Pi,
     Sqrt,
+    EigSym5,
+    EigSym8,
 }
 
 impl Work {
@@ -54,13 +57,24 @@ impl Work {
             "parse" => Work::Parse,
             "pi" => Work::Pi,
             "sqrt" => Work::Sqrt,
+            "eig_sym_5" => Work::EigSym5,
+            "eig_sym_8" => Work::EigSym8,
             _ => return None,
         })
     }
 
     /// Runs the operation once. Returns a digest of the result for the last call, so a caller
-    /// can compare runs without timing the conversion.
-    fn run(&self, digits: usize, a: &Nat, b: &Nat, want_digest: bool) -> Option<String> {
+    /// can compare runs without timing the conversion. `engine` is reused across repetitions for
+    /// the engine-level cases (the warm-up creates it, so construction is outside the timed
+    /// region); the scalar cases ignore it.
+    fn run(
+        &self,
+        digits: usize,
+        a: &Nat,
+        b: &Nat,
+        want_digest: bool,
+        engine: &mut Option<Engine>,
+    ) -> Option<String> {
         match self {
             Work::Add => {
                 let _ = std::hint::black_box(a.add(b));
@@ -129,8 +143,86 @@ impl Work {
                 let value = std::hint::black_box(Real::from_i64(2).sqrt(digits)).to_string();
                 if want_digest { Some(value) } else { None }
             }
+            Work::EigSym5 | Work::EigSym8 => {
+                let n = if matches!(self, Work::EigSym5) { 5 } else { 8 };
+                if engine.is_none() {
+                    let mut fresh = Engine::new();
+                    fresh.set_precision(digits);
+                    *engine = Some(fresh);
+                }
+                let engine = engine.as_mut().expect("the engine was just built");
+                let source = format!("eig_sym({})", symmetric_matrix_source(n));
+                let value = std::hint::black_box(engine.eval(&source).expect("eig_sym evaluates"));
+                if want_digest {
+                    Some(eigen_digest(&value))
+                } else {
+                    None
+                }
+            }
         }
     }
+}
+
+/// The decimal entry `numerator / denominator`, exactly, for denominators 5 and 8 (which divide
+/// 1000). Used to write the benchmark matrix without a floating-point literal.
+fn decimal_ratio(numerator: i64, denominator: i64) -> String {
+    let scaled = numerator * 1000;
+    let whole = scaled / denominator;
+    let sign = if whole < 0 { "-" } else { "" };
+    let magnitude = whole.unsigned_abs();
+    let integer = magnitude / 1000;
+    let fraction = magnitude % 1000;
+    if fraction == 0 {
+        format!("{sign}{integer}")
+    } else {
+        let mut digits = format!("{fraction:03}");
+        while digits.ends_with('0') {
+            digits.pop();
+        }
+        format!("{sign}{integer}.{digits}")
+    }
+}
+
+/// The source literal for the dense matrix `A = Q diag(1..n) Q` with `Q = I - (2/n) J`, whose
+/// spectrum is exactly `1..=n`: `A_ij = d_i [i == j] - (2/n)(d_i + d_j) + 2(n+1)/n`. Written over
+/// the common denominator `n`, every entry is `numerator / n`, which is an exact decimal for the
+/// benchmark sizes 5 and 8.
+fn symmetric_matrix_source(n: usize) -> String {
+    let mut rows = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut row = Vec::with_capacity(n);
+        for j in 0..n {
+            let diagonal = if i == j { (n * (i + 1)) as i64 } else { 0 };
+            let numerator = diagonal - 2 * ((i + 1) as i64 + (j + 1) as i64) + 2 * (n as i64 + 1);
+            row.push(decimal_ratio(numerator, n as i64));
+        }
+        rows.push(format!("[{}]", row.join(", ")));
+    }
+    format!("[{}]", rows.join(", "))
+}
+
+/// The digest of an `EigenResult`: sweeps, residual and the ascending eigenvalues.
+fn eigen_digest(value: &Value) -> String {
+    let Value::Record(type_name, fields) = value else {
+        panic!(
+            "eig_sym must answer an EigenResult, got {}",
+            value.kind_name()
+        );
+    };
+    assert_eq!(type_name, "EigenResult");
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value.display())
+            .unwrap_or_else(|| panic!("EigenResult must publish '{name}'"))
+    };
+    format!(
+        "{}|{}|{}",
+        field("sweeps"),
+        field("residual"),
+        field("values")
+    )
 }
 
 fn main() {
@@ -151,13 +243,14 @@ fn main() {
     let b = Nat::from_decimal(&random_digits((digits / 2).max(2), 67890)).expect("b");
 
     // Warm up outside the timed region and capture the digest there, so conversion cost never
-    // pollutes the measurement.
-    let digest = work.run(digits, &a, &b, true);
+    // pollutes the measurement. The engine-level cases build their engine here too.
+    let mut engine: Option<Engine> = None;
+    let digest = work.run(digits, &a, &b, true, &mut engine);
 
     let mut times: Vec<f64> = Vec::with_capacity(reps);
     for _ in 0..reps {
         let start = Instant::now();
-        let _ = work.run(digits, &a, &b, false);
+        let _ = work.run(digits, &a, &b, false, &mut engine);
         times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     times.sort_by(|x, y| x.partial_cmp(y).unwrap());

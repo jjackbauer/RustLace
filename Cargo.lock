@@ -1859,6 +1859,7 @@ name = "lovelace-bench"
 version = "0.2.0"
 dependencies = [
  "lovelace-int",
+ "lovelace-lang",
  "lovelace-nat",
  "lovelace-real",
 ]
