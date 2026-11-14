@@ -12,6 +12,7 @@ Start with the [README](../README.md). This directory holds the long-form docume
 | [release.md](release.md) | you are cutting a release |
 | [contributing.md](contributing.md) | you are opening a change |
 | [glossary.md](glossary.md) | a term is unfamiliar |
+| [language/](language/) | you are writing a script and need the syntax, semantics and the builtin catalogue |
 | [rustlace-notes.md](rustlace-notes.md) | you are asking where the carried fixtures came from, or why a C#-era test scans no files |
 | [crates/](crates/) | you need one crate's purpose, public surface, dependencies and tests |
 | [adr/](adr/) | you want the rationale behind a decision visible in the code |
