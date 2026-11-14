@@ -68,7 +68,7 @@ pub fn cli_binary() -> PathBuf {
 
 /// The frozen C# reference graph (seed 20240617), checked into the repository root.
 pub fn reference_graph_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../knowledge-graph-demo.json")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../knowledge-graph-demo.json")
 }
 
 /// A unique temporary graph path for one test.
