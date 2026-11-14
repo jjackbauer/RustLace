@@ -895,6 +895,19 @@ pub struct WorkbenchApp {
     glyph_coverage: std::collections::HashMap<char, bool>,
     /// True once the window has moved keyboard focus into the editor on its first frame.
     focus_requested: bool,
+    /// A11Y-008: a chord was withheld because an IME composition owned the keyboard, and the
+    /// deferral is still in flight. Released by the first pass that carries neither a composition
+    /// nor a command chord, so a deferred Ctrl+Enter can never be applied after the composition.
+    ime_chord_deferred: bool,
+    /// A11Y-008: a composition is in progress in the focused widget.
+    ///
+    /// Tracked from the window's IME events, not from the editor's own `preedit`: the quick-eval
+    /// field is an `egui::TextEdit` that keeps its pre-edit private, and a chord must be deferred
+    /// for any focused text widget. Retired by a commit, an empty pre-edit, a delete-surrounding,
+    /// or by keyboard focus moving to another widget.
+    ime_composition: bool,
+    /// The widget that owned the composition when it started.
+    ime_composition_owner: Option<Id>,
     /// True between handling Ctrl+Enter and the end of that frame (RUN-001 trace only).
     trace_pending: bool,
     /// True until the frame that follows the painted Running frame starts (trace only).
@@ -909,6 +922,66 @@ impl WorkbenchApp {
     /// previous run left behind.
     pub fn new(initial_path: Option<PathBuf>) -> WorkbenchApp {
         WorkbenchApp::launch(AppStorage::from_application_dir(), initial_path)
+    }
+
+    /// Round-68 IME probe seam: the active document's buffer, the composition the editor is
+    /// painting, the depth of its undo history, and which widget owns egui's keyboard focus.
+    ///
+    /// Read-only. `--ime-probe` records these values around a platform IME message sequence, so
+    /// the report states what this window's editor actually received rather than what a sibling
+    /// test module assumed.
+    pub(crate) fn ime_probe_snapshot(
+        &self,
+        ctx: &egui::Context,
+    ) -> (String, Option<String>, usize, String, (usize, usize)) {
+        let active = self.workbench.active();
+        let (source, preedit, undo_steps, caret) = match self.editors.get(active) {
+            Some(editor) => (
+                editor.source().to_string(),
+                editor.preedit.clone(),
+                editor.history.undo_steps(),
+                editor.line_col_1based(),
+            ),
+            None => (String::new(), None, 0, (0, 0)),
+        };
+        let focused = ctx.memory(|memory| memory.focused());
+        let focus = if focused == Some(surface_id()) {
+            "editor"
+        } else if focused == Some(quick_eval_id()) {
+            "quick-eval"
+        } else if focused.is_some() {
+            "other"
+        } else {
+            "none"
+        };
+        (source, preedit, undo_steps, focus.to_string(), caret)
+    }
+
+    /// Round-68 IME probe seam: puts the caret at the start of the buffer and gives the editor
+    /// the keyboard focus, the state the first click produces.
+    pub(crate) fn ime_probe_focus_editor(&mut self, ctx: &egui::Context) {
+        let active = self.workbench.active();
+        if let Some(editor) = self.editors.get_mut(active) {
+            editor.set_caret(0, 0);
+            editor.selection = None;
+        }
+        ctx.memory_mut(|memory| memory.request_focus(surface_id()));
+    }
+
+    /// Round-68 IME probe seam: gives the quick-eval field (an `egui::TextEdit`) the keyboard
+    /// focus, which is what makes that widget request IME from the integration.
+    pub(crate) fn ime_probe_focus_quick_eval(&mut self, ctx: &egui::Context) {
+        ctx.memory_mut(|memory| memory.request_focus(quick_eval_id()));
+    }
+
+    /// Round-68 IME probe seam: the quick-eval field's text.
+    pub(crate) fn ime_probe_quick_eval(&self) -> String {
+        self.quick_eval.text().to_string()
+    }
+
+    /// Round-68 IME probe seam: the active document's run-state label.
+    pub(crate) fn ime_probe_run_state(&self) -> String {
+        self.view.run_state.label().to_string()
     }
 
     /// Launches over an explicit storage location (the test seam for DOC-004/005).
@@ -1176,6 +1249,9 @@ impl WorkbenchApp {
             glyph_mode: GlyphMode::Ascii,
             glyph_coverage: std::collections::HashMap::new(),
             focus_requested: false,
+            ime_chord_deferred: false,
+            ime_composition: false,
+            ime_composition_owner: None,
             trace_pending: false,
             trace_after_paint: false,
         }
@@ -2703,6 +2779,104 @@ impl WorkbenchApp {
         }
     }
 
+    /// A11Y-008: withholds the keyboard from every accelerator while an IME composition holds it.
+    ///
+    /// Called once, before any pane or shortcut table reads this pass's events. While the
+    /// composition is active every key, text, paste, copy and cut event is dropped, so Ctrl+Enter,
+    /// Ctrl+Space, Ctrl+Shift+* and the F-keys reach the IME and no window/editor handler sees
+    /// them. After the composition ends the drop is held until a pass carries neither a
+    /// composition nor a command chord: a chord whose key events the platform split across passes
+    /// cannot surface later, so the pending chord is never replayed. Plain typing is not withheld
+    /// by the latch, so the first character typed after a commit is not lost.
+    fn defer_ime_shortcuts(&mut self, ui: &Ui) {
+        let ctx = ui.ctx().clone();
+        let focus = ctx.memory(|memory| memory.focused());
+        // A composition belongs to one widget; moving focus ends it even when the platform sends
+        // no event for the widget that lost it.
+        if self.ime_composition && self.ime_composition_owner != focus {
+            self.ime_composition = false;
+            self.ime_composition_owner = None;
+        }
+        // The pass's IME events are the window's only view of a composition in a widget other than
+        // the editor (the quick-eval `TextEdit` keeps its pre-edit private). The last IME event of
+        // the pass wins, which matches the platform sequence Preedit("") -> Commit.
+        let update = ctx.input(|input| {
+            let mut update = None;
+            for event in &input.events {
+                if let egui::Event::Ime(ime) = event {
+                    match ime {
+                        egui::ImeEvent::Preedit { text, .. } => update = Some(!text.is_empty()),
+                        egui::ImeEvent::Commit(_) | egui::ImeEvent::DeleteSurrounding { .. } => {
+                            update = Some(false);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            update
+        });
+        if update == Some(true) && focus.is_some() {
+            self.ime_composition = true;
+            self.ime_composition_owner = focus;
+        } else if update == Some(false) {
+            self.ime_composition = false;
+            self.ime_composition_owner = None;
+        }
+        // The editor paints its own pre-edit from the same events; including it keeps the rule
+        // correct for a caller that drives the editor widget without the window's event scan.
+        let composing = self.ime_composition
+            || self
+                .editors
+                .get(self.workbench.active())
+                .is_some_and(|editor| editor.preedit.is_some());
+        self.ime_chord_deferred |= composing;
+        if !self.ime_chord_deferred {
+            return;
+        }
+        // A held command modifier turns every key event into a potential accelerator, including a
+        // bare Enter that the window's frame-modifier fallback would read as Ctrl+Enter.
+        let command_held = ctx.input(|input| input.modifiers.command || input.modifiers.ctrl);
+        // The window registers F1, F6 and F8, but a function key is never composition input:
+        // defer every `F<n>` while the chord latch is held, not only the currently bound ones.
+        let is_function_key = |key: Key| {
+            let name = key.name();
+            name.len() > 1
+                && name.starts_with('F')
+                && name[1..].bytes().all(|byte| byte.is_ascii_digit())
+        };
+        let mut deferred_chord = false;
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                let chord = match event {
+                    egui::Event::Key { key, modifiers, .. } => {
+                        command_held
+                            || modifiers.command
+                            || modifiers.ctrl
+                            || modifiers.alt
+                            || is_function_key(*key)
+                    }
+                    _ => false,
+                };
+                deferred_chord |= chord;
+                let typing = composing
+                    && matches!(
+                        event,
+                        egui::Event::Key { .. }
+                            | egui::Event::Text(_)
+                            | egui::Event::Paste(_)
+                            | egui::Event::Copy
+                            | egui::Event::Cut
+                    );
+                !(chord || typing)
+            });
+        });
+        // The latch survives the pass that ends the composition; a pass with neither a composition
+        // nor a deferred chord releases it, so the next deliberate shortcut works normally.
+        if !composing && !deferred_chord {
+            self.ime_chord_deferred = false;
+        }
+    }
+
     /// The table's chord for `action` was pressed this frame.
     ///
     /// The dedicated blocks (quick-eval focus, editor settings, F8) ask this instead of matching
@@ -3455,6 +3629,13 @@ impl WorkbenchApp {
                 self.close_prompt_ui(&ctx, escape, enter);
             }
         }
+
+        // A11Y-008: an IME composition owns the keyboard. This runs before the first shortcut
+        // table below, so Ctrl+Enter/Escape, the quick-eval and editor chords, the file and
+        // navigation commands, the F-keys and the binding table all see a pass with those events
+        // removed while the composition is active — and a chord that arrives just after the
+        // platform ends the composition is still withheld instead of being applied late.
+        self.defer_ime_shortcuts(ui);
 
         // Start with keyboard focus in the editor so a typed script lands there without a click.
         if !self.focus_requested {
@@ -10940,6 +11121,289 @@ mod tests {
         let toolbar = app.workbench.toolbar_state();
         assert!(toolbar.run_enabled, "Run must return after the run stops");
         assert!(!toolbar.cancel_visible, "Cancel must leave with the run");
+    }
+
+    /// EDT-017: the focused editor asks the integration for IME every pass, at the caret.
+    ///
+    /// This is the request whose absence made egui-winit leave `set_ime_allowed(false)` and winit
+    /// drop every `WM_IME_*` message: the platform composition could never reach the editor.
+    #[test]
+    fn the_focused_editor_requests_ime_at_its_caret_and_updates_it_each_pass() {
+        let mut app = WorkbenchApp::with_workbench(Workbench::new());
+        let ctx = egui::Context::default();
+        // The first pass requests focus for the editor; the second paints it focused.
+        frame(&ctx, &mut app, Vec::new());
+        let output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            Vec::new(),
+            Default::default(),
+        );
+        let first = output.platform_output.ime.expect(
+            "a focused editor must set PlatformOutput::ime; without it the platform drops IME",
+        );
+        assert_eq!(first.purpose, egui::IMEPurpose::Normal);
+        assert!(
+            first.rect.is_positive(),
+            "the request carries the editor's on-screen text rect: {:?}",
+            first.rect
+        );
+        assert!(
+            first.rect.contains_rect(first.cursor_rect),
+            "the caret rect {:?} lies inside the text surface {:?}",
+            first.cursor_rect,
+            first.rect
+        );
+        assert!(
+            (first.cursor_rect.width() - 1.0).abs() < 0.01 && first.cursor_rect.height() > 1.0,
+            "the cursor rect is a thin caret: {:?}",
+            first.cursor_rect
+        );
+
+        // A moved caret must move the request in the same pass, or the candidate window would
+        // stay at the old position.
+        app.editors[0].insert_str("ab");
+        app.editors[0].set_caret(0, 2);
+        let output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            Vec::new(),
+            Default::default(),
+        );
+        let moved = output
+            .platform_output
+            .ime
+            .expect("the still-focused editor keeps requesting IME");
+        assert!(
+            moved.cursor_rect.min.x > first.cursor_rect.min.x,
+            "the caret request followed the caret: {:?} -> {:?}",
+            first.cursor_rect,
+            moved.cursor_rect
+        );
+    }
+
+    /// A11Y-008: a chord that arrives during a composition is withheld, and it is not replayed
+    /// when the composition ends. A later deliberate chord must still work (the latch releases).
+    #[test]
+    fn a_chord_during_an_ime_composition_is_deferred_and_never_replayed() {
+        let mut app = WorkbenchApp::with_workbench(Workbench::new());
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new()); // focus the editor
+        frame(&ctx, &mut app, Vec::new()); // paint it focused
+        let initial = app.editors[0].source();
+
+        let ctrl = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        // The IME starts a composition; the editor paints the pre-edit and does not edit.
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "に".to_string(),
+                active_range_chars: None,
+            })],
+        );
+        assert_eq!(
+            app.editors[0].preedit.as_deref(),
+            Some("に"),
+            "the composition is on screen before the chord"
+        );
+        assert_eq!(app.workbench.documents()[0].state(), RunState::Idle);
+
+        // Ctrl+Enter arrives while composing. A real IME also clears the composition on the
+        // modifier key, which is a platform `Preedit("")`: the app must not run the document.
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl),
+                key(Key::Enter, ctrl),
+                egui::Event::Ime(egui::ImeEvent::Preedit {
+                    text: String::new(),
+                    active_range_chars: None,
+                }),
+            ],
+        );
+        assert_eq!(
+            app.workbench.documents()[0].state(),
+            RunState::Idle,
+            "Ctrl+Enter must not start a run while an IME composition owns the keyboard"
+        );
+        assert_eq!(
+            app.editors[0].source(),
+            initial,
+            "the chord must not edit the buffer"
+        );
+
+        // The platform can split a chord across passes: the composition has ended, but the Enter
+        // key event arrives on its own. It must be dropped, not applied late.
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl),
+                key(Key::Enter, ctrl),
+            ],
+        );
+        assert_eq!(
+            app.workbench.documents()[0].state(),
+            RunState::Idle,
+            "the deferred chord must not be applied retroactively after the composition ends"
+        );
+
+        // A pass with no composition and no chord releases the deferral; a deliberate Ctrl+Enter
+        // afterwards must run normally.
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(egui::Modifiers::default())],
+        );
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl),
+                key(Key::Enter, ctrl),
+            ],
+        );
+        assert!(
+            app.workbench.active_is_running(),
+            "a deliberate Ctrl+Enter after the composition must still run; the deferral is not sticky"
+        );
+        assert!(
+            app.workbench.wait_until_idle(Duration::from_secs(30)),
+            "the accepted run must finish"
+        );
+    }
+
+    /// A11Y-008: the deferral covers every focused text widget, not only the editor. The
+    /// quick-eval field is an `egui::TextEdit` whose pre-edit the window cannot inspect, so the
+    /// rule is driven by the window's IME events.
+    #[test]
+    fn a_chord_during_a_quick_eval_composition_is_deferred_too() {
+        let mut app = WorkbenchApp::with_workbench(Workbench::new());
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, Vec::new());
+        app.ime_probe_focus_quick_eval(&ctx);
+        frame(&ctx, &mut app, Vec::new());
+        assert_eq!(
+            app.ime_probe_snapshot(&ctx).3,
+            "quick-eval",
+            "the quick-eval field owns the keyboard"
+        );
+        let ctrl = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "か".to_string(),
+                active_range_chars: None,
+            })],
+        );
+        assert!(
+            app.ime_composition,
+            "the window's IME events mark the field's composition active"
+        );
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl),
+                key(Key::Enter, ctrl),
+            ],
+        );
+        assert_eq!(
+            app.workbench.documents()[0].state(),
+            RunState::Idle,
+            "Ctrl+Enter must not run while the quick-eval field composes"
+        );
+
+        // End the composition: the empty pre-edit releases the latch in that same pass, and the
+        // next deliberate chord runs normally.
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: String::new(),
+                active_range_chars: None,
+            })],
+        );
+        assert!(!app.ime_composition, "the empty pre-edit ended the composition");
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl),
+                key(Key::Enter, ctrl),
+            ],
+        );
+        assert!(
+            app.workbench.active_is_running(),
+            "a deliberate Ctrl+Enter after the field's composition must still run"
+        );
+        assert!(
+            app.workbench.wait_until_idle(Duration::from_secs(30)),
+            "the accepted run must finish"
+        );
+    }
+
+    /// A11Y-008: the deferral withholds accelerators, not ordinary typing: the first character
+    /// after a commit lands in the buffer even on the pass where the latch is still held.
+    #[test]
+    fn typing_right_after_an_ime_commit_is_not_withheld_by_the_shortcut_deferral() {
+        let mut app = WorkbenchApp::with_workbench(Workbench::new());
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        frame(&ctx, &mut app, Vec::new());
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "か".to_string(),
+                active_range_chars: None,
+            })],
+        );
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Commit(
+                "か".to_string(),
+            ))],
+        );
+        assert!(
+            app.editors[0].source().starts_with("か"),
+            "the commit inserted the composed text at the caret: {:?}",
+            app.editors[0].source()
+        );
+        // The previous pass still had a composition, so the latch is held on this one.
+        frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::Text("x".to_string()),
+                key(Key::X, egui::Modifiers::default()),
+            ],
+        );
+        assert!(
+            app.editors[0].source().starts_with("かx"),
+            "plain typing after a commit must not be swallowed: {:?}",
+            app.editors[0].source()
+        );
+        assert_eq!(
+            app.workbench.documents()[0].state(),
+            RunState::Idle,
+            "typing must not have started a run"
+        );
     }
 
     fn builtin(name: &str, parameters: &[&str]) -> EngineFunction {

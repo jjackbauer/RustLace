@@ -50,6 +50,8 @@ mod glyph_audit;
 mod glyphs;
 mod gui_selftest;
 mod history;
+#[cfg(windows)]
+mod ime_probe;
 mod incremental;
 mod inspector;
 #[cfg(windows)]
@@ -148,6 +150,18 @@ fn main() {
     // It reads a document, so it runs on every build.
     if args.iter().any(|arg| arg == "--platform-claims") {
         std::process::exit(platform_claims::run());
+    }
+    // Round-68/69 (EDT-017 / A11Y-008): the platform IME probe. It opens the shipped workbench
+    // window and drives imm32 and the WM_IME_* messages on the window's own thread, because an
+    // HIMC is per-process. The default launch path never constructs it.
+    if let Some(index) = args.iter().position(|arg| arg == "--ime-probe") {
+        let mode = args.get(index + 1).cloned().unwrap_or_default();
+        let document = args.get(index + 2).map(std::path::PathBuf::from);
+        let report = args
+            .get(index + 3)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("ime-probe.log"));
+        std::process::exit(ime_probe::run(&mode, document, report));
     }
     if let Some(index) = args.iter().position(|arg| arg == "--journey") {
         std::process::exit(journey::run(&args[index + 1..]));

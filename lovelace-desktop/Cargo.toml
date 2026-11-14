@@ -24,6 +24,10 @@ lovelace-symbolics = { path = "../lovelace-symbolics", optional = true }
 eframe = "0.37"
 egui = "0.37"
 resvg = "0.50"
+# Round-68: `--ime-probe` reads the workbench window's HWND from eframe's `CreationContext`
+# instead of enumerating windows (enumeration re-enters winit's window procedure while a frame
+# is being painted). Same version eframe 0.37 already resolves, so no new package is added.
+raw-window-handle = "0.6"
 
 [features]
 default = ["real-engine"]

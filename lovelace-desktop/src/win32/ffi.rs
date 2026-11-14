@@ -45,6 +45,8 @@ pub type HDC = isize;
 pub type HFONT = isize;
 /// A pen handle.
 pub type HPEN = isize;
+/// An input-method context.
+pub type HIMC = isize;
 /// The first message parameter.
 pub type WPARAM = usize;
 /// The second message parameter.
@@ -128,6 +130,36 @@ pub const WM_SETFONT: u32 = 0x0030;
 pub const WM_COMMAND: u32 = 0x0111;
 /// WM_TIMER.
 pub const WM_TIMER: u32 = 0x0113;
+/// WM_KEYDOWN.
+pub const WM_KEYDOWN: u32 = 0x0100;
+/// WM_KEYUP.
+pub const WM_KEYUP: u32 = 0x0101;
+/// WM_IME_STARTCOMPOSITION.
+pub const WM_IME_STARTCOMPOSITION: u32 = 0x010D;
+/// WM_IME_ENDCOMPOSITION.
+pub const WM_IME_ENDCOMPOSITION: u32 = 0x010E;
+/// WM_IME_COMPOSITION.
+pub const WM_IME_COMPOSITION: u32 = 0x010F;
+/// GCS_COMPSTR: the composition string still being built.
+pub const GCS_COMPSTR: u32 = 0x0008;
+/// GCS_RESULTSTR: the composition string the IME has committed.
+pub const GCS_RESULTSTR: u32 = 0x0800;
+/// SCS_SETSTR: set the composition string.
+pub const SCS_SETSTR: u32 = 0x0009;
+/// IACE_DEFAULT: associate the default input context with a window.
+pub const IACE_DEFAULT: u32 = 0x0010;
+/// NI_COMPOSITIONSTR: an ImmNotifyIME action on the composition string.
+pub const NI_COMPOSITIONSTR: u32 = 0x0015;
+/// CPS_COMPLETE: finalize the composition into a result string.
+pub const CPS_COMPLETE: u32 = 0x0001;
+/// VK_CONTROL.
+pub const VK_CONTROL: u16 = 0x11;
+/// VK_LCONTROL.
+pub const VK_LCONTROL: u16 = 0xA2;
+/// VK_RCONTROL.
+pub const VK_RCONTROL: u16 = 0xA3;
+/// VK_Z.
+pub const VK_Z: u16 = 0x5A;
 /// WM_USER, the base of control-defined messages.
 pub const WM_USER: u32 = 0x0400;
 
@@ -596,6 +628,51 @@ unsafe extern "system" {
     pub fn GetOpenFileNameW(dialog: *mut OPENFILENAMEW) -> i32;
     /// Shows the Save As dialog.
     pub fn GetSaveFileNameW(dialog: *mut OPENFILENAMEW) -> i32;
+}
+
+// SAFETY: as above; imm32 is the documented input-method manager. ImmGetContext returns the
+// input context associated with a window (a handle owned by this process's imm32 instance), and
+// the composition-string calls copy caller buffers in and out with the byte counts passed below.
+// Round-68: declared for the platform IME probe (`--ime-probe`), which is the only caller.
+#[link(name = "imm32")]
+unsafe extern "system" {
+    /// Returns the input-method context associated with a window.
+    pub fn ImmGetContext(hwnd: HWND) -> HIMC;
+    /// Releases an input-method context.
+    pub fn ImmReleaseContext(hwnd: HWND, himc: HIMC) -> i32;
+    /// Associates the default (or no) input context with a window.
+    pub fn ImmAssociateContextEx(hwnd: HWND, himc: HIMC, flags: u32) -> i32;
+    /// Sets the composition string in an input context.
+    pub fn ImmSetCompositionStringW(
+        himc: HIMC,
+        index: u32,
+        composition: *const u16,
+        composition_bytes: u32,
+        reading: *const c_void,
+        reading_bytes: u32,
+    ) -> i32;
+    /// Reads the composition string (or the result string) from an input context.
+    pub fn ImmGetCompositionStringW(
+        himc: HIMC,
+        index: u32,
+        buffer: *mut c_void,
+        buffer_bytes: u32,
+    ) -> i32;
+    /// Returns the default IME window of a window's thread.
+    pub fn ImmGetDefaultIMEWnd(hwnd: HWND) -> HWND;
+    /// Tells the IME to carry out an action, e.g. finalize the composition into a result string.
+    pub fn ImmNotifyIME(himc: HIMC, action: u32, index: u32, value: u32) -> i32;
+}
+
+// SAFETY: as above; these are the documented user32 entry points the IME probe needs to report
+// the calling thread's keyboard state to a posted key message. The window handle itself comes
+// from eframe's creation context, not from window enumeration.
+#[link(name = "user32")]
+unsafe extern "system" {
+    /// Copies the calling thread's keyboard state.
+    pub fn GetKeyboardState(state: *mut u8) -> i32;
+    /// Replaces the calling thread's keyboard state.
+    pub fn SetKeyboardState(state: *const u8) -> i32;
 }
 
 // SAFETY: as above; kernel32 supplies the module handle used when creating windows.
@@ -1412,4 +1489,147 @@ pub fn system_dpi_and_monitors() -> (u32, i32) {
         let monitors = GetSystemMetrics(80); // SM_CMONITORS
         (if dpi == 0 { 96 } else { dpi }, monitors)
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Round-68: the input-method entry points and the key-state seam the platform IME probe uses.
+// These wrappers exist for `--ime-probe` (src/ime_probe.rs); no paint, command or dialog path
+// calls them.
+// ---------------------------------------------------------------------------------------------
+
+/// Returns the input-method context associated with `hwnd`, or 0.
+///
+/// The context is per process: a caller in another process cannot obtain a usable HIMC for this
+/// window (that is why the probe drives the platform path from inside the window's own process).
+pub fn ime_context(hwnd: HWND) -> HIMC {
+    if hwnd == 0 {
+        return 0;
+    }
+    // SAFETY: hwnd is a live window handle; ImmGetContext takes no other argument and returns
+    // either a valid context or null.
+    unsafe { ImmGetContext(hwnd) }
+}
+
+/// Releases an input-method context obtained from [`ime_context`].
+pub fn ime_release(hwnd: HWND, himc: HIMC) -> bool {
+    if hwnd == 0 || himc == 0 {
+        return false;
+    }
+    // SAFETY: both handles came from ImmGetContext for this window and are released once.
+    unsafe { ImmReleaseContext(hwnd, himc) != 0 }
+}
+
+/// Re-associates the default input context with `hwnd` (the documented fallback when
+/// [`ime_context`] returns 0).
+pub fn ime_associate_default(hwnd: HWND) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    // SAFETY: a null HIMC with IACE_DEFAULT asks imm32 to install the thread's default context.
+    unsafe { ImmAssociateContextEx(hwnd, 0, IACE_DEFAULT) != 0 }
+}
+
+/// Stores `text` as the input context's composition string and reports whether imm32 accepted it.
+pub fn ime_set_composition_string(himc: HIMC, text: &str) -> bool {
+    if himc == 0 {
+        return false;
+    }
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let bytes = (units.len() * 2) as u32;
+    // SAFETY: units is alive for the call, and both byte counts describe that same buffer; the
+    // reading string is absent (null, 0), which SCS_SETSTR ignores.
+    unsafe {
+        ImmSetCompositionStringW(himc, SCS_SETSTR, units.as_ptr(), bytes, std::ptr::null(), 0) != 0
+    }
+}
+
+/// Reads the input context's composition string (`result = false`, GCS_COMPSTR) or the string the
+/// IME has committed (`result = true`, GCS_RESULTSTR).
+pub fn ime_composition_string(himc: HIMC, result: bool) -> String {
+    if himc == 0 {
+        return String::new();
+    }
+    let index = if result { GCS_RESULTSTR } else { GCS_COMPSTR };
+    // SAFETY: the first call asks for the byte size with a null buffer (documented query form);
+    // the second passes a buffer of exactly that size and receives the byte count it wrote. Both
+    // lengths are byte counts, as ImmGetCompositionStringW documents.
+    unsafe {
+        let size = ImmGetCompositionStringW(himc, index, std::ptr::null_mut(), 0);
+        if size <= 0 {
+            return String::new();
+        }
+        let mut buffer = vec![0u8; size as usize];
+        let copied = ImmGetCompositionStringW(
+            himc,
+            index,
+            buffer.as_mut_ptr() as *mut c_void,
+            size as u32,
+        );
+        if copied <= 0 {
+            return String::new();
+        }
+        let units: Vec<u16> = buffer[..copied as usize]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    }
+}
+
+/// Returns the default IME window of the window's thread, or 0.
+pub fn ime_default_window(hwnd: HWND) -> HWND {
+    if hwnd == 0 {
+        return 0;
+    }
+    // SAFETY: query-only, no pointers.
+    unsafe { ImmGetDefaultIMEWnd(hwnd) }
+}
+
+/// Asks the IME to finalize the composition into a result string (`CPS_COMPLETE`).
+///
+/// This is the call a real IME makes when the user confirms a composition; the result string is
+/// then what `WM_IME_COMPOSITION` with `GCS_RESULTSTR` hands to the application.
+pub fn ime_complete_composition(himc: HIMC) -> bool {
+    if himc == 0 {
+        return false;
+    }
+    // SAFETY: an input context obtained from ImmGetContext, and plain integer arguments.
+    unsafe { ImmNotifyIME(himc, NI_COMPOSITIONSTR, CPS_COMPLETE, 0) != 0 }
+}
+
+/// Marks the calling thread's Control key state as up or down.
+///
+/// A posted `WM_KEYDOWN` does not update the system's key state, and winit reads modifiers with
+/// `GetKeyState`. Setting the thread's own key-state table is what makes a posted key message
+/// carry a Control modifier, exactly as a physically held key would. Only the three Control
+/// virtual keys are touched; the rest of the table is preserved.
+pub fn set_control_key_state(down: bool) -> bool {
+    let mut state = [0u8; 256];
+    // SAFETY: the buffer is 256 bytes, which is the documented size of the keyboard state table.
+    unsafe {
+        if GetKeyboardState(state.as_mut_ptr()) == 0 {
+            return false;
+        }
+        let bits = if down { 0x80u8 } else { 0 };
+        state[VK_CONTROL as usize] = bits;
+        state[VK_LCONTROL as usize] = bits;
+        state[VK_RCONTROL as usize] = bits;
+        SetKeyboardState(state.as_ptr()) != 0
+    }
+}
+
+/// Sends a `WM_KEYDOWN`/`WM_KEYUP` for `virtual_key` to `hwnd`.
+///
+/// The scan code and extended flag are the ones the OS would put in the message; `down` selects
+/// the message and the previous-state bit. This is the same message shape a keyboard produces.
+pub fn send_key(hwnd: HWND, virtual_key: u16, scan: u16, extended: bool, down: bool) {
+    let mut lparam: isize = 1 | ((scan as isize) << 16);
+    if extended {
+        lparam |= 1 << 24;
+    }
+    if !down {
+        lparam |= 0xC000_0001u32 as isize;
+    }
+    let message = if down { WM_KEYDOWN } else { WM_KEYUP };
+    send(hwnd, message, virtual_key as WPARAM, lparam);
 }

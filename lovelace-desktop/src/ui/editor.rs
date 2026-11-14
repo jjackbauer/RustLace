@@ -1714,6 +1714,39 @@ impl TextEditor {
         }
     }
 
+    /// EDT-017: asks the windowing integration for IME ownership while this surface holds focus.
+    ///
+    /// `egui-winit` forwards `WM_IME_*` to the widget tree only after a pass in which
+    /// [`egui::PlatformOutput::ime`] is set (`Window::set_ime_allowed(true)`); with the field
+    /// unset the messages are dropped before `Event::Ime` can reach the handler in [`Self::ui`].
+    /// The request is therefore re-issued every pass this surface is focused, carrying the
+    /// on-screen rect of the text it edits and a thin caret rect, so the candidate window follows
+    /// the caret. `egui` resets `PlatformOutput` at the start of every pass, which is what clears
+    /// the request on the pass focus leaves — this widget must not ask for IME on someone else's
+    /// behalf.
+    ///
+    /// egui 0.37 has no surrounding-text field in [`egui::output::IMEOutput`]: the two geometry
+    /// fields are what `egui-winit` converts into `Window::set_ime_cursor_area`, and the
+    /// composition's own text/active range comes back in `ImeEvent::Preedit`. The editor's
+    /// composition is painted from that event, so the platform and the widget describe the same
+    /// surrounding text.
+    fn request_ime(&self, ui: &Ui, text_rect: Rect, caret_rect: Rect) {
+        // The integration expects global (screen) coordinates; apply the layer transform exactly
+        // as `egui::TextEdit` does for its own request.
+        let to_global = ui
+            .ctx()
+            .layer_transform_to_global(ui.layer_id())
+            .unwrap_or_default();
+        ui.ctx().output_mut(|output| {
+            output.ime = Some(egui::output::IMEOutput {
+                purpose: egui::IMEPurpose::Normal,
+                rect: to_global * text_rect,
+                cursor_rect: to_global * caret_rect,
+                should_interrupt_composition: false,
+            });
+        });
+    }
+
     /// The buffer position under a pointer position, clamped into the buffer.
     fn caret_at(
         &self,
@@ -1835,6 +1868,12 @@ impl TextEditor {
             response.request_focus();
         }
         let focused = ui.memory(|memory| memory.has_focus(id));
+        if !focused && self.preedit.is_some() {
+            // A composition belongs to the focused surface. Once keyboard focus leaves, a stale
+            // pre-edit must not linger: the overlay is focus-gated, and the window would keep
+            // deferring its accelerators for a composition nobody can see.
+            self.preedit = None;
+        }
         if response.hovered() {
             ui.ctx().set_cursor_icon(CursorIcon::Text);
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
@@ -1845,20 +1884,28 @@ impl TextEditor {
 
         if focused {
             let events = ui.input(|input| input.events.clone());
+            // A11Y-008: while a composition is in progress the IME owns the keyboard. Only IME
+            // events may change the composition (empty pre-edit, commit, delete-surrounding); a
+            // key or text event that still reaches this widget is dropped rather than replayed
+            // once the composition ends, so Ctrl+Enter/Ctrl+Space/Tab cannot act mid-composition.
+            // The window applies the same rule to its global accelerators before any pane runs.
+            let composing = self.preedit.is_some();
             // Ctrl+Space opens the popup explicitly, with the caret's prefix or the whole
             // catalogue when the prefix is empty. Some backends also deliver the space as a
             // Text event; that one is swallowed so the shortcut can never insert a space.
             let mut explicit = false;
-            for event in &events {
-                if let egui::Event::Key {
-                    key: egui::Key::Space,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } = event
-                {
-                    if modifiers.command || modifiers.ctrl {
-                        explicit = true;
+            if !composing {
+                for event in &events {
+                    if let egui::Event::Key {
+                        key: egui::Key::Space,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                    {
+                        if modifiers.command || modifiers.ctrl {
+                            explicit = true;
+                        }
                     }
                 }
             }
@@ -1869,6 +1916,10 @@ impl TextEditor {
                 self.open_completion(catalogue);
             }
             for event in events {
+                // A composition in progress keeps the keyboard: see the note above.
+                if self.preedit.is_some() && !matches!(event, egui::Event::Ime(_)) {
+                    continue;
+                }
                 match event {
                     egui::Event::Text(text) => {
                         if swallow_space && text == " " {
@@ -2428,6 +2479,12 @@ impl TextEditor {
             let caret_x =
                 text_left + self.display_column(self.caret_row, self.caret_col) as f32 * char_w;
             let caret_y = rect.top() - self.scroll_y + self.caret_row as f32 * row_h;
+            // EDT-017: ask the integration for IME while this surface owns focus. The request is
+            // re-made every pass (egui clears `PlatformOutput` each pass), so the candidate
+            // window follows the caret and losing focus stops asking in the next pass.
+            let text_rect = Rect::from_min_max(pos2(text_left, rect.top()), rect.max);
+            let caret_rect = Rect::from_min_size(pos2(caret_x, caret_y), vec2(1.0, row_h));
+            self.request_ime(ui, text_rect, caret_rect);
             painter.line_segment(
                 [
                     pos2(caret_x, caret_y + 1.0),

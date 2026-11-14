@@ -27,6 +27,10 @@ pub(crate) mod typography;
 
 pub use app::run;
 pub(crate) use app::native_options;
+// Round-68: the platform IME probe hosts the shipped workbench window in-process (see
+// src/ime_probe.rs) so ImmGetContext, ImmSetCompositionStringW and the WM_IME_* messages run on
+// the thread that owns the window, which is the only thread whose HIMC they can address.
+pub(crate) use app::WorkbenchApp;
 
 /// `--visual-audit`: the VIS-004/006/007/008 tables, printed from the same constants and
 /// constructors the window paints with.
