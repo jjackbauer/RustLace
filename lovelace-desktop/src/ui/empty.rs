@@ -341,7 +341,10 @@ mod tests {
             "inspector",
             "search",
         ] {
-            assert!(keys.contains(&expected), "missing empty state for {expected}: {keys:?}");
+            assert!(
+                keys.contains(&expected),
+                "missing empty state for {expected}: {keys:?}"
+            );
         }
         let mut headlines = BTreeSet::new();
         for state in &catalog {
@@ -349,18 +352,37 @@ mod tests {
             assert!(!state.purpose.is_empty(), "{}: no purpose", state.key);
             assert!(!state.reason.is_empty(), "{}: no reason", state.key);
             assert!(!state.next.is_empty(), "{}: no next step", state.key);
-            assert_ne!(state.purpose, state.reason, "{}: purpose is not the reason", state.key);
-            assert_ne!(state.reason, state.next, "{}: next is not the reason", state.key);
+            assert_ne!(
+                state.purpose, state.reason,
+                "{}: purpose is not the reason",
+                state.key
+            );
+            assert_ne!(
+                state.reason, state.next,
+                "{}: next is not the reason",
+                state.key
+            );
             assert!(
                 state.next.split_whitespace().count() >= 4,
                 "{}: the next step must name an action, got {:?}",
                 state.key,
                 state.next
             );
-            assert!(headlines.insert(state.headline.clone()), "duplicate headline {}", state.headline);
+            assert!(
+                headlines.insert(state.headline.clone()),
+                "duplicate headline {}",
+                state.headline
+            );
         }
         // Every run-fed pane offers the one command that fills it.
-        for key in ["plot", "results", "workspace", "functions", "logs", "inspector"] {
+        for key in [
+            "plot",
+            "results",
+            "workspace",
+            "functions",
+            "logs",
+            "inspector",
+        ] {
             let state = catalog.iter().find(|s| s.key == key).unwrap();
             assert_eq!(state.action, Some(EmptyAction::Run), "{key} must offer Run");
         }
@@ -381,7 +403,11 @@ mod tests {
             EmptyAction::ClearFilter,
             EmptyAction::FocusEditor,
         ] {
-            assert!(labels.insert(action.label()), "duplicate label {}", action.label());
+            assert!(
+                labels.insert(action.label()),
+                "duplicate label {}",
+                action.label()
+            );
             assert!(ids.insert(action.id()), "duplicate id {}", action.id());
             assert!(!action.label().is_empty());
         }
@@ -403,8 +429,7 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
-                let rect =
-                    Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(400.0, 260.0));
+                let rect = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(400.0, 260.0));
                 action = paint(ui, rect, &state);
             },
         );
@@ -434,7 +459,10 @@ mod tests {
             painted.iter().any(|text| text == EmptyAction::Run.label()),
             "the card must paint its action; painted: {painted:?}"
         );
-        assert!(action.is_none(), "no pointer in a headless pass, so nothing was pressed");
+        assert!(
+            action.is_none(),
+            "no pointer in a headless pass, so nothing was pressed"
+        );
     }
 
     #[test]
@@ -473,8 +501,17 @@ mod tests {
         for clipped in &output.shapes {
             walk(&clipped.shape, &mut painted);
         }
-        assert!(painted.iter().any(|t| t.contains(&state.reason)), "{painted:?}");
-        assert!(painted.iter().any(|t| t.contains(&state.next)), "{painted:?}");
-        assert!(!painted.iter().any(|t| t.contains(&state.headline)), "{painted:?}");
+        assert!(
+            painted.iter().any(|t| t.contains(&state.reason)),
+            "{painted:?}"
+        );
+        assert!(
+            painted.iter().any(|t| t.contains(&state.next)),
+            "{painted:?}"
+        );
+        assert!(
+            !painted.iter().any(|t| t.contains(&state.headline)),
+            "{painted:?}"
+        );
     }
 }

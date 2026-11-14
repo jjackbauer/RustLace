@@ -12,7 +12,9 @@
 //! registered. Rebuilding the engine would have cleared both and is no longer what the command
 //! does.
 
-use super::{CachedValue, EngineError, EngineFunction, EngineState, EngineVariable, Evaluator, PlotCapture};
+use super::{
+    CachedValue, EngineError, EngineFunction, EngineState, EngineVariable, Evaluator, PlotCapture,
+};
 use lovelace_json::Json;
 
 /// Creates a boxed RealEngine.

@@ -55,11 +55,8 @@ pub fn run() -> i32 {
     output.textures_delta.clear();
 
     let mut coverage = std::collections::HashMap::new();
-    let mut probe = |c: char| -> bool {
-        *coverage
-            .entry(c)
-            .or_insert_with(|| font_has_glyph(&ctx, c))
-    };
+    let mut probe =
+        |c: char| -> bool { *coverage.entry(c).or_insert_with(|| font_has_glyph(&ctx, c)) };
     let report = glyph_report(&unicode, &mut probe);
     let mut missing = Vec::new();
     println!("lovelace-desktop --glyph-check (A11Y-014)");

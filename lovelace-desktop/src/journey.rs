@@ -30,7 +30,8 @@ use egui::{Rect, pos2, vec2};
 
 use lovelace_json::Json;
 
-use crate::execution::{SourceRevision, WorkspaceSnapshot};use crate::gui_selftest::plot_element_counts;
+use crate::execution::{SourceRevision, WorkspaceSnapshot};
+use crate::gui_selftest::plot_element_counts;
 use crate::log_kind::LogKind;
 use crate::run_state::RunState;
 use crate::ui::plot::{MAX_EXPORT_SIDE, Plot, PlotView};
@@ -1517,7 +1518,9 @@ mod tests {
 
     /// One run step's response object, when the step finished with one.
     fn final_response<'a>(reference: &'a Json, step: usize) -> Option<&'a Json> {
-        steps_of(reference).get(step).and_then(|step| response_of(step))
+        steps_of(reference)
+            .get(step)
+            .and_then(|step| response_of(step))
     }
 
     fn result_display(reference: &Json, step: usize) -> String {
@@ -1551,8 +1554,8 @@ mod tests {
     /// is named in `journeys.md` with at least one `REF-` reference, so a journey cannot be
     /// "executed" against itself.
     #[test]
-    fn con_007_the_recorded_references_are_deterministic_and_the_desktop_scenarios_execute_against_them(
-    ) {
+    fn con_007_the_recorded_references_are_deterministic_and_the_desktop_scenarios_execute_against_them()
+     {
         let corpus = reference_corpus();
         assert_eq!(
             corpus.len(),
@@ -1660,7 +1663,10 @@ mod tests {
             J15_SVG_SHA256,
             "J-15's pinned SVG identity is the recorded plot's digest"
         );
-        assert!(svg.starts_with("<svg "), "the recorded plot is the engine's SVG");
+        assert!(
+            svg.starts_with("<svg "),
+            "the recorded plot is the engine's SVG"
+        );
         let error = corpus.get("REF-error").expect("REF-error");
         let diagnostic = final_response(error, 0)
             .and_then(|response| response.get("diagnostics"))
@@ -1825,7 +1831,9 @@ mod tests {
                     );
                 }
                 Err(message) => {
-                    panic!("the desktop scenario for {id} must execute against its recording: {message}")
+                    panic!(
+                        "the desktop scenario for {id} must execute against its recording: {message}"
+                    )
                 }
             }
         }

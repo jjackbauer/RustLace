@@ -1483,7 +1483,11 @@ fn check_file_conflict() -> Result<String, String> {
         .map_err(|error| format!("file-conflict: cannot write the external edit: {error}"))?;
     let refused = match workbench.save(index) {
         SaveOutcome::Conflict(report) => report,
-        outcome => return Err(format!("file-conflict: Save wrote instead of asking: {outcome:?}")),
+        outcome => {
+            return Err(format!(
+                "file-conflict: Save wrote instead of asking: {outcome:?}"
+            ));
+        }
     };
     if refused.recorded != Some(recorded) {
         return Err("file-conflict: the prompt did not name the opened version".to_string());

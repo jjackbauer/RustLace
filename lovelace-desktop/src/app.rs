@@ -783,7 +783,10 @@ impl AppState {
         }
         self.push_log(
             LogLevel::Info,
-            format!("Reloaded {} from disk; nothing was written.", path.display()),
+            format!(
+                "Reloaded {} from disk; nothing was written.",
+                path.display()
+            ),
         );
         vec![Effect::Repaint]
     }
@@ -814,8 +817,14 @@ impl AppState {
                     path: path.clone(),
                     recorded,
                     current,
-                    buffer_bytes: self.active_doc().map(|document| document.buffer.len()).unwrap_or(0),
-                    buffer_dirty: self.active_doc().map(|document| document.dirty).unwrap_or(false),
+                    buffer_bytes: self
+                        .active_doc()
+                        .map(|document| document.buffer.len())
+                        .unwrap_or(0),
+                    buffer_dirty: self
+                        .active_doc()
+                        .map(|document| document.dirty)
+                        .unwrap_or(false),
                     other_target,
                 };
                 self.push_log(LogLevel::Warn, report.log_line());
@@ -844,7 +853,10 @@ impl AppState {
         self.push_log(
             LogLevel::Info,
             if forced {
-                format!("Saved {} (the user kept the buffer over the disk version).", path.display())
+                format!(
+                    "Saved {} (the user kept the buffer over the disk version).",
+                    path.display()
+                )
             } else {
                 format!("Saved {}", path.display())
             },
@@ -1364,15 +1376,16 @@ mod tests {
                 _ => None,
             })
             .expect("Save must report the missing file");
-        assert_eq!(
-            conflict.current,
-            crate::document_io::DiskState::Missing
-        );
+        assert_eq!(conflict.current, crate::document_io::DiskState::Missing);
         assert!(!path.exists(), "Save must not recreate a deleted file");
 
         // Reload cannot bring a deleted file back and leaves the buffer untouched.
         let effects = app.apply(Command::ReloadFile);
-        assert!(effects.iter().any(|effect| matches!(effect, Effect::Error(_))));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Error(_)))
+        );
         assert_eq!(app.documents[app.active].buffer, "a = 1\n");
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&dir);

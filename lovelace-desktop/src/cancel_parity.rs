@@ -57,7 +57,7 @@ mod tests {
 
     use crate::engine::real::RealEngine;
     use crate::engine::{
-        CachedValue, EngineError, EngineState, Evaluator, PlotCapture, DEFAULT_PRECISION,
+        CachedValue, DEFAULT_PRECISION, EngineError, EngineState, Evaluator, PlotCapture,
     };
     use crate::execution::{
         DesktopEvent, DocumentId, ExecutionHost, InFlightCancellation, SequencedEvent,
@@ -75,7 +75,8 @@ mod tests {
             .join("../docs/goal-desktop-v4/round-64/REF-cancel.json");
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
-        Json::parse(&text).unwrap_or_else(|error| panic!("{} is not JSON: {error:?}", path.display()))
+        Json::parse(&text)
+            .unwrap_or_else(|error| panic!("{} is not JSON: {error:?}", path.display()))
     }
 
     fn field<'a>(json: &'a Json, key: &str) -> &'a Json {
@@ -274,14 +275,23 @@ mod tests {
             .iter()
             .map(|statement| statement.as_str().expect("a statement string").to_string())
             .collect();
-        assert_eq!(statements.len(), 4, "the reference's scenario has four statements");
+        assert_eq!(
+            statements.len(),
+            4,
+            "the reference's scenario has four statements"
+        );
 
-        let steps = field(&reference, "steps").as_arr().expect("the reference steps");
+        let steps = field(&reference, "steps")
+            .as_arr()
+            .expect("the reference steps");
         let final_step = field(&steps[0], "final");
         let reference_status = text(final_step, "status");
         let reference_total = count(final_step, "totalStatements");
         let reference_completed = count(final_step, "completedStatements");
-        assert_eq!(reference_status, "cancelled", "the reference is a cancelled run");
+        assert_eq!(
+            reference_status, "cancelled",
+            "the reference is a cancelled run"
+        );
         assert_eq!(reference_total, 4);
         assert_eq!(reference_completed, 3);
 
@@ -351,12 +361,10 @@ mod tests {
                 events.push(event);
             }
         }
-        while !events.iter().any(|event| {
-            matches!(
-                event.event,
-                DesktopEvent::StepStarted { index: 2, .. }
-            )
-        }) {
+        while !events
+            .iter()
+            .any(|event| matches!(event.event, DesktopEvent::StepStarted { index: 2, .. }))
+        {
             let event = host
                 .next_event(Duration::from_secs(5))
                 .expect("StepStarted(2) was never delivered");
@@ -364,7 +372,10 @@ mod tests {
         }
 
         // This is the reference's cancel: statement 3 is in flight and the run is still active.
-        assert!(host.cancel(&handle), "the in-flight run must accept the cancellation");
+        assert!(
+            host.cancel(&handle),
+            "the in-flight run must accept the cancellation"
+        );
         released.store(true, Ordering::Release);
 
         let terminal = drain_until_terminal(&host, &mut events, Duration::from_secs(30));
@@ -375,10 +386,7 @@ mod tests {
                 snapshot,
                 ..
             } => (*committed_steps, *in_flight, snapshot),
-            other => panic!(
-                "terminal was {}, expected Cancelled",
-                other.kind()
-            ),
+            other => panic!("terminal was {}, expected Cancelled", other.kind()),
         };
         assert_eq!(
             in_flight,
@@ -396,7 +404,10 @@ mod tests {
             snapshot.result, reference_result,
             "the desktop's terminal result must be the reference's result, digit for digit"
         );
-        assert_eq!(snapshot.diagnostic, None, "a cancellation is not a diagnostic");
+        assert_eq!(
+            snapshot.diagnostic, None,
+            "a cancellation is not a diagnostic"
+        );
         assert!(snapshot.output.is_empty(), "the scenario prints nothing");
 
         // The variables present/absent, their kinds and their displays, compared exactly.
@@ -456,7 +467,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(started, [0, 1, 2], "no statement after the in-flight one may start");
+        assert_eq!(
+            started,
+            [0, 1, 2],
+            "no statement after the in-flight one may start"
+        );
         let committed: Vec<usize> = events
             .iter()
             .filter_map(|event| match event.event {
@@ -515,19 +530,22 @@ mod tests {
         let document = DocumentId(2);
         let source = "a = 2\nc = 0\nwhile (c < 100000000) { c = c + 1 }\nd = c + 1\n";
         let handle = host
-            .submit(document, SourceRevision(3), source.to_string(), DEFAULT_PRECISION)
+            .submit(
+                document,
+                SourceRevision(3),
+                source.to_string(),
+                DEFAULT_PRECISION,
+            )
             .expect("submit");
 
         // Wait until statement 3 is in flight, then give the loop enough time to make progress so
         // the committed partial state is distinguishable from the previous statement's `c = 0`.
         let mut events: Vec<SequencedEvent> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(20);
-        while !events.iter().any(|event| {
-            matches!(
-                event.event,
-                DesktopEvent::StepStarted { index: 2, .. }
-            )
-        }) {
+        while !events
+            .iter()
+            .any(|event| matches!(event.event, DesktopEvent::StepStarted { index: 2, .. }))
+        {
             let remaining = deadline.saturating_duration_since(Instant::now());
             assert!(
                 !remaining.is_zero(),
@@ -545,7 +563,10 @@ mod tests {
 
         // RUN-008: the flag must stop the loop inside the two-second budget.
         let cancel_sent = Instant::now();
-        assert!(host.cancel(&handle), "the loop run must accept the cancellation");
+        assert!(
+            host.cancel(&handle),
+            "the loop run must accept the cancellation"
+        );
         let terminal = drain_until_terminal(&host, &mut events, Duration::from_secs(2));
         let elapsed = cancel_sent.elapsed();
         assert!(
@@ -586,7 +607,8 @@ mod tests {
                 .map(|variable| (variable.kind.as_str(), variable.display.as_str()))
         };
         assert_eq!(variable("a"), Some(("Natural", "2")));
-        let (kind, display) = variable("c").expect("the interrupted statement's partial state is committed");
+        let (kind, display) =
+            variable("c").expect("the interrupted statement's partial state is committed");
         assert_eq!(kind, "Natural");
         let partial: usize = display.parse().expect("c is a Natural count");
         assert!(
@@ -600,17 +622,15 @@ mod tests {
         );
         // The interrupted statement's own commit event is part of the stream.
         assert!(
-            events.iter().any(|event| matches!(
-                event.event,
-                DesktopEvent::StepCommitted { index: 2, .. }
-            )),
+            events
+                .iter()
+                .any(|event| matches!(event.event, DesktopEvent::StepCommitted { index: 2, .. })),
             "the interrupted statement must be committed, not skipped"
         );
         assert!(
-            !events.iter().any(|event| matches!(
-                event.event,
-                DesktopEvent::StepStarted { index: 3, .. }
-            )),
+            !events
+                .iter()
+                .any(|event| matches!(event.event, DesktopEvent::StepStarted { index: 3, .. })),
             "nothing after the in-flight statement may start"
         );
 

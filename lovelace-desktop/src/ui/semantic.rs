@@ -137,7 +137,9 @@ impl SemanticRole {
     pub fn for_run_state(state: RunState) -> Option<SemanticRole> {
         match state {
             RunState::Idle => None,
-            RunState::Queued | RunState::Running | RunState::Cancelling => Some(SemanticRole::Progress),
+            RunState::Queued | RunState::Running | RunState::Cancelling => {
+                Some(SemanticRole::Progress)
+            }
             RunState::Finished => Some(SemanticRole::Success),
             RunState::Failed => Some(SemanticRole::Failure),
             RunState::Cancelled => Some(SemanticRole::Cancelled),
@@ -201,7 +203,11 @@ mod tests {
         let mut glyphs = BTreeSet::new();
         for role in SemanticRole::ALL {
             assert!(!role.name().is_empty());
-            assert!(!role.marker().is_empty(), "{}: no text carrier", role.name());
+            assert!(
+                !role.marker().is_empty(),
+                "{}: no text carrier",
+                role.name()
+            );
             assert!(
                 role.marker().starts_with('[') && role.marker().ends_with(']'),
                 "{}: the marker must be a visible bracketed word",
@@ -210,7 +216,11 @@ mod tests {
             assert!(!role.glyph().is_empty(), "{}: no shape", role.name());
             assert!(!role.shape().is_empty(), "{}: no shape name", role.name());
             assert!(!role.color_name().is_empty());
-            assert!(markers.insert(role.marker()), "duplicate marker {}", role.marker());
+            assert!(
+                markers.insert(role.marker()),
+                "duplicate marker {}",
+                role.marker()
+            );
             glyphs.insert(role.glyph());
         }
         assert_eq!(markers.len(), SemanticRole::ALL.len());
@@ -228,13 +238,19 @@ mod tests {
     fn every_run_state_maps_to_a_carrier_and_idle_maps_to_none() {
         use RunState::*;
         let mut seen_states = 0;
-        for state in [Idle, Queued, Running, Cancelling, Finished, Failed, Cancelled, Stale] {
+        for state in [
+            Idle, Queued, Running, Cancelling, Finished, Failed, Cancelled, Stale,
+        ] {
             seen_states += 1;
             match SemanticRole::for_run_state(state) {
                 Some(role) => {
                     assert!(!role.marker().is_empty());
                     assert!(!role.glyph().is_empty());
-                    assert_ne!(role.color_name(), "text_secondary", "{state:?}: an outcome must be semantic");
+                    assert_ne!(
+                        role.color_name(),
+                        "text_secondary",
+                        "{state:?}: an outcome must be semantic"
+                    );
                 }
                 None => assert_eq!(state, Idle, "{state:?} must not be silent"),
             }
@@ -248,8 +264,14 @@ mod tests {
             SemanticRole::for_run_state(Cancelled),
             Some(SemanticRole::Cancelled)
         );
-        assert_eq!(SemanticRole::for_run_state(Stale), Some(SemanticRole::Warning));
-        assert_eq!(SemanticRole::for_run_state(Running), Some(SemanticRole::Progress));
+        assert_eq!(
+            SemanticRole::for_run_state(Stale),
+            Some(SemanticRole::Warning)
+        );
+        assert_eq!(
+            SemanticRole::for_run_state(Running),
+            Some(SemanticRole::Progress)
+        );
     }
 
     #[test]
@@ -257,14 +279,20 @@ mod tests {
         for kind in LogKind::ALL {
             let role = SemanticRole::for_log_kind(kind);
             assert!(!role.color_name().is_empty(), "{kind:?}");
-            assert!(!kind.marker().is_empty(), "{kind:?}: the log model must carry its marker");
+            assert!(
+                !kind.marker().is_empty(),
+                "{kind:?}: the log model must carry its marker"
+            );
             assert!(role.marker().starts_with('['));
         }
         assert_eq!(
             SemanticRole::for_log_kind(LogKind::Diagnostic),
             SemanticRole::Diagnostic
         );
-        assert_eq!(SemanticRole::for_log_kind(LogKind::Progress), SemanticRole::Progress);
+        assert_eq!(
+            SemanticRole::for_log_kind(LogKind::Progress),
+            SemanticRole::Progress
+        );
     }
 
     #[test]
@@ -274,6 +302,9 @@ mod tests {
             assert!(table.contains(role.name()), "{table}");
             assert!(table.contains(role.marker()), "{table}");
         }
-        assert!(table.lines().count() == SemanticRole::ALL.len() + 1, "{table}");
+        assert!(
+            table.lines().count() == SemanticRole::ALL.len() + 1,
+            "{table}"
+        );
     }
 }

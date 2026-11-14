@@ -126,7 +126,9 @@ impl TraceStep {
     pub fn applicability_label(&self) -> String {
         match self.applicability.as_str() {
             "Applicable" => "applicable (preconditions met unconditionally)".to_string(),
-            "ApplicableWithConditions" => "conditioned (met under the required conditions)".to_string(),
+            "ApplicableWithConditions" => {
+                "conditioned (met under the required conditions)".to_string()
+            }
             "" => "not published by this engine for this step".to_string(),
             other => other.to_string(),
         }
@@ -473,10 +475,7 @@ fn applicability_section(json: Option<&Json>) -> Section<Vec<RuleAttempt>> {
 fn rule_attempt(json: &Json) -> Option<RuleAttempt> {
     Some(RuleAttempt {
         rule_id: json.get("ruleId").and_then(Json::as_str)?.to_string(),
-        pattern_matched: matches!(
-            json.get("patternMatched"),
-            Some(Json::Bool(true))
-        ),
+        pattern_matched: matches!(json.get("patternMatched"), Some(Json::Bool(true))),
         precondition: json
             .get("precondition")
             .and_then(Json::as_str)
@@ -633,8 +632,6 @@ impl InspectorExpansion {
             .map(|(path, _)| path.as_str())
             .collect()
     }
-
-
 }
 
 /// One painted row of the expression tree.
@@ -674,12 +671,7 @@ impl TreeRow {
 
     /// The accessible name of the row's header: header text, node path and state.
     pub fn accessible_name(&self) -> String {
-        format!(
-            "{} [{}] {}",
-            self.header(),
-            self.path,
-            self.state_word()
-        )
+        format!("{} [{}] {}", self.header(), self.path, self.state_word())
     }
 
     /// `collapsed`, `expanded` or `leaf`, the word a UIA client reads for this row.
@@ -742,13 +734,7 @@ fn push_rows(
         return;
     }
     for (index, child) in node.children.iter().enumerate() {
-        push_rows(
-            child,
-            &tree_path(path, index),
-            level + 1,
-            expansion,
-            rows,
-        );
+        push_rows(child, &tree_path(path, index), level + 1, expansion, rows);
     }
 }
 
@@ -898,10 +884,7 @@ mod tests {
                                         Json::Str("pow.sqrt-square-nonnegative".to_string()),
                                     ),
                                     ("patternMatched", Json::Bool(true)),
-                                    (
-                                        "precondition",
-                                        Json::Str("NotApplicable".to_string()),
-                                    ),
+                                    ("precondition", Json::Str("NotApplicable".to_string())),
                                     (
                                         "reason",
                                         Json::Str(
@@ -1119,7 +1102,11 @@ mod tests {
         // Collapsing a row hides exactly its children, and the row says so.
         expansion.toggle("inspect.tree.0");
         let collapsed = tree_rows(tree, &expansion);
-        assert_eq!(collapsed.len(), 3, "a collapsed leaf has no children to hide");
+        assert_eq!(
+            collapsed.len(),
+            3,
+            "a collapsed leaf has no children to hide"
+        );
         expansion.toggle("inspect.tree");
         assert_eq!(tree_rows(tree, &expansion).len(), 1);
         assert_eq!(tree_rows(tree, &expansion)[0].state_word(), "collapsed");
@@ -1238,7 +1225,10 @@ mod tests {
         expansion.load_deeper(30);
         expansion.set_pending_focus("inspect.tree.1");
         assert!(expansion.levels() > INITIAL_TREE_LEVELS);
-        assert!(!expansion.bind(&payload), "the same payload keeps its state");
+        assert!(
+            !expansion.bind(&payload),
+            "the same payload keeps its state"
+        );
         assert!(expansion.levels() > INITIAL_TREE_LEVELS);
         let other = Json::obj([
             (

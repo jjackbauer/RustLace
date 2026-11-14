@@ -78,7 +78,10 @@ pub fn parse_matrix(text: &str) -> Vec<Claim> {
             }
             continue;
         }
-        if cells.iter().all(|cell| cell.chars().all(|c| c == '-' || c == ':')) {
+        if cells
+            .iter()
+            .all(|cell| cell.chars().all(|c| c == '-' || c == ':'))
+        {
             continue;
         }
         if cells.len() != 5 {
@@ -166,7 +169,10 @@ pub fn run() -> i32 {
         } else {
             "SILENT"
         };
-        println!("{} | {} | {} | {}", claim.platform, claim.status, claim.run, verdict);
+        println!(
+            "{} | {} | {} | {}",
+            claim.platform, claim.status, claim.run, verdict
+        );
     }
     println!(
         "this build: target_os={} arch={} advertised={}",
@@ -194,11 +200,7 @@ pub fn run() -> i32 {
         claims.len(),
         problems.len()
     );
-    if problems.is_empty() {
-        0
-    } else {
-        1
-    }
+    if problems.is_empty() { 0 } else { 1 }
 }
 
 #[cfg(test)]
@@ -206,10 +208,8 @@ mod tests {
     use super::*;
 
     fn matrix() -> String {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(MATRIX_PATH),
-        )
-        .expect("the release matrix must be readable")
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(MATRIX_PATH))
+            .expect("the release matrix must be readable")
     }
 
     #[test]

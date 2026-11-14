@@ -62,14 +62,14 @@ mod log_kind;
 mod netcheck;
 #[cfg(windows)]
 mod perf_probe;
-mod precision_budget;
-#[cfg(test)]
-mod precision_default;
 mod platform_claims;
 #[cfg(windows)]
 mod platform_dialogs;
 #[cfg(windows)]
 mod platform_parity;
+mod precision_budget;
+#[cfg(test)]
+mod precision_default;
 mod quick_eval;
 mod recovery;
 mod regex_lite;
@@ -379,9 +379,7 @@ fn usage() -> String {
     text.push_str(
         "                                      typing and scroll-frame budgets, write <report>\n",
     );
-    text.push_str(
-        "  lovelace-desktop --measure-run <script> --measure-out <report>\n",
-    );
+    text.push_str("  lovelace-desktop --measure-run <script> --measure-out <report>\n");
     text.push_str(
         "                                      run <script> (>=2 s of engine work) in the real\n",
     );
@@ -410,12 +408,16 @@ fn usage() -> String {
     text.push_str(
         "                                      feed an invalid plot into the shipped pane, then run\n",
     );
-    text.push_str("                                      again (PERF-012; exits non-zero on failure)\n");
+    text.push_str(
+        "                                      again (PERF-012; exits non-zero on failure)\n",
+    );
     text.push_str("  lovelace-desktop --perf-precision-probe\n");
     text.push_str(
         "                                      report what an extreme precision request does\n",
     );
-    text.push_str("                                      (PERF-011; exits non-zero when nothing warns)\n");
+    text.push_str(
+        "                                      (PERF-011; exits non-zero when nothing warns)\n",
+    );
     text.push_str(
         "  lovelace-desktop --perf-frame-probe --measure-out <report> [--probe-request=after16]\n",
     );
@@ -437,9 +439,7 @@ fn usage() -> String {
     text.push_str(
         "                                      clipboard, caret/IME and DPI behaviour (PLF-010;\n",
     );
-    text.push_str(
-        "                                      exits non-zero when an area fails)\n",
-    );
+    text.push_str("                                      exits non-zero when an area fails)\n");
     text.push_str(
         "  lovelace-desktop --ui-audit         audit src/ui for ARC-003 separation (no eval,\n",
     );
@@ -449,9 +449,7 @@ fn usage() -> String {
     text.push_str(
         "  lovelace-desktop --thread-audit     audit every thread spawn, join path, sleep and\n",
     );
-    text.push_str(
-        "                                      synchronisation primitive (ARC-008)\n",
-    );
+    text.push_str("                                      synchronisation primitive (ARC-008)\n");
     text.push_str("  lovelace-desktop --contrast-check   print every theme pair's WCAG ratio\n");
     text.push_str(
         "                                      (fails below 4.5:1 text / 3:1 large or non-text)\n",
@@ -462,15 +460,11 @@ fn usage() -> String {
     text.push_str(
         "                                      and contrast per text role (fails below 11 pt,\n",
     );
-    text.push_str(
-        "                                      1.15x line ratio or 4.5:1)\n",
-    );
+    text.push_str("                                      1.15x line ratio or 4.5:1)\n");
     text.push_str(
         "  lovelace-desktop --visual-audit     print the type scale, control state matrix,\n",
     );
-    text.push_str(
-        "                                      semantic colour roles and empty states\n",
-    );
+    text.push_str("                                      semantic colour roles and empty states\n");
     text.push_str(
         "  lovelace-desktop --glyph-check      print the engine glyph set's font coverage and\n",
     );
@@ -500,17 +494,23 @@ fn usage() -> String {
     text.push_str("  Ctrl+Y, Ctrl+Shift+Z                redo the last undone edit\n");
     text.push_str("  Tab, Shift+Tab                      indent or outdent the selected lines\n");
     text.push_str("  Ctrl+G                              go to a 1-based line or line:column\n");
-    text.push_str("  Ctrl+M                              jump to the bracket matching the caret's\n");
+    text.push_str(
+        "  Ctrl+M                              jump to the bracket matching the caret's\n",
+    );
     text.push_str("  Ctrl+Shift+O                        find a symbol in the active document\n");
     text.push_str(
         "  Ctrl+F                              find and replace in the active document\n",
     );
     text.push_str("  Ctrl+Tab, Ctrl+Shift+Tab            next / previous document tab\n");
-    text.push_str("  Ctrl+,                              editor settings (indent, tabs, auto-close)\n");
+    text.push_str(
+        "  Ctrl+,                              editor settings (indent, tabs, auto-close)\n",
+    );
     text.push_str(
         "  F8                                  jump to the last failed run's diagnostic\n",
     );
-    text.push_str("  Ctrl+Q                              quit (asks about every unsaved document)\n");
+    text.push_str(
+        "  Ctrl+Q                              quit (asks about every unsaved document)\n",
+    );
     text.push_str("  F6, Shift+F6                        next / previous pane group\n");
     text.push_str(
         "  Ctrl+1..Ctrl+5                      focus toolbar / editor / plot / workspace / logs\n",

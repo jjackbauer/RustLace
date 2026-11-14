@@ -1271,12 +1271,27 @@ mod tests {
             "Ctrl+Shift+S"
         );
         assert_eq!(Shortcut::plain(KeyName::F6).chord(), "F6");
-        assert_eq!(Shortcut::new(KeyName::F6, false, true, false).chord(), "Shift+F6");
-        assert_eq!(Shortcut::new(KeyName::Digit(3), true, false, false).chord(), "Ctrl+3");
-        assert_eq!(Shortcut::new(KeyName::Comma, true, false, false).chord(), "Ctrl+,");
-        assert_eq!(Shortcut::new(KeyName::Plus, true, false, false).chord(), "Ctrl+=");
+        assert_eq!(
+            Shortcut::new(KeyName::F6, false, true, false).chord(),
+            "Shift+F6"
+        );
+        assert_eq!(
+            Shortcut::new(KeyName::Digit(3), true, false, false).chord(),
+            "Ctrl+3"
+        );
+        assert_eq!(
+            Shortcut::new(KeyName::Comma, true, false, false).chord(),
+            "Ctrl+,"
+        );
+        assert_eq!(
+            Shortcut::new(KeyName::Plus, true, false, false).chord(),
+            "Ctrl+="
+        );
         assert_eq!(Shortcut::plain(KeyName::Escape).chord(), "Esc");
-        assert_eq!(Shortcut::new(KeyName::Tab, true, false, false).chord(), "Ctrl+Tab");
+        assert_eq!(
+            Shortcut::new(KeyName::Tab, true, false, false).chord(),
+            "Ctrl+Tab"
+        );
         assert_eq!(
             Shortcut::new(KeyName::Space, true, false, false).chord(),
             "Ctrl+Space"

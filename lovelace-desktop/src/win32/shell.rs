@@ -26,10 +26,10 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
 use crate::app::{AppState, Command, Effect, LogLevel, PANE_GAP, compute_layout};
-use crate::workbench::FileConflict;
 use crate::settings::{Settings, WindowGeometry, default_config_path};
 use crate::svg::{self, Plot, TextAnchor};
 use crate::win32::ffi::*;
+use crate::workbench::FileConflict;
 
 /// Window class of the main window.
 const WINDOW_CLASS: &str = "LovelaceDesktopMainWindow";

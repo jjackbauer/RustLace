@@ -89,10 +89,24 @@ impl Distribution {
 
 #[derive(Clone, Copy)]
 enum Phase {
-    Warmup { frames: usize },
-    Typing { samples: usize, cursor: usize, attempts: usize },
-    Caret { samples: usize, direction: f32, attempts: usize },
-    Scrolling { frames: usize, direction: f32, last_start: Option<Instant> },
+    Warmup {
+        frames: usize,
+    },
+    Typing {
+        samples: usize,
+        cursor: usize,
+        attempts: usize,
+    },
+    Caret {
+        samples: usize,
+        direction: f32,
+        attempts: usize,
+    },
+    Scrolling {
+        frames: usize,
+        direction: f32,
+        last_start: Option<Instant>,
+    },
     Done,
 }
 
@@ -269,7 +283,10 @@ impl MeasureApp {
         report.push_str(&typing.line("typing_latency"));
         report.push_str(&format!("\n{}", typing_editor.line("typing_editor_pass")));
         report.push_str(&format!("\n{}", typing_rows.line("typing_rows_pass")));
-        report.push_str(&format!("\n{}", typing_frames.line("typing_frame_interval")));
+        report.push_str(&format!(
+            "\n{}",
+            typing_frames.line("typing_frame_interval")
+        ));
         report.push_str(&format!("\n{}", caret.line("caret_latency")));
         report.push_str(&format!("\n{}", caret_editor.line("caret_editor_pass")));
         report.push_str(&format!("\n{}", caret_frames.line("caret_frame_interval")));
@@ -316,8 +333,9 @@ impl MeasureApp {
             ),
         }
         if let Some(path) = &self.trace_out {
-            let mut csv =
-                String::from("pass,phase,at_ms,interval_ms,pass_ms,cpu_ms,editor_ms,rows_ms,syntax_ms,scroll_y,focused\n");
+            let mut csv = String::from(
+                "pass,phase,at_ms,interval_ms,pass_ms,cpu_ms,editor_ms,rows_ms,syntax_ms,scroll_y,focused\n",
+            );
             for row in &self.trace {
                 csv.push_str(&format!(
                     "{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.1},{}\n",
@@ -390,10 +408,7 @@ impl MeasureApp {
                     let started = Instant::now();
                     if let Some(previous) = self.last_typing_start {
                         self.typing_frames.push(
-                            started
-                                .saturating_duration_since(previous)
-                                .as_secs_f64()
-                                * 1000.0,
+                            started.saturating_duration_since(previous).as_secs_f64() * 1000.0,
                         );
                     }
                     self.last_typing_start = Some(started);
@@ -447,10 +462,7 @@ impl MeasureApp {
                     let started = Instant::now();
                     if let Some(previous) = self.last_caret_start {
                         self.caret_frames.push(
-                            started
-                                .saturating_duration_since(previous)
-                                .as_secs_f64()
-                                * 1000.0,
+                            started.saturating_duration_since(previous).as_secs_f64() * 1000.0,
                         );
                     }
                     self.last_caret_start = Some(started);
@@ -494,16 +506,15 @@ impl MeasureApp {
             } => {
                 let start = Instant::now();
                 if let Some(previous) = *last_start {
-                    self.scroll.push(
-                        start.saturating_duration_since(previous).as_secs_f64() * 1000.0,
-                    );
+                    self.scroll
+                        .push(start.saturating_duration_since(previous).as_secs_f64() * 1000.0);
                 }
                 *last_start = Some(start);
                 let editor = self.inner.measure_editor();
                 let row_h = editor.metrics.row_h.max(1.0);
-                let max_scroll =
-                    (editor.line_count() as f32 * row_h - editor.metrics.visible_rows as f32 * row_h)
-                        .max(0.0);
+                let max_scroll = (editor.line_count() as f32 * row_h
+                    - editor.metrics.visible_rows as f32 * row_h)
+                    .max(0.0);
                 if editor.scroll_y >= max_scroll - 1.0 {
                     *direction = -1.0;
                 } else if editor.scroll_y <= 0.0 {
@@ -551,7 +562,10 @@ impl eframe::App for MeasureApp {
         let pass_started = Instant::now();
         let phase = self.phase.tag();
         let interval_ms = self.last_pass_start.map(|previous| {
-            pass_started.saturating_duration_since(previous).as_secs_f64() * 1000.0
+            pass_started
+                .saturating_duration_since(previous)
+                .as_secs_f64()
+                * 1000.0
         });
         self.last_pass_start = Some(pass_started);
         let trace = self.trace_out.is_some();

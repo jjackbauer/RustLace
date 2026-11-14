@@ -71,9 +71,7 @@ impl Class {
                 }
             }
             ClassItem::Digit(negated) => ch.is_ascii_digit() != *negated,
-            ClassItem::Word(negated) => {
-                (ch.is_ascii_alphanumeric() || ch == '_') != *negated
-            }
+            ClassItem::Word(negated) => (ch.is_ascii_alphanumeric() || ch == '_') != *negated,
             ClassItem::Space(negated) => ch.is_whitespace() != *negated,
             ClassItem::Literal(literal) => {
                 if case_sensitive {
@@ -452,9 +450,7 @@ impl Parser {
                 break;
             };
             self.pos += 1;
-            value = value
-                .saturating_mul(10)
-                .saturating_add(digit as usize);
+            value = value.saturating_mul(10).saturating_add(digit as usize);
             if value > MAX_REPEAT {
                 return Err(self.error("a repetition count is too large"));
             }
@@ -474,9 +470,7 @@ impl Parser {
                 self.enter()?;
                 if self.eat('?') {
                     if !self.eat(':') {
-                        return Err(self.error(
-                            "only the (?:...) group prefix is supported",
-                        ));
+                        return Err(self.error("only the (?:...) group prefix is supported"));
                     }
                 }
                 let inner = self.parse_alt()?;
@@ -554,7 +548,10 @@ impl Parser {
             }
             // A '-' forms a range only when it has a literal endpoint before the closing ']'.
             if self.peek() == Some('-')
-                && self.chars.get(self.pos + 1).is_some_and(|next| *next != ']')
+                && self
+                    .chars
+                    .get(self.pos + 1)
+                    .is_some_and(|next| *next != ']')
             {
                 self.pos += 1;
                 let Some(end) = self.next() else {

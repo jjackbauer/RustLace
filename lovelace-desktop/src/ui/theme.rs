@@ -37,8 +37,8 @@
 //! role on a different surface usually fails the checker rather than shipping unreadable text.
 
 use egui::{
-    style::{ImeComposition, Selection, TextCursorStyle, WidgetVisuals, Widgets},
     Color32, CornerRadius, Shadow, Stroke, Visuals,
+    style::{ImeComposition, Selection, TextCursorStyle, WidgetVisuals, Widgets},
 };
 
 use crate::settings::ThemePreference;
@@ -1610,12 +1610,16 @@ mod tests {
                 failures.is_empty(),
                 "{theme:?} contrast failures: {failures:#?}"
             );
-            assert!(results
-                .iter()
-                .any(|result| result.class == PairClass::NormalText));
-            assert!(results
-                .iter()
-                .any(|result| result.class == PairClass::NonText));
+            assert!(
+                results
+                    .iter()
+                    .any(|result| result.class == PairClass::NormalText)
+            );
+            assert!(
+                results
+                    .iter()
+                    .any(|result| result.class == PairClass::NonText)
+            );
         }
     }
 
@@ -1649,7 +1653,10 @@ mod tests {
                 .iter()
                 .map(|result| result.ratio)
                 .fold(f64::INFINITY, f64::min);
-            assert!(lowest >= 3.0, "{theme:?}: lowest focus-ring ratio {lowest:.3}");
+            assert!(
+                lowest >= 3.0,
+                "{theme:?}: lowest focus-ring ratio {lowest:.3}"
+            );
         }
         // A ring that were hard-coded would be the same colour in both themes; the token is not.
         assert_ne!(

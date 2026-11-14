@@ -221,8 +221,7 @@ pub fn check_text(name: &str, source: &str) -> FileReport {
         .cloned()
         .collect();
 
-    let eval = find_call(&production, "eval")
-        .or_else(|| find_call(&production, "eval_full"));
+    let eval = find_call(&production, "eval").or_else(|| find_call(&production, "eval_full"));
     let construction = find_any(
         &production,
         &[
@@ -492,9 +491,7 @@ fn copy_raw_string(chars: &[char], i: usize, out: &mut String) -> usize {
     }
     let mut j = quote_at + 1;
     while j < chars.len() {
-        if chars[j] == '"'
-            && (0..hashes).all(|offset| chars.get(j + 1 + offset) == Some(&'#'))
-        {
+        if chars[j] == '"' && (0..hashes).all(|offset| chars.get(j + 1 + offset) == Some(&'#')) {
             for c in &chars[j..=j + hashes] {
                 out.push(*c);
             }
@@ -753,10 +750,7 @@ fn crate_module_roots(imports: &[String], production: &str) -> Vec<String> {
         let mut search = production;
         while let Some(position) = search.find(prefix) {
             let after = &search[position + prefix.len()..];
-            let root: String = after
-                .chars()
-                .take_while(|c| is_ident(*c))
-                .collect();
+            let root: String = after.chars().take_while(|c| is_ident(*c)).collect();
             let advance = root.len().max(1);
             if !root.is_empty()
                 && root != "engine"
@@ -842,9 +836,7 @@ fn find_call(source: &str, name: &str) -> Option<String> {
     let name_chars: Vec<char> = name.chars().collect();
     let mut i = 0usize;
     while i + name_chars.len() <= chars.len() {
-        if chars[i..i + name_chars.len()] == name_chars[..]
-            && (i == 0 || !is_ident(chars[i - 1]))
-        {
+        if chars[i..i + name_chars.len()] == name_chars[..] && (i == 0 || !is_ident(chars[i - 1])) {
             let mut j = i + name_chars.len();
             while j < chars.len() && chars[j].is_whitespace() {
                 j += 1;
@@ -877,7 +869,11 @@ mod tests {
     fn the_shipped_ui_passes_the_separation_audit() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("ui");
         let report = audit_dir(&root);
-        assert!(report.errors.is_empty(), "setup errors: {:?}", report.errors);
+        assert!(
+            report.errors.is_empty(),
+            "setup errors: {:?}",
+            report.errors
+        );
         assert!(
             report.files.len() >= 15,
             "the audit must scan every UI file, found {}",
@@ -911,10 +907,7 @@ mod tests {
             "fn paint() { let _ = engine::default_engine_factory(); }",
         ] {
             let report = check_text("bad.rs", source);
-            assert!(
-                !report.pass(),
-                "the construction audit passed {source:?}"
-            );
+            assert!(!report.pass(), "the construction audit passed {source:?}");
             assert!(failed_rule(&report, "no_engine_construction"));
         }
         let report = check_text("bad.rs", "fn paint() { compile(x); }");
@@ -930,10 +923,7 @@ mod tests {
         );
         assert!(!report.pass());
         assert!(failed_rule(&report, "engine_imports_are_data_only"));
-        let report = check_text(
-            "bad.rs",
-            "use crate::engine::RealEngine;\nfn paint() {}",
-        );
+        let report = check_text("bad.rs", "use crate::engine::RealEngine;\nfn paint() {}");
         assert!(!report.pass());
         assert!(failed_rule(&report, "engine_imports_are_data_only"));
     }
@@ -993,10 +983,7 @@ mod tests {
                 "crate_imports_allowlisted",
                 "use crate::win32::shell; fn x(){}",
             ),
-            (
-                "no_platform_window_handle",
-                "fn x(){ let _: HWND = 0; }",
-            ),
+            ("no_platform_window_handle", "fn x(){ let _: HWND = 0; }"),
         ];
         for (rule, source) in cases {
             let report = check_text("bad.rs", source);

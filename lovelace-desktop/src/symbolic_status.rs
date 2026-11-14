@@ -147,7 +147,8 @@ fn status_word(variant: &str, source: &str, complete: Option<String>) -> StatusB
         detail,
         tone,
     }
-}/// The record's published conditions: a rewrite with conditions is a conditional result, never an
+}
+/// The record's published conditions: a rewrite with conditions is a conditional result, never an
 /// unconditional one, however the status word reads.
 fn condition_badge(structured: &Json, out: &mut Vec<StatusBadge>) {
     for field in ["conditions", "assumptions"] {
@@ -196,7 +197,11 @@ fn rendering_badges(structured: &Json, out: &mut Vec<StatusBadge>) {
         out.push(StatusBadge {
             word: if exact { "EXACT" } else { "INEXACT" }.to_string(),
             detail: format!("{kind}.exact = {exact}"),
-            tone: if exact { Tone::Complete } else { Tone::Incomplete },
+            tone: if exact {
+                Tone::Complete
+            } else {
+                Tone::Incomplete
+            },
         });
     }
 }
@@ -218,7 +223,10 @@ fn json_bool(value: Option<&Json>) -> Option<bool> {
 }
 
 fn text_value(value: &Json) -> Option<String> {
-    value.get("value").and_then(Json::as_str).map(str::to_string)
+    value
+        .get("value")
+        .and_then(Json::as_str)
+        .map(str::to_string)
 }
 
 fn upper(text: &str) -> String {
@@ -257,10 +265,7 @@ mod tests {
                     fields
                         .into_iter()
                         .map(|(name, value)| {
-                            Json::obj([
-                                ("name", Json::Str(name.to_string())),
-                                ("value", value),
-                            ])
+                            Json::obj([("name", Json::Str(name.to_string())), ("value", value)])
                         })
                         .collect(),
                 ),
@@ -297,7 +302,10 @@ mod tests {
         );
         assert!(painted[0].detail.contains("complete: false"), "{painted:?}");
         let line = headline(&painted);
-        assert!(!line.contains("SOLVED"), "the headline claims Solved: {line}");
+        assert!(
+            !line.contains("SOLVED"),
+            "the headline claims Solved: {line}"
+        );
         assert!(!line.contains("EXACT"), "the headline claims Exact: {line}");
     }
 
@@ -380,10 +388,7 @@ mod tests {
             ("kind", Json::Str("Symbolic".to_string())),
             ("pretty", Json::Str("x^2 + …".to_string())),
             ("truncated", Json::Bool(true)),
-            (
-                "truncationReason",
-                Json::Str("node-budget".to_string()),
-            ),
+            ("truncationReason", Json::Str("node-budget".to_string())),
             ("exact", Json::Bool(false)),
         ]);
         let painted = badges(Some(&projected), None);

@@ -1678,8 +1678,10 @@ mod tests {
             Some("precondition false")
         );
         assert!(
-            met.attempts.iter().all(|attempt| !(attempt.rule_id == "pow.sqrt-square-real"
-                && attempt.pattern_matched)),
+            met.attempts
+                .iter()
+                .all(|attempt| !(attempt.rule_id == "pow.sqrt-square-real"
+                    && attempt.pattern_matched)),
             "the rule that fired is not a matched rejection: {:?}",
             met.attempts
         );
@@ -1705,7 +1707,10 @@ mod tests {
         assert_eq!(
             preconditions,
             vec![
-                ("pow.sqrt-square-nonnegative", RuleApplicability::NotApplicable),
+                (
+                    "pow.sqrt-square-nonnegative",
+                    RuleApplicability::NotApplicable
+                ),
                 ("pow.sqrt-square-real", RuleApplicability::NotApplicable),
             ],
             "both rules' preconditions were tried and reported"

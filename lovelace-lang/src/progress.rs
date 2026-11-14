@@ -164,10 +164,7 @@ mod tests {
         assert!(!active(), "the scope must disarm on drop");
         assert_eq!(
             *seen.lock().unwrap_or_else(|error| error.into_inner()),
-            vec![
-                ("phase-a".to_string(), 0.25),
-                ("phase-b".to_string(), 0.75)
-            ]
+            vec![("phase-a".to_string(), 0.25), ("phase-b".to_string(), 0.75)]
         );
     }
 
@@ -208,10 +205,7 @@ mod tests {
         drop(outer_scope);
         assert_eq!(
             *seen_outer.lock().unwrap_or_else(|error| error.into_inner()),
-            vec![
-                ("outer".to_string(), 0.4),
-                ("outer-again".to_string(), 0.5)
-            ]
+            vec![("outer".to_string(), 0.4), ("outer-again".to_string(), 0.5)]
         );
         assert!(!active());
     }

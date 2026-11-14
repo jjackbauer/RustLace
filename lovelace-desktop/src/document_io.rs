@@ -463,7 +463,10 @@ where
         _ => std::path::PathBuf::from("."),
     };
     let Some(file_name) = path.file_name() else {
-        return Err(format!("Cannot save {}: the path names no file", path.display()));
+        return Err(format!(
+            "Cannot save {}: the path names no file",
+            path.display()
+        ));
     };
     // One sequence number per write makes the temporary name unique even when two documents are
     // saved in the same millisecond; the process id keeps two windows apart.
@@ -694,7 +697,10 @@ mod tests {
         // constants are fixed so a hash printed in evidence can be checked by hand.
         assert_eq!(content_hash(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(content_hash(b"a"), 0xaf63_dc4c_8601_ec8c);
-        assert_ne!(content_hash(b"a = 1\nb = 2\n"), content_hash(b"a = 1\nb = 3\n"));
+        assert_ne!(
+            content_hash(b"a = 1\nb = 2\n"),
+            content_hash(b"a = 1\nb = 3\n")
+        );
         // A same-length edit is exactly the case a size-only check would miss.
         assert_eq!(b"a = 1\nb = 2\n".len(), b"a = 1\nb = 3\n".len());
     }
@@ -731,7 +737,11 @@ mod tests {
         let snapshot = first.snapshot().expect("the file is readable");
         assert_eq!(snapshot.size, 6);
         assert_eq!(snapshot.hash, content_hash(b"a = 1\n"));
-        assert_eq!(probe(&path), first, "probing twice is equal until it changes");
+        assert_eq!(
+            probe(&path),
+            first,
+            "probing twice is equal until it changes"
+        );
 
         std::fs::write(&path, b"a = 2\n").expect("rewrite the fixture");
         let second = probe(&path);
@@ -817,7 +827,8 @@ mod tests {
         let original = b"a = 1\nb = 2\n";
         std::fs::write(&path, original).expect("write the fixture");
         let before = probe(&path).snapshot().expect("readable");
-        let error = write_faulted(&path, b"a = 9\nb = 9\n", 4).expect_err("the injected write fails");
+        let error =
+            write_faulted(&path, b"a = 9\nb = 9\n", 4).expect_err("the injected write fails");
         assert!(
             error.contains("injected write failure"),
             "the failure is reported: {error}"

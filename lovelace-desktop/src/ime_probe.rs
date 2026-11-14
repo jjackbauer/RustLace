@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use crate::ui::{native_options, theme, WorkbenchApp};
+use crate::ui::{WorkbenchApp, native_options, theme};
 use crate::win32::ffi;
 
 /// How long the window stays open after the sequence when the driver writes no close marker.
@@ -239,7 +239,11 @@ impl ProbeApp {
             "ImmGetDefaultIMEWnd=0x{:X}",
             ffi::ime_default_window(hwnd)
         ));
-        self.check("himc-obtained", self.himc != 0, &format!("0x{:X}", self.himc));
+        self.check(
+            "himc-obtained",
+            self.himc != 0,
+            &format!("0x{:X}", self.himc),
+        );
     }
 
     /// Writes the composition string into the HIMC and reads both strings back, so the report
@@ -313,7 +317,9 @@ impl ProbeApp {
     fn send_control_key(&mut self, virtual_key: u16, scan: u16, extended: bool, label: &str) {
         let hwnd = self.hwnd;
         let state = ffi::set_control_key_state(true);
-        self.log(&format!("SetKeyboardState(VK_CONTROL down)={state} ({label})"));
+        self.log(&format!(
+            "SetKeyboardState(VK_CONTROL down)={state} ({label})"
+        ));
         ffi::send_key(hwnd, ffi::VK_CONTROL, 0x1D, false, true);
         ffi::send_key(hwnd, virtual_key, scan, extended, true);
         ffi::send_key(hwnd, virtual_key, scan, extended, false);
@@ -393,11 +399,7 @@ impl ProbeApp {
                     }
                     Mode::Control(_) => ime.rect.is_positive() && ime.cursor_rect.is_positive(),
                 });
-                self.check(
-                    "ime-caret-rect-in-text-rect",
-                    geometry_ok,
-                    &self.ime_line(),
-                );
+                self.check("ime-caret-rect-in-text-rect", geometry_ok, &self.ime_line());
                 self.acquire_himc();
                 self.set_composition(&ctx);
                 self.phase = 1;
@@ -464,7 +466,12 @@ impl ProbeApp {
                 if std::env::var("LOVELACE_IME_NO_SHORTCUT").is_ok_and(|value| value == "1") {
                     self.log("shortcut-during-composition skipped (LOVELACE_IME_NO_SHORTCUT=1)");
                 } else {
-                    self.send_control_key(ffi::VK_RETURN, 0x1C, false, "Ctrl+Enter during composition");
+                    self.send_control_key(
+                        ffi::VK_RETURN,
+                        0x1C,
+                        false,
+                        "Ctrl+Enter during composition",
+                    );
                 }
                 self.log(&format!(
                     "shortcut-during-composition sent run_state_at_send={before_run:?} preedit_at_send={:?}",
@@ -496,18 +503,15 @@ impl ProbeApp {
                 // run must still be Idle and the buffer unchanged. The platform may end the
                 // composition when the Ctrl modifier arrives (a real IME consumes that key), so
                 // the observed pre-edit is recorded rather than required to survive.
-                let (shortcut_ok, shortcut_observed) = if std::env::var("LOVELACE_IME_NO_SHORTCUT")
-                    .is_ok_and(|value| value == "1")
-                {
-                    (true, "skipped".to_string())
-                } else {
-                    (
-                        run == "Idle" && text == self.baseline,
-                        format!(
-                            "run_state={run:?} preedit={preedit:?} editor={text:?}"
-                        ),
-                    )
-                };
+                let (shortcut_ok, shortcut_observed) =
+                    if std::env::var("LOVELACE_IME_NO_SHORTCUT").is_ok_and(|value| value == "1") {
+                        (true, "skipped".to_string())
+                    } else {
+                        (
+                            run == "Idle" && text == self.baseline,
+                            format!("run_state={run:?} preedit={preedit:?} editor={text:?}"),
+                        )
+                    };
                 self.check(
                     "shortcut-deferred-during-composition",
                     shortcut_ok,

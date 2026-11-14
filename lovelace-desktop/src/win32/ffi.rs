@@ -1559,12 +1559,8 @@ pub fn ime_composition_string(himc: HIMC, result: bool) -> String {
             return String::new();
         }
         let mut buffer = vec![0u8; size as usize];
-        let copied = ImmGetCompositionStringW(
-            himc,
-            index,
-            buffer.as_mut_ptr() as *mut c_void,
-            size as u32,
-        );
+        let copied =
+            ImmGetCompositionStringW(himc, index, buffer.as_mut_ptr() as *mut c_void, size as u32);
         if copied <= 0 {
             return String::new();
         }

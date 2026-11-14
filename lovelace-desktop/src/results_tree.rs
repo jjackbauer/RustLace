@@ -871,7 +871,13 @@ mod tests {
     /// not match its own source text.
     #[test]
     fn arc_010_presentation_sources_never_parse_the_display_text() {
-        let suffixes = [".split", ".parse", ".trim_matches", ".strip_prefix", ".strip_suffix"];
+        let suffixes = [
+            ".split",
+            ".parse",
+            ".trim_matches",
+            ".strip_prefix",
+            ".strip_suffix",
+        ];
         let subjects = ["display", "result"];
         let needles: Vec<String> = subjects
             .iter()

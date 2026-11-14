@@ -508,7 +508,8 @@ fn read_repo_file(relative: &str) -> String {
 #[test]
 fn docssynctests_every_c_sharp_snippet_appears_in_usage_examples() {
     let readme = read_repo_file("docs/csharp-oracle/Lovelace.Symbolics/README.md");
-    let examples = read_repo_file("docs/csharp-oracle/Lovelace.Symbolics.Tests/UsageExamples.cs.txt");
+    let examples =
+        read_repo_file("docs/csharp-oracle/Lovelace.Symbolics.Tests/UsageExamples.cs.txt");
 
     let checked = check_csharp_snippets_appear(&readme, &examples)
         .unwrap_or_else(|missing| panic!("{}", missing.join("\n")));

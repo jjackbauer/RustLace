@@ -22,8 +22,7 @@ fn main() -> ExitCode {
     let filter = args.iter().find(|a| !a.starts_with("--")).cloned();
     let verbose = args.iter().any(|a| a == "--verbose");
 
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let files = [
         root.join("parity").join("corpus").join("lang.json"),
         root.join("parity").join("corpus").join("symbolics.json"),

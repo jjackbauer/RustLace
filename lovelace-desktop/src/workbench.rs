@@ -35,9 +35,7 @@ use crate::execution::{
 use crate::keyboard::WorkbenchCommand;
 use crate::language;
 use crate::log_kind::{LogKind, LogLine};
-use crate::precision_budget::{
-    CostDecision, PrecisionCost, PrecisionCurve, WARN_DIGITS,
-};
+use crate::precision_budget::{CostDecision, PrecisionCost, PrecisionCurve, WARN_DIGITS};
 use crate::recovery::RecoveryRecord;
 use crate::run_state::{RunState, RunStateMachine, RunStateTransition};
 use crate::settings::{MAX_PRECISION, MIN_PRECISION, SessionState, SessionTab};
@@ -1319,15 +1317,14 @@ impl Workbench {
 
     /// DOC-006: the conflict a checked save of this document to `path` would report, without
     /// writing anything. `current` is the probe already taken by the caller.
-    fn conflict_for(
-        &self,
-        index: usize,
-        path: &Path,
-        current: &DiskState,
-    ) -> Option<FileConflict> {
+    fn conflict_for(&self, index: usize, path: &Path, current: &DiskState) -> Option<FileConflict> {
         let doc = self.docs.get(index)?;
         let other_target = doc.path.as_deref() != Some(path);
-        let recorded = if other_target { None } else { doc.source_snapshot };
+        let recorded = if other_target {
+            None
+        } else {
+            doc.source_snapshot
+        };
         let conflict = match (recorded, current) {
             // A different path that does not exist yet is a new file, not an overwrite.
             (None, DiskState::Missing) if other_target => return None,
@@ -1828,9 +1825,7 @@ impl Workbench {
                 let was_active = document.state() != RunState::Idle;
                 document.source = record.source.clone();
                 // DOC-009: a recovery restores the tab's formatting along with its text.
-                document.precision = record
-                    .precision
-                    .clamp(MIN_PRECISION, MAX_PRECISION);
+                document.precision = record.precision.clamp(MIN_PRECISION, MAX_PRECISION);
                 document.unicode_glyphs = record.unicode_glyphs;
                 document.caret = record.caret;
                 document.selection = record.selection;
@@ -2012,7 +2007,11 @@ impl Workbench {
         match parse_precision(text) {
             Ok(decimals) => {
                 self.set_precision(index, decimals);
-                Ok(self.docs.get(index).map(|doc| doc.precision).unwrap_or(decimals))
+                Ok(self
+                    .docs
+                    .get(index)
+                    .map(|doc| doc.precision)
+                    .unwrap_or(decimals))
             }
             Err(guidance) => {
                 self.log(index, LogKind::Info, guidance.clone());
@@ -2276,7 +2275,10 @@ impl Workbench {
         for name in names {
             invalidated += self.host.invalidate_variable(document, &name);
         }
-        let doc = self.docs.get_mut(index).expect("the document was just borrowed");
+        let doc = self
+            .docs
+            .get_mut(index)
+            .expect("the document was just borrowed");
         Self::push_line(
             doc,
             LogLine::new(
@@ -2325,13 +2327,19 @@ impl Workbench {
             return None;
         }
         let document = doc.id;
-        let snapshot = doc.snapshot.as_mut().expect("the snapshot was checked above");
+        let snapshot = doc
+            .snapshot
+            .as_mut()
+            .expect("the snapshot was checked above");
         let published = snapshot
             .state
             .variables
             .iter()
             .any(|variable| variable.name == name)
-            || snapshot.variables.iter().any(|(existing, _)| existing == name);
+            || snapshot
+                .variables
+                .iter()
+                .any(|(existing, _)| existing == name);
         if !published {
             Self::push_line(
                 doc,
@@ -2348,13 +2356,19 @@ impl Workbench {
             .find(|(existing, _)| existing == name)
             .map(|(_, display)| display.clone())
             .unwrap_or_else(|| "deleted".to_string());
-        snapshot.state.variables.retain(|variable| variable.name != name);
+        snapshot
+            .state
+            .variables
+            .retain(|variable| variable.name != name);
         snapshot.variables.retain(|(existing, _)| existing != name);
         doc.workspace_revision += 1;
         let functions = snapshot.functions.len();
         let revision = doc.workspace_revision;
         let invalidated = self.host.invalidate_variable(document, name);
-        let doc = self.docs.get_mut(index).expect("the document was just borrowed");
+        let doc = self
+            .docs
+            .get_mut(index)
+            .expect("the document was just borrowed");
         Self::push_line(
             doc,
             LogLine::new(
@@ -2599,9 +2613,7 @@ impl Workbench {
     ) -> Result<(RunId, SourceRevision), SubmitError> {
         let previous = {
             let doc = &self.docs[index];
-            doc.run_state
-                .run()
-                .map(|run| (run, doc.state()))
+            doc.run_state.run().map(|run| (run, doc.state()))
         };
         let doc = &self.docs[index];
         let revision = SourceRevision(doc.revision);
@@ -4295,7 +4307,10 @@ mod tests {
     /// the first script is one visible hint and one action away.
     #[test]
     fn the_starter_example_names_the_run_keyboard_hint() {
-        let first_line = STARTER_SCRIPT.lines().next().expect("the starter script has a hint line");
+        let first_line = STARTER_SCRIPT
+            .lines()
+            .next()
+            .expect("the starter script has a hint line");
         assert!(
             first_line.contains("Press Run") && first_line.contains("Ctrl+Enter"),
             "the fresh-launch hint must name Run and Ctrl+Enter: {first_line:?}"
@@ -4858,7 +4873,10 @@ mod tests {
             .as_ref()
             .expect("a cancelled run publishes its snapshot");
         assert_eq!(snapshot.committed_steps, 2);
-        assert_eq!(snapshot.result, "ok", "the completed value is the committed one");
+        assert_eq!(
+            snapshot.result, "ok",
+            "the completed value is the committed one"
+        );
         assert!(elapsed < Duration::from_secs(2), "cancel took {elapsed:?}");
         let timing = document
             .logs
@@ -5071,7 +5089,11 @@ mod tests {
             "new documents select the new tab"
         );
 
-        assert_eq!(workbench.select_next_tab(), 0, "the last tab wraps to the first");
+        assert_eq!(
+            workbench.select_next_tab(),
+            0,
+            "the last tab wraps to the first"
+        );
         assert_eq!(workbench.select_next_tab(), 1);
         assert_eq!(workbench.select_previous_tab(), 0);
         assert_eq!(
@@ -5283,7 +5305,10 @@ mod tests {
             .iter()
             .filter(|transition| transition.to == RunState::Stale)
             .count();
-        assert_eq!(stales, 1, "exactly one Stale transition for the abandoned run");
+        assert_eq!(
+            stales, 1,
+            "exactly one Stale transition for the abandoned run"
+        );
         let texts = workbench.documents()[0]
             .logs
             .iter()
@@ -6291,8 +6316,10 @@ mod tests {
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                name.starts_with(&format!(".{}.", path.file_name().unwrap().to_string_lossy()))
-                    && name.ends_with(TEMP_SUFFIX)
+                name.starts_with(&format!(
+                    ".{}.",
+                    path.file_name().unwrap().to_string_lossy()
+                )) && name.ends_with(TEMP_SUFFIX)
             })
             .collect();
         assert!(
@@ -6306,7 +6333,10 @@ mod tests {
         std::fs::set_permissions(&path, permissions).expect("restore writability");
         assert!(matches!(workbench.save(index), SaveOutcome::Saved { .. }));
         let written = std::fs::read(&path).expect("read back");
-        assert_eq!(written, b"a = 1\nb = 9\n", "the successful save replaces the file");
+        assert_eq!(
+            written, b"a = 1\nb = 9\n",
+            "the successful save replaces the file"
+        );
         let document = workbench.document(index).expect("tab");
         let updated = document
             .source_snapshot
@@ -6417,7 +6447,10 @@ mod tests {
             panic!("Save must be refused, not write: {outcome:?}");
         };
         assert_eq!(conflict.path, path);
-        assert_eq!(conflict.recorded, recorded, "the prompt names the opened version");
+        assert_eq!(
+            conflict.recorded, recorded,
+            "the prompt names the opened version"
+        );
         assert_ne!(conflict.current.snapshot(), recorded);
         assert!(conflict.buffer_dirty);
         assert_eq!(conflict.buffer_bytes, "a = 1\nb = 2\nc = 3\n".len());
@@ -6438,7 +6471,11 @@ mod tests {
             "the tab is marked from the refused write"
         );
         assert!(
-            workbench.document(index).unwrap().tab_label().contains("changed on disk"),
+            workbench
+                .document(index)
+                .unwrap()
+                .tab_label()
+                .contains("changed on disk"),
             "the tab label carries the conflict marker: {}",
             workbench.document(index).unwrap().tab_label()
         );
@@ -6473,7 +6510,10 @@ mod tests {
         );
         let document = workbench.document(index).unwrap();
         let updated = document.source_snapshot.expect("Keep mine re-records");
-        assert_ne!(updated, recorded, "the snapshot follows the new disk version");
+        assert_ne!(
+            updated, recorded,
+            "the snapshot follows the new disk version"
+        );
         assert_eq!(
             document_io::probe(&path).snapshot(),
             Some(updated),
@@ -6563,13 +6603,19 @@ mod tests {
             conflict.log_line()
         );
         assert!(!path.exists(), "Save must not recreate the deleted file");
-        assert_eq!(workbench.document(index).unwrap().disk_status, DiskStatus::Missing);
+        assert_eq!(
+            workbench.document(index).unwrap().disk_status,
+            DiskStatus::Missing
+        );
         // Keep mine is the only path that recreates it, and only after the user has seen this.
         assert!(matches!(
             workbench.keep_mine(index),
             SaveOutcome::Saved { .. }
         ));
-        assert_eq!(std::fs::read(&path).expect("recreated deliberately"), b"a = 2\n");
+        assert_eq!(
+            std::fs::read(&path).expect("recreated deliberately"),
+            b"a = 2\n"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -7044,10 +7090,7 @@ mod tests {
         let mut workbench = fake_workbench();
 
         // Tab 1: a successful run that commits a variable and a figure.
-        workbench.set_source(
-            0,
-            "alpha = 1\nplot(\"zero\", 1, 2, 3)\nalpha\n".to_string(),
-        );
+        workbench.set_source(0, "alpha = 1\nplot(\"zero\", 1, 2, 3)\nalpha\n".to_string());
         workbench.set_active(0);
         assert!(workbench.run_active());
         assert!(workbench.wait_until_idle(Duration::from_secs(5)));
@@ -7101,13 +7144,19 @@ mod tests {
         let first = &workbench.documents()[0];
         assert_eq!(first.state(), RunState::Finished);
         assert_eq!(first.source, "alpha = 1\nplot(\"zero\", 1, 2, 3)\nalpha\n");
-        assert_eq!(first.revision, first_revision, "tab 2's run did not edit tab 1");
+        assert_eq!(
+            first.revision, first_revision,
+            "tab 2's run did not edit tab 1"
+        );
         assert_eq!(first.id, first_id, "document identities stay distinct");
         assert_eq!(
             first.snapshot.as_ref().expect("snapshot").variables,
             vec![("alpha".to_string(), "1".to_string())]
         );
-        assert_eq!(first.last_plot.as_ref().map(|plot| plot.title.as_str()), Some("zero"));
+        assert_eq!(
+            first.last_plot.as_ref().map(|plot| plot.title.as_str()),
+            Some("zero")
+        );
         assert!(
             !first
                 .snapshot
@@ -7129,7 +7178,8 @@ mod tests {
         assert_eq!(workbench.documents()[1].precision, 250);
         assert!(workbench.documents()[1].unicode_glyphs);
         assert_eq!(
-            workbench.documents()[0].precision, crate::engine::DEFAULT_PRECISION,
+            workbench.documents()[0].precision,
+            crate::engine::DEFAULT_PRECISION,
             "one tab's precision control must not move the other's"
         );
         assert!(!workbench.documents()[0].unicode_glyphs);
@@ -7138,7 +7188,10 @@ mod tests {
         workbench.set_source(1, "beta = 2\n".to_string());
         assert_eq!(workbench.documents()[1].revision, 2);
         assert_eq!(workbench.documents()[0].revision, first_revision);
-        assert_ne!(workbench.documents()[0].source, workbench.documents()[1].source);
+        assert_ne!(
+            workbench.documents()[0].source,
+            workbench.documents()[1].source
+        );
     }
 
     /// DOC-001: a user function defined in one tab is unknown in the other. The fake engine has no
@@ -7146,9 +7199,8 @@ mod tests {
     #[test]
     #[cfg(feature = "real-engine")]
     fn doc_001_a_user_function_defined_in_one_tab_is_unknown_in_the_other() {
-        let mut workbench = Workbench::with_factory(Box::new(|| {
-            Box::new(crate::engine::RealEngine::new())
-        }));
+        let mut workbench =
+            Workbench::with_factory(Box::new(|| Box::new(crate::engine::RealEngine::new())));
         workbench.set_source(0, "func f(x) = x + 1\nf(2)\n".to_string());
         workbench.set_active(0);
         assert!(workbench.run_active());
@@ -7207,7 +7259,10 @@ mod tests {
         }
         impl Evaluator for RecordingEngine {
             fn eval(&mut self, src: &str) -> Result<String, String> {
-                self.recorded.lock().expect("recorded").push(src.to_string());
+                self.recorded
+                    .lock()
+                    .expect("recorded")
+                    .push(src.to_string());
                 self.entered.store(true, Ordering::SeqCst);
                 std::thread::sleep(self.delay);
                 Ok("ok".to_string())
@@ -7238,13 +7293,21 @@ mod tests {
         // Opening reads and decodes the file; it constructs no engine and evaluates nothing.
         let index = workbench.open(&file).expect("open");
         assert_eq!(workbench.documents()[index].source, "a = 1\n");
-        assert_eq!(constructions.load(Ordering::SeqCst), 0, "open executed nothing");
+        assert_eq!(
+            constructions.load(Ordering::SeqCst),
+            0,
+            "open executed nothing"
+        );
         assert!(recorded.lock().expect("recorded").is_empty());
         assert!(workbench.documents()[index].snapshot.is_none());
 
         // Editing is just text: still no engine and no evaluation.
         workbench.set_source(index, "a = 2\n".to_string());
-        assert_eq!(constructions.load(Ordering::SeqCst), 0, "editing executed nothing");
+        assert_eq!(
+            constructions.load(Ordering::SeqCst),
+            0,
+            "editing executed nothing"
+        );
         assert!(recorded.lock().expect("recorded").is_empty());
 
         // Run captures "a = 2\n". While it is inside eval, the buffer is edited to "a = 3\n";
@@ -7319,7 +7382,11 @@ mod tests {
         let mut relaunched = fake_workbench();
         let report = relaunched.restore_session(&persisted, &[]);
         assert_eq!(report.restored.len(), 2);
-        assert_eq!(relaunched.active(), 1, "the selected tab comes back selected");
+        assert_eq!(
+            relaunched.active(),
+            1,
+            "the selected tab comes back selected"
+        );
         world_assert_tab(&relaunched, 0, 40, true);
         world_assert_tab(&relaunched, 1, 250, false);
         assert_eq!(relaunched.documents()[0].source, "a = pi(40)\n");
@@ -7330,11 +7397,13 @@ mod tests {
     /// One tab's two DOC-009 settings, read the way the window reads them.
     fn world_assert_tab(workbench: &Workbench, index: usize, precision: usize, unicode: bool) {
         assert_eq!(
-            workbench.documents()[index].precision, precision,
+            workbench.documents()[index].precision,
+            precision,
             "tab {index} precision"
         );
         assert_eq!(
-            workbench.documents()[index].unicode_glyphs, unicode,
+            workbench.documents()[index].unicode_glyphs,
+            unicode,
             "tab {index} notation"
         );
     }
@@ -7382,11 +7451,18 @@ mod tests {
         let mut workbench = fake_workbench();
         let report = workbench.restore_session(&session, std::slice::from_ref(&record));
         assert_eq!(report.restored.len(), 2);
-        assert_eq!(report.recovered, vec![7], "the unsaved draft came from the journal");
+        assert_eq!(
+            report.recovered,
+            vec![7],
+            "the unsaved draft came from the journal"
+        );
         assert_eq!(workbench.active(), 1);
         assert_eq!(workbench.documents()[0].source, "a = 1\n");
         assert_eq!(workbench.documents()[1].source, "b = 2\n");
-        assert!(workbench.documents()[1].dirty(), "the unsaved text is restored as unsaved");
+        assert!(
+            workbench.documents()[1].dirty(),
+            "the unsaved text is restored as unsaved"
+        );
         for index in [0, 1] {
             assert_eq!(
                 workbench.documents()[index].engine_state_note.as_deref(),
@@ -7790,7 +7866,9 @@ mod tests {
         while Instant::now() < deadline {
             workbench.poll();
             let document = &workbench.documents()[0];
-            if document.total == 3 && document.committed == 2 && document.state() == RunState::Running
+            if document.total == 3
+                && document.committed == 2
+                && document.state() == RunState::Running
             {
                 observed = Some((
                     document.progress_text(),
@@ -7843,7 +7921,10 @@ mod tests {
         assert_eq!(document.committed, 3);
         assert_eq!(document.reused, 2);
         assert_eq!(document.progress_text(), "3/3 · reused 2");
-        assert_eq!(document.current_label, None, "no statement is current once the run ends");
+        assert_eq!(
+            document.current_label, None,
+            "no statement is current once the run ends"
+        );
     }
 
     /// RUN-005 at the pane boundary: while one long statement is in flight, the progress line the
@@ -7880,9 +7961,8 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(1));
         }
-        let (progress, status, kernel_label) = observed.expect(
-            "the run never published kernel sub-progress while sqrt(2) was in flight",
-        );
+        let (progress, status, kernel_label) = observed
+            .expect("the run never published kernel sub-progress while sqrt(2) was in flight");
         assert!(
             progress.starts_with("1/2"),
             "the progress line must still carry the statement count: {progress:?}"
@@ -7899,9 +7979,7 @@ mod tests {
             status.contains("run Running") && status.contains("kernel sqrt:"),
             "the status strip must show the kernel segment: {status:?}"
         );
-        println!(
-            "RUN-005 pane: statement count and kernel sub-progress in one line: {progress:?}"
-        );
+        println!("RUN-005 pane: statement count and kernel sub-progress in one line: {progress:?}");
         assert!(workbench.wait_until_idle(Duration::from_secs(120)));
         let document = &workbench.documents()[0];
         assert_eq!(document.state(), RunState::Finished);
@@ -7937,7 +8015,10 @@ mod tests {
             .run_refusal
             .clone()
             .expect("the refusal must leave a visible advisory");
-        assert!(advisory.contains("Run refused"), "advisory was {advisory:?}");
+        assert!(
+            advisory.contains("Run refused"),
+            "advisory was {advisory:?}"
+        );
         assert!(
             advisory.contains("already in progress"),
             "advisory was {advisory:?}"
@@ -7965,7 +8046,8 @@ mod tests {
             .filter(|transition| transition.to == RunState::Queued)
             .count();
         assert_eq!(
-            queued, 0,
+            queued,
+            0,
             "the refused request must not add a Queued transition: {:?}",
             document.transitions()
         );
@@ -7994,10 +8076,7 @@ mod tests {
     #[test]
     fn two_documents_run_concurrently_and_one_cancels_while_the_other_finishes() {
         let mut workbench = slow_workbench(Duration::from_millis(40));
-        workbench.set_source(
-            0,
-            "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n".to_string(),
-        );
+        workbench.set_source(0, "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\n".to_string());
         workbench.set_source(1, "x = 1\ny = 2\nz = 3\nu = 4\nv = 5\n".to_string());
 
         assert!(workbench.run_active(), "document 1 must start");
@@ -8145,7 +8224,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            discarded_terminals, 1,
+            discarded_terminals,
+            1,
             "exactly one terminal run event for the discarded run {discarded_run:?}, not one per \
              document: {:?}",
             document.transitions()
@@ -8216,10 +8296,7 @@ mod tests {
     #[cfg(feature = "real-engine")]
     fn a_failure_keeps_the_committed_prefix_and_never_half_writes() {
         let mut workbench = real_workbench();
-        workbench.set_source(
-            0,
-            "y = 4\nprint(\"kept\")\n1 / 0\nb = 99\n".to_string(),
-        );
+        workbench.set_source(0, "y = 4\nprint(\"kept\")\n1 / 0\nb = 99\n".to_string());
         assert!(workbench.run_active());
         assert!(workbench.wait_until_idle(Duration::from_secs(30)));
         let document = &workbench.documents()[0];
@@ -8272,10 +8349,7 @@ mod tests {
 
         // The failure decoration is revision-gated and an edit clears it; the corrected script
         // runs to completion on the same document.
-        workbench.set_source(
-            0,
-            "y = 4\nprint(\"kept\")\n2 + 2\nb = 99\n".to_string(),
-        );
+        workbench.set_source(0, "y = 4\nprint(\"kept\")\n2 + 2\nb = 99\n".to_string());
         assert!(
             workbench.diagnostic(0).is_none(),
             "editing past the failure hides its decoration"
@@ -8284,11 +8358,16 @@ mod tests {
         assert!(workbench.wait_until_idle(Duration::from_secs(30)));
         let document = &workbench.documents()[0];
         assert_eq!(document.state(), RunState::Finished);
-        let snapshot = document.snapshot.as_ref().expect("the corrected run publishes");
+        let snapshot = document
+            .snapshot
+            .as_ref()
+            .expect("the corrected run publishes");
         assert_eq!(snapshot.committed_steps, 4);
         assert!(
-            snapshot.variables.iter().any(|(name, value)| name == "b"
-                && value.starts_with("99")),
+            snapshot
+                .variables
+                .iter()
+                .any(|(name, value)| name == "b" && value.starts_with("99")),
             "the corrected run writes the statement that failed before: {:?}",
             snapshot.variables
         );
@@ -8337,9 +8416,7 @@ mod tests {
         );
         let log = all_log_text(&workbench, 0);
         assert!(
-            log.contains(
-                "code UnknownFunction, category UnsupportedOperation, line 2, column 1"
-            ),
+            log.contains("code UnknownFunction, category UnsupportedOperation, line 2, column 1"),
             "the log line must name every field: {log:?}"
         );
         let snapshot_text = workbench.documents()[0]
@@ -8348,7 +8425,8 @@ mod tests {
             .and_then(|snapshot| snapshot.diagnostic.clone())
             .expect("the failed snapshot carries the diagnostic");
         assert!(
-            snapshot_text.contains("UnknownFunction") && snapshot_text.contains("UnsupportedOperation"),
+            snapshot_text.contains("UnknownFunction")
+                && snapshot_text.contains("UnsupportedOperation"),
             "the committed snapshot must carry the same fields: {snapshot_text:?}"
         );
     }
@@ -8544,7 +8622,10 @@ mod tests {
         assert!(workbench.wait_until_idle(Duration::from_secs(10)));
         let document = &workbench.documents()[0];
         assert_eq!(document.state(), RunState::Finished);
-        let snapshot = document.snapshot.as_ref().expect("the recovery run publishes");
+        let snapshot = document
+            .snapshot
+            .as_ref()
+            .expect("the recovery run publishes");
         assert_eq!(snapshot.result, "ok");
         assert_eq!(snapshot.committed_steps, 2);
     }
@@ -8577,7 +8658,8 @@ mod tests {
                 "the guidance must state the accepted range: {guidance:?}"
             );
             assert_eq!(
-                workbench.documents()[0].precision, before,
+                workbench.documents()[0].precision,
+                before,
                 "input {text:?} must not change the document precision"
             );
         }
@@ -8611,12 +8693,8 @@ mod tests {
         let mut workbench = fake_workbench();
         // A curve injected as the measurement would deliver it: 100x digits costs 10x time.
         workbench.set_precision_curve(
-            PrecisionCurve::from_samples(vec![
-                (100, 0.001),
-                (1_000, 0.010),
-                (10_000, 0.100),
-            ])
-            .expect("the curve fits"),
+            PrecisionCurve::from_samples(vec![(100, 0.001), (1_000, 0.010), (10_000, 0.100)])
+                .expect("the curve fits"),
         );
         // The threshold itself is still frictionless: no dialog, no estimate line.
         assert_eq!(
@@ -8637,14 +8715,21 @@ mod tests {
             (cost.seconds - 0.2).abs() < 0.02,
             "the estimate is the curve's own: {cost:?}"
         );
-        assert_eq!(workbench.documents()[0].precision, 5000, "nothing changed yet");
+        assert_eq!(
+            workbench.documents()[0].precision,
+            5000,
+            "nothing changed yet"
+        );
         let log = all_log_text(&workbench, 0);
         assert!(
             log.contains("Precision request 20000 digits: estimated"),
             "the log must carry the estimate before the change: {log:?}"
         );
         assert!(log.contains("Confirmation required"), "{log:?}");
-        assert!(log.contains("100 digits"), "the measured points are named: {log:?}");
+        assert!(
+            log.contains("100 digits"),
+            "the measured points are named: {log:?}"
+        );
 
         // Confirming applies the estimated value and logs the estimate with it.
         assert_eq!(workbench.confirm_precision(), Some(20_000));
@@ -8692,7 +8777,10 @@ mod tests {
     fn perf_011_an_unmeasurable_engine_refuses_the_extreme_request() {
         let mut workbench = fake_workbench();
         assert!(workbench.precision_curve().is_none());
-        assert!(!workbench.can_measure_precision(), "the fake engine has no factory measurement");
+        assert!(
+            !workbench.can_measure_precision(),
+            "the fake engine has no factory measurement"
+        );
         let request = workbench.request_active_precision("20000");
         let PrecisionRequest::Refused { digits, reason } = request else {
             panic!("an unmeasurable engine must refuse, not estimate: {request:?}");
@@ -8759,7 +8847,10 @@ mod tests {
         assert!(workbench.run_active());
         assert!(workbench.wait_until_idle(Duration::from_secs(30)));
         let document = &workbench.documents()[0];
-        assert_eq!(document.reused, 0, "the precision change must reuse nothing");
+        assert_eq!(
+            document.reused, 0,
+            "the precision change must reuse nothing"
+        );
         assert_eq!(document.committed_reused, vec![false, false]);
         let second = document.snapshot.clone().expect("the second run publishes");
         assert_eq!(
@@ -8855,7 +8946,7 @@ mod tests {
         let diagnostic = workbench.diagnostic(0).expect("the failure diagnostic");
         assert_eq!(diagnostic.line, 2);
         assert_eq!(
-            snapshot.diagnostic, 
+            snapshot.diagnostic,
             Some(diagnostic.render_fully()),
             "the committed snapshot names the same diagnostic the editor decorates"
         );
@@ -8871,10 +8962,7 @@ mod tests {
             if src.contains("SLOW") {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while Instant::now() < deadline {
-                    if self
-                        .cancel
-                        .load(std::sync::atomic::Ordering::Acquire)
-                    {
+                    if self.cancel.load(std::sync::atomic::Ordering::Acquire) {
                         return Err("cancelled inside the slow statement".to_string());
                     }
                     std::thread::sleep(Duration::from_millis(1));
@@ -8884,10 +8972,7 @@ mod tests {
             Ok("b-result".to_string())
         }
 
-        fn set_cancel_flag(
-            &mut self,
-            flag: Option<Arc<std::sync::atomic::AtomicBool>>,
-        ) {
+        fn set_cancel_flag(&mut self, flag: Option<Arc<std::sync::atomic::AtomicBool>>) {
             if let Some(flag) = flag {
                 self.cancel = flag;
             }
@@ -8917,9 +9002,7 @@ mod tests {
         // A starts. A second Run request is refused by the serialized per-document policy and
         // allocates no second run id while A is in flight.
         assert!(workbench.run_active(), "run A must be accepted");
-        let run_a = workbench.documents()[0]
-            .run_id()
-            .expect("run A has an id");
+        let run_a = workbench.documents()[0].run_id().expect("run A has an id");
         assert!(
             !workbench.run_active(),
             "a second run while A is in flight must be refused"
@@ -8945,7 +9028,10 @@ mod tests {
             }),
             "A never reached Running"
         );
-        assert!(workbench.cancel_active(), "A must accept the cancel request");
+        assert!(
+            workbench.cancel_active(),
+            "A must accept the cancel request"
+        );
         assert!(
             workbench.wait_until_idle(Duration::from_secs(5)),
             "A never reached a terminal state"
@@ -8967,9 +9053,7 @@ mod tests {
         // Start B on the same document. B gets a newer run id and records A as superseded.
         workbench.set_source(0, "b = B_RESULT\n".to_string());
         assert!(workbench.run_active(), "run B must be accepted");
-        let run_b = workbench.documents()[0]
-            .run_id()
-            .expect("run B has an id");
+        let run_b = workbench.documents()[0].run_id().expect("run B has an id");
         assert!(
             run_b > run_a,
             "run B must receive a newer id than A (A={run_a:?}, B={run_b:?})"

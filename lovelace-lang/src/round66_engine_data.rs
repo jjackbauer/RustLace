@@ -90,11 +90,7 @@ fn a_sqrt_kernel_reports_phases_whose_fraction_increases() {
     let phases: Vec<&str> = seen.iter().map(|(phase, _)| phase.as_str()).collect();
     assert_eq!(
         phases,
-        vec![
-            "sqrt:operand",
-            "sqrt:integer-square-root",
-            "sqrt:truncate"
-        ],
+        vec!["sqrt:operand", "sqrt:integer-square-root", "sqrt:truncate"],
         "the sqrt kernel's phases, in order"
     );
     assert_monotone(&seen);
@@ -262,8 +258,7 @@ fn the_progress_sink_costs_nothing_measurable_on_the_same_input() {
          armed {armed_elapsed:?}"
     );
     assert!(
-        large_armed_elapsed
-            <= large_unarmed_elapsed * 2 + std::time::Duration::from_millis(250),
+        large_armed_elapsed <= large_unarmed_elapsed * 2 + std::time::Duration::from_millis(250),
         "the sink must not measurably slow the 50 000-digit kernel: unarmed \
          {large_unarmed_elapsed:?}, armed {large_armed_elapsed:?}"
     );
@@ -397,7 +392,11 @@ fn an_unmet_precondition_publishes_the_rule_and_the_reason() {
         "without an assumption neither power rule may fire"
     );
     let attempts = vector(field(fields, "attempts"));
-    assert_eq!(attempts.len(), 2, "both sqrt rules were tried: {attempts:?}");
+    assert_eq!(
+        attempts.len(),
+        2,
+        "both sqrt rules were tried: {attempts:?}"
+    );
     let first = record_fields(&attempts[0], "RuleAttempt");
     assert_eq!(text(field(first, "rule_id")), "pow.sqrt-square-nonnegative");
     assert!(matches!(
@@ -445,7 +444,11 @@ fn a_domain_specific_met_precondition_publishes_its_domain_condition() {
         variant(field(step, "applicability")),
         "ApplicableWithConditions"
     );
-    assert!(field(step, "required_conditions").display().contains("real"));
+    assert!(
+        field(step, "required_conditions")
+            .display()
+            .contains("real")
+    );
     assert!(vector(field(fields, "attempts")).is_empty());
 }
 
@@ -484,7 +487,10 @@ fn a_rat_rejection_names_the_unmatched_reciprocal() {
         .expect("simplify_full evaluates");
     let fields = record_fields(&result, "TransformResult");
     let attempts = vector(field(fields, "attempts"));
-    assert!(!attempts.is_empty(), "the rat rule matched and was rejected");
+    assert!(
+        !attempts.is_empty(),
+        "the rat rule matched and was rejected"
+    );
     let attempt = record_fields(&attempts[0], "RuleAttempt");
     assert_eq!(text(field(attempt, "rule_id")), "rat.cancel-x-over-x");
     assert_eq!(variant(field(attempt, "precondition")), "NotApplicable");

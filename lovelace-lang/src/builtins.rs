@@ -11823,9 +11823,7 @@ fn simplify_traced(
                         Sym::Sym(s) => Some(s.clone()),
                         _ => None,
                     };
-                    let positive = symbol
-                        .as_deref()
-                        .is_some_and(|s| engine.is_positive(s));
+                    let positive = symbol.as_deref().is_some_and(|s| engine.is_positive(s));
                     let provably_real = engine.assumptions().provably_real(base);
                     // power: sqrt(w^2) -> w when w is known positive.
                     if positive && symbol.is_some() {
@@ -11986,7 +11984,8 @@ fn simplify_traced(
             attempts.push(RuleAttemptData {
                 rule_id: "rat.cancel-x-over-x",
                 pattern_matched: true,
-                precondition: lovelace_symbolics::rewrite_registry::RuleApplicability::NotApplicable,
+                precondition:
+                    lovelace_symbolics::rewrite_registry::RuleApplicability::NotApplicable,
                 rejection_reason: format!(
                     "precondition false: the product carries {reciprocal}^-1 but no {reciprocal} \
                      factor to cancel it against, and the rule requires the pair"

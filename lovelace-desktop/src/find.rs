@@ -115,8 +115,7 @@ pub fn find_matches(
                         left.to_ascii_lowercase() == right.to_ascii_lowercase()
                     }
                 });
-            if matched && (!options.whole_word || is_whole_word(&haystack, at, at + needle.len()))
-            {
+            if matched && (!options.whole_word || is_whole_word(&haystack, at, at + needle.len())) {
                 spans.push(MatchSpan {
                     row,
                     start: at,
@@ -505,7 +504,14 @@ mod tests {
         session.set_query("one");
         session.refresh(&lines(text), (0, 9));
         assert_eq!(session.count_text().as_deref(), Some("2 of 3"));
-        assert_eq!(session.selected(), Some(MatchSpan { row: 0, start: 8, end: 11 }));
+        assert_eq!(
+            session.selected(),
+            Some(MatchSpan {
+                row: 0,
+                start: 8,
+                end: 11
+            })
+        );
 
         assert_eq!(
             session.select_next(),
@@ -547,7 +553,10 @@ mod tests {
         assert!(session.error().is_some());
         assert_eq!(session.count_text(), None);
         assert!(
-            session.summary().expect("open").starts_with("Find: invalid regex"),
+            session
+                .summary()
+                .expect("open")
+                .starts_with("Find: invalid regex"),
             "the summary keeps the rejection reason"
         );
     }

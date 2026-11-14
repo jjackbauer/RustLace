@@ -281,11 +281,7 @@ pub fn precision_probe_cli() -> i32 {
         .as_ref()
         .map(|snapshot| snapshot.result.clone())
         .unwrap_or_default();
-    let log_lines: Vec<String> = document
-        .logs
-        .iter()
-        .map(|line| line.render())
-        .collect();
+    let log_lines: Vec<String> = document.logs.iter().map(|line| line.render()).collect();
     let warnings: Vec<&String> = log_lines
         .iter()
         .filter(|line| {
@@ -312,7 +308,11 @@ pub fn precision_probe_cli() -> i32 {
         warnings.len()
     );
     // Exit 0 only when the row's capability exists (a warning/estimate or a refusal).
-    if warnings.is_empty() && !refused { 1 } else { 0 }
+    if warnings.is_empty() && !refused {
+        1
+    } else {
+        0
+    }
 }
 
 /// PERF-012: an invalid plot must surface inline without corrupting the engine/document, and the
@@ -399,9 +399,7 @@ pub fn paint_failure_cli() -> i32 {
         first_plot.svg.len(),
         first_snapshot.variables
     );
-    println!(
-        "PERF-012 invalid_plot: accepted={invalid_loaded} inline_error={invalid_error:?}"
-    );
+    println!("PERF-012 invalid_plot: accepted={invalid_loaded} inline_error={invalid_error:?}");
     println!(
         "PERF-012 after_invalid: source_unchanged={} state={after_state:?} snapshot_unchanged={} plot_unchanged={}",
         after_source == first_source,
@@ -411,10 +409,7 @@ pub fn paint_failure_cli() -> i32 {
     println!(
         "PERF-012 next_run: submitted={second_submitted} idle={second_idle} state={second_state:?} result={second_result:?} valid_plot_reloaded={recovered}"
     );
-    println!(
-        "PERF-012: {}",
-        if pass { "PASS" } else { "FAIL" }
-    );
+    println!("PERF-012: {}", if pass { "PASS" } else { "FAIL" });
     if pass { 0 } else { 1 }
 }
 

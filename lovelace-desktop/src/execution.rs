@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::engine::{CachedValue, EngineState, Evaluator, PlotCapture, DEFAULT_PRECISION};
+use crate::engine::{CachedValue, DEFAULT_PRECISION, EngineState, Evaluator, PlotCapture};
 use crate::incremental::{CachedEntry, DocumentCache, ProgramAnalysis, StatementKey, StepDecision};
 use crate::statements::Statement;
 use lovelace_json::Json;
@@ -1275,7 +1275,8 @@ impl RunWorker {
                         self.finish_cancelled(progress, cache, InFlightCancellation::Interrupted);
                         return;
                     }
-                    let mut diagnostic = Diagnostic::for_statement(statement, &self.source, message);
+                    let mut diagnostic =
+                        Diagnostic::for_statement(statement, &self.source, message);
                     diagnostic.classify(classification);
                     self.fail(progress, diagnostic, cache);
                     return;
@@ -2809,12 +2810,7 @@ mod tests {
         let document = DocumentId(7);
         let started = Instant::now();
         let _handle = host
-            .submit(
-                document,
-                SourceRevision(1),
-                "sqrt(2)\n".to_string(),
-                50_000,
-            )
+            .submit(document, SourceRevision(1), "sqrt(2)\n".to_string(), 50_000)
             .expect("the long kernel must be submitted");
         let mut events = Vec::new();
         loop {
@@ -2881,11 +2877,7 @@ mod tests {
             .collect();
         assert_eq!(
             phases,
-            vec![
-                "sqrt:operand",
-                "sqrt:integer-square-root",
-                "sqrt:truncate"
-            ],
+            vec!["sqrt:operand", "sqrt:integer-square-root", "sqrt:truncate"],
             "the sqrt kernel's phases, in order: {kernel_progress:?}"
         );
         for window in kernel_progress.windows(2) {
@@ -3067,19 +3059,59 @@ mod tests {
             "kind names must be distinct: {observed:?}"
         );
         for event in &events {
-            assert_eq!(event.document(), document, "event {event:?} lost its document id");
+            assert_eq!(
+                event.document(),
+                document,
+                "event {event:?} lost its document id"
+            );
             assert_eq!(event.run(), run, "event {event:?} lost its run id");
             // Exhaustive, wildcard-free match: the compile-time tripwire for a new variant.
             match event {
-                DesktopEvent::RunStarted { document: d, run: r, .. }
-                | DesktopEvent::StepStarted { document: d, run: r, .. }
-                | DesktopEvent::StepCommitted { document: d, run: r, .. }
-                | DesktopEvent::Output { document: d, run: r, .. }
-                | DesktopEvent::SubProgress { document: d, run: r, .. }
-                | DesktopEvent::KernelProgress { document: d, run: r, .. }
-                | DesktopEvent::Finished { document: d, run: r, .. }
-                | DesktopEvent::Cancelled { document: d, run: r, .. }
-                | DesktopEvent::Failed { document: d, run: r, .. } => {
+                DesktopEvent::RunStarted {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::StepStarted {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::StepCommitted {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::Output {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::SubProgress {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::KernelProgress {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::Finished {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::Cancelled {
+                    document: d,
+                    run: r,
+                    ..
+                }
+                | DesktopEvent::Failed {
+                    document: d,
+                    run: r,
+                    ..
+                } => {
                     assert_eq!((*d, *r), (document, run));
                 }
             }
@@ -3127,9 +3159,7 @@ mod tests {
     /// ARC-004: one run's stream is sequenced without gaps, bound to one run and one revision.
     #[test]
     fn the_event_stream_is_gap_free_and_bound_to_the_submitted_run_and_revision() {
-        let host = ExecutionHost::new(Box::new(|| {
-            Box::new(crate::engine::FakeEngine::new())
-        }));
+        let host = ExecutionHost::new(Box::new(|| Box::new(crate::engine::FakeEngine::new())));
         let document = DocumentId(3);
         let revision = SourceRevision(7);
         let handle = host
@@ -3158,12 +3188,18 @@ mod tests {
             }
         }
         assert_eq!(
-            events.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
             (1..=events.len() as u64).collect::<Vec<_>>(),
             "sequence numbers must be gap-free and monotonic"
         );
         for event in &events {
-            assert_eq!(event.revision, revision, "event {event:?} lost its revision");
+            assert_eq!(
+                event.revision, revision,
+                "event {event:?} lost its revision"
+            );
             assert_eq!(event.event.run(), run, "event {event:?} names another run");
             assert_eq!(
                 event.event.document(),
@@ -3171,7 +3207,10 @@ mod tests {
                 "event {event:?} names another document"
             );
         }
-        assert!(matches!(events.first().map(|e| &e.event), Some(DesktopEvent::RunStarted { .. })));
+        assert!(matches!(
+            events.first().map(|e| &e.event),
+            Some(DesktopEvent::RunStarted { .. })
+        ));
         assert_eq!(
             events
                 .iter()
@@ -3185,7 +3224,10 @@ mod tests {
             1,
             "exactly one terminal event"
         );
-        assert!(matches!(events.last().map(|e| &e.event), Some(DesktopEvent::Finished { .. })));
+        assert!(matches!(
+            events.last().map(|e| &e.event),
+            Some(DesktopEvent::Finished { .. })
+        ));
         println!(
             "ARC-004 stream: document={} run={} revision={} events={} sequence={}..{} kinds={:?}",
             document.0,
@@ -3263,7 +3305,10 @@ mod tests {
             handle.worker_thread(),
             "the engine evaluated on a thread other than the worker the handle names"
         );
-        assert_ne!(observed[0].0, ui_thread, "the engine evaluated on the UI thread");
+        assert_ne!(
+            observed[0].0, ui_thread,
+            "the engine evaluated on the UI thread"
+        );
         let name = observed[0].1.as_deref().unwrap_or_default();
         println!(
             "ARC-005 caller_ui_thread={:?} engine_thread={:?} engine_thread_name={:?} worker_handle_thread={:?}",
@@ -3346,14 +3391,15 @@ mod tests {
             host.live_worker_count()
         );
         assert_eq!(joined, 1, "shutdown must join the live worker");
-        assert!(dropped.load(Ordering::SeqCst), "the worker was not joined to completion");
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the worker was not joined to completion"
+        );
         assert_eq!(host.live_worker_count(), 0);
         assert_eq!(host.shutdown(), 0, "shutdown must be idempotent");
 
         // A run that finished before shutdown is joined too, not leaked.
-        let host = ExecutionHost::new(Box::new(|| {
-            Box::new(crate::engine::FakeEngine::new())
-        }));
+        let host = ExecutionHost::new(Box::new(|| Box::new(crate::engine::FakeEngine::new())));
         let _handle = host
             .submit(
                 DocumentId(9),

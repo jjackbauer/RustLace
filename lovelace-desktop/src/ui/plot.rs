@@ -24,9 +24,9 @@
 //! used by the legacy shell.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // resvg 0.50 pins tiny-skia 0.11.4 and re-exports it. A direct `tiny-skia` 0.12 crate would be
@@ -36,8 +36,8 @@ use resvg::usvg;
 
 use super::theme;
 use egui::{
-    Align2, CursorIcon, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions,
-    Ui, Vec2, pos2, vec2,
+    Align2, CursorIcon, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle,
+    TextureOptions, Ui, Vec2, pos2, vec2,
 };
 
 /// Texture side cap; also bounded by `max_texture_side` reported by the backend.
@@ -337,15 +337,7 @@ fn parse_hex_colour(text: &str) -> Option<egui::Color32> {
         return None;
     }
     let byte = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
-    Some(
-        egui::Rgba::from_srgba_unmultiplied(
-            byte(0..2)?,
-            byte(2..4)?,
-            byte(4..6)?,
-            255,
-        )
-        .into(),
-    )
+    Some(egui::Rgba::from_srgba_unmultiplied(byte(0..2)?, byte(2..4)?, byte(4..6)?, 255).into())
 }
 
 /// PLT-005: which document and which run the displayed chart belongs to.
@@ -838,8 +830,8 @@ impl Plot {
         // target and re-rasterise the whole plot forever, so the request and the staleness test
         // both use the achievable scale.
         let achievable = self.achievable_scale(desired, max_side);
-        let stale = self.texture.is_none()
-            || (achievable / self.raster_scale.max(0.01) - 1.0).abs() > 0.12;
+        let stale =
+            self.texture.is_none() || (achievable / self.raster_scale.max(0.01) - 1.0).abs() > 0.12;
         if stale {
             let already_queued = self
                 .pending_scale
@@ -879,9 +871,7 @@ impl Plot {
         let Some(tree) = self.tree.clone() else {
             return;
         };
-        let worker = self
-            .worker
-            .get_or_insert_with(RasterWorker::spawn);
+        let worker = self.worker.get_or_insert_with(RasterWorker::spawn);
         let generation = worker.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let request = RasterRequest {
             generation,
@@ -1384,7 +1374,9 @@ mod tests {
         assert_eq!(plot.series[0].index, 0);
         assert_eq!(plot.series[0].first, (10.0, 20.0));
         assert_eq!(plot.series[1].first, (15.5, 25.5));
-        let stroke = plot.series[1].stroke.expect("the second series keeps its stroke");
+        let stroke = plot.series[1]
+            .stroke
+            .expect("the second series keeps its stroke");
         assert_eq!(
             &stroke.to_srgba_unmultiplied()[..3],
             &[0x3c, 0xb4, 0x4b],
@@ -2090,10 +2082,7 @@ mod tests {
             svg.push_str("<polyline fill=\"none\" stroke=\"#1f4e79\" stroke-width=\"1\" points=\"");
             for point in 0..points {
                 let x = (point * 797 / points.max(1)) as f32;
-                let y = 300.0
-                    + 200.0
-                        * ((point as f32 * 0.13) + (line as f32 * 0.37))
-                            .sin();
+                let y = 300.0 + 200.0 * ((point as f32 * 0.13) + (line as f32 * 0.37)).sin();
                 svg.push_str(&format!("{x:.1},{y:.1} "));
             }
             svg.push_str("\"/>");
@@ -2138,7 +2127,10 @@ mod tests {
             passes += 1;
         }
         let ui_ms = started.elapsed().as_secs_f64() * 1000.0;
-        assert!(plot.texture.is_some(), "the canvas worker produced no texture");
+        assert!(
+            plot.texture.is_some(),
+            "the canvas worker produced no texture"
+        );
         assert!(
             passes >= 5,
             "the UI painted only {passes} pass(es) while one raster was in flight"
@@ -2206,13 +2198,19 @@ mod tests {
         // generation supersedes the one still on the worker.
         plot.view.zoom = 1.5;
         pass(&ctx, &mut plot, pane);
-        assert_eq!(plot.raster_requests, 2, "the zoom did not queue a new raster");
+        assert_eq!(
+            plot.raster_requests, 2,
+            "the zoom did not queue a new raster"
+        );
 
         let started = Instant::now();
         while plot.texture.is_none() && started.elapsed() < Duration::from_secs(60) {
             pass(&ctx, &mut plot, pane);
         }
-        assert!(plot.texture.is_some(), "the canvas worker produced no texture");
+        assert!(
+            plot.texture.is_some(),
+            "the canvas worker produced no texture"
+        );
         assert!(
             plot.raster_cancelled >= 1,
             "the superseded raster was uploaded instead of cancelled (requests={} cancelled={})",
@@ -2256,7 +2254,8 @@ mod tests {
             pass(&ctx, &mut plot, pane);
         }
         assert_eq!(
-            plot.raster_requests, requests,
+            plot.raster_requests,
+            requests,
             "the capped view queued {} more rasters after reaching {achievable:.2}x",
             plot.raster_requests - requests
         );
@@ -2264,7 +2263,8 @@ mod tests {
             plot.raster_px[0].max(plot.raster_px[1]),
             MAX_SIDE as u32,
             "the capped raster is not at the side cap"
-        );    }
+        );
+    }
 
     /// PLT-012: dropping the pane joins the canvas worker (the ARC-008 half of the row).
     #[test]
@@ -2284,7 +2284,10 @@ mod tests {
     // -----------------------------------------------------------------------------------------
 
     /// The physical extent of a text label's ink, in a pixmap rendered at `scale`.
-    fn ink_bounds(pixmap: &tiny_skia::Pixmap, region: (u32, u32, u32, u32)) -> (f32, f32, f32, f32) {
+    fn ink_bounds(
+        pixmap: &tiny_skia::Pixmap,
+        region: (u32, u32, u32, u32),
+    ) -> (f32, f32, f32, f32) {
         let (x0, y0, x1, y1) = region;
         let mut bounds = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for y in y0..y1.min(pixmap.height()) {
@@ -2320,7 +2323,11 @@ mod tests {
             let ctx = egui::Context::default();
             // egui applies a new zoom factor at the start of the following pass.
             ctx.set_zoom_factor(percent as f32 / 100.0);
-            pass(&ctx, &mut Plot::new(), Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0)));
+            pass(
+                &ctx,
+                &mut Plot::new(),
+                Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0)),
+            );
             let ppp = ctx.pixels_per_point();
             assert!(
                 (ppp - percent as f32 / 100.0).abs() < 1e-4,

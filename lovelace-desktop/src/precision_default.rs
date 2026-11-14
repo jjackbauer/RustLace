@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use crate::app::AppState;
 use crate::engine::real::RealEngine;
-use crate::engine::{Evaluator, DEFAULT_PRECISION};
+use crate::engine::{DEFAULT_PRECISION, Evaluator};
 use crate::settings::Settings;
 
 /// Fractional digits in a plain decimal rendering (no parentheses in these fixtures).

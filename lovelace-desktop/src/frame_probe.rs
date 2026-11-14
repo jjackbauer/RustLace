@@ -112,14 +112,9 @@ impl eframe::App for ProbeApp {
         if self.passes > WARMUP_PASSES
             && let Some(previous) = previous
         {
-            self.intervals.push(
-                started
-                    .saturating_duration_since(previous)
-                    .as_secs_f64()
-                    * 1000.0,
-            );
-            self.pass_ms
-                .push(started.elapsed().as_secs_f64() * 1000.0);
+            self.intervals
+                .push(started.saturating_duration_since(previous).as_secs_f64() * 1000.0);
+            self.pass_ms.push(started.elapsed().as_secs_f64() * 1000.0);
             self.cpu_ms.push(
                 frame
                     .info()

@@ -8,11 +8,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use egui::{
-    Align, Align2, Color32, CursorIcon, Id, Key, Layout, Rect, Response, RichText, Sense,
-    Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
-};
 use egui::text::LayoutJob;
+use egui::{
+    Align, Align2, Color32, CursorIcon, Id, Key, Layout, Rect, Response, RichText, Sense, Stroke,
+    StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
+};
 use egui::{FontId, TextFormat, TextStyle};
 
 use crate::engine::FunctionOrigin;
@@ -128,9 +128,7 @@ impl LayoutMode {
     pub fn for_window(window: Vec2, pixels_per_point: f32) -> LayoutMode {
         if window.x >= MIN_SPLIT_WIDTH && window.y >= MIN_SPLIT_HEIGHT {
             LayoutMode::Split
-        } else if window.x * pixels_per_point >= 1200.0
-            && window.y * pixels_per_point >= 700.0
-        {
+        } else if window.x * pixels_per_point >= 1200.0 && window.y * pixels_per_point >= 700.0 {
             LayoutMode::DenseSplit
         } else {
             LayoutMode::Compact
@@ -218,10 +216,8 @@ pub fn compute_compact_layout(
                 pos2(editor.right(), area.top()),
                 vec2(SPLIT.min(drawer_w + SPLIT), height),
             );
-            let drawer = Rect::from_min_size(
-                pos2(splitter.right(), area.top()),
-                vec2(drawer_w, height),
-            );
+            let drawer =
+                Rect::from_min_size(pos2(splitter.right(), area.top()), vec2(drawer_w, height));
             CompactLayout {
                 tab_bar,
                 editor,
@@ -360,7 +356,8 @@ pub fn compute_layout(
         pos2(logs.right(), bottom_top),
         vec2(SPLIT.min(full.right() - logs.right()).max(0.0), logs_h),
     );
-    let inspector = Rect::from_min_size(pos2(split_d.right(), bottom_top), vec2(inspector_w, logs_h));
+    let inspector =
+        Rect::from_min_size(pos2(split_d.right(), bottom_top), vec2(inspector_w, logs_h));
 
     PaneLayout {
         full,
@@ -1462,7 +1459,10 @@ impl WorkbenchApp {
         let session = self.workbench.session_state();
         let recent = self.workbench.recent_files();
         let precision = self.workbench.active_document().precision;
-        format!("{session:?}|{recent:?}|{precision}|{:?}", self.settings.editor)
+        format!(
+            "{session:?}|{recent:?}|{precision}|{:?}",
+            self.settings.editor
+        )
     }
 
     /// EDT-008: copies the persisted editor settings into every open editor.
@@ -2034,7 +2034,11 @@ impl WorkbenchApp {
                 .show(ui, |ui| {
                     for (row, record) in prompt.records.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&record.title).monospace().color(theme::accent()));
+                            ui.label(
+                                RichText::new(&record.title)
+                                    .monospace()
+                                    .color(theme::accent()),
+                            );
                             ui.label(
                                 RichText::new(format!(
                                     "{}  ·  {} bytes",
@@ -2046,7 +2050,8 @@ impl WorkbenchApp {
                             );
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 for choice in [RecoveryAnswer::Discard, RecoveryAnswer::Recover] {
-                                    let text = RichText::new(choice.label()).font(type_scale::Role::Body.font());
+                                    let text = RichText::new(choice.label())
+                                        .font(type_scale::Role::Body.font());
                                     let text = if choice == RecoveryAnswer::Recover {
                                         text.strong()
                                     } else {
@@ -2172,14 +2177,14 @@ impl WorkbenchApp {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     for choice in [ReloadAnswer::DiscardAndReload, ReloadAnswer::Back] {
-                        let text = RichText::new(choice.label()).font(type_scale::Role::Body.font());
+                        let text =
+                            RichText::new(choice.label()).font(type_scale::Role::Body.font());
                         let text = if choice == ReloadAnswer::DiscardAndReload {
                             text.strong()
                         } else {
                             text
                         };
-                        let response =
-                            ui.add(egui::Button::new(text).min_size(vec2(150.0, 26.0)));
+                        let response = ui.add(egui::Button::new(text).min_size(vec2(150.0, 26.0)));
                         if response.clicked() {
                             reload_answer = Some(choice);
                         }
@@ -2214,11 +2219,7 @@ impl WorkbenchApp {
                     RichText::new(format!(
                         "Your buffer: {} bytes{}. Nothing has been written.",
                         report.buffer_bytes,
-                        if dirty {
-                            ", with unsaved changes"
-                        } else {
-                            ""
-                        }
+                        if dirty { ", with unsaved changes" } else { "" }
                     ))
                     .small()
                     .color(theme::dim()),
@@ -2255,13 +2256,13 @@ impl WorkbenchApp {
                         ConflictAnswer::Cancel,
                     ] {
                         let enabled = match choice {
-                            ConflictAnswer::Reload => matches!(
-                                report.current,
-                                crate::document_io::DiskState::Present(_)
-                            ),
+                            ConflictAnswer::Reload => {
+                                matches!(report.current, crate::document_io::DiskState::Present(_))
+                            }
                             _ => true,
                         };
-                        let text = RichText::new(choice.label()).font(type_scale::Role::Body.font());
+                        let text =
+                            RichText::new(choice.label()).font(type_scale::Role::Body.font());
                         let text = match choice {
                             ConflictAnswer::KeepMine => text.strong(),
                             ConflictAnswer::Reload => text,
@@ -2637,10 +2638,7 @@ impl WorkbenchApp {
         self.glyph_mode = GlyphMode::from_unicode(enabled);
         self.workbench.log_active(
             LogKind::Info,
-            format!(
-                "Mathematical glyphs: {} notation",
-                self.glyph_mode.name()
-            ),
+            format!("Mathematical glyphs: {} notation", self.glyph_mode.name()),
         );
         self.persist_state(true);
         ctx.request_repaint();
@@ -2654,7 +2652,11 @@ impl WorkbenchApp {
     /// they are not run twice; each of those paths is itself table-driven through
     /// [`keyboard::binding_for`] / the legacy mappers. The mapping from action to handler is
     /// exhaustive, so a newly registered action cannot be silently dead.
-    fn dispatch_binding(&mut self, binding: &'static keyboard::Binding, ctx: &egui::Context) -> bool {
+    fn dispatch_binding(
+        &mut self,
+        binding: &'static keyboard::Binding,
+        ctx: &egui::Context,
+    ) -> bool {
         crate::run_trace::mark(
             "binding",
             format!("{} {}", binding.keys.chord(), binding.action.label()),
@@ -3062,12 +3064,7 @@ impl WorkbenchApp {
                     .max_height(180.0)
                     .show(ui, |ui| {
                         for (index, hit) in hits.iter().enumerate() {
-                            let label = format!(
-                                "{}   {}:{}",
-                                hit.name,
-                                hit.row + 1,
-                                hit.col + 1
-                            );
+                            let label = format!("{}   {}:{}", hit.name, hit.row + 1, hit.col + 1);
                             let selected = index == prompt.selected;
                             if ui.selectable_label(selected, label).clicked() {
                                 jump = Some(index);
@@ -3139,7 +3136,10 @@ impl WorkbenchApp {
                     .on_hover_text("Columns per indentation level and the displayed tab width")
                     .changed();
                 changed |= ui
-                    .checkbox(&mut preferences.auto_close, "Auto-close brackets and quotes")
+                    .checkbox(
+                        &mut preferences.auto_close,
+                        "Auto-close brackets and quotes",
+                    )
                     .on_hover_text(
                         "Typing ( [ { \" or ' inserts the closing character; typing the closing \
                          character steps over the one already there",
@@ -3174,12 +3174,9 @@ impl WorkbenchApp {
                     self.set_unicode_glyphs(unicode, ctx);
                 }
                 ui.label(
-                    RichText::new(format!(
-                        "Values render as {}",
-                        self.glyph_mode.label()
-                    ))
-                    .monospace()
-                    .color(theme::dim()),
+                    RichText::new(format!("Values render as {}", self.glyph_mode.label()))
+                        .monospace()
+                        .color(theme::dim()),
                 );
                 ui.separator();
                 // A11Y-005: the configurable editor typography. Every choice repaints in this
@@ -3221,8 +3218,7 @@ impl WorkbenchApp {
                     .add(
                         egui::Slider::new(
                             &mut preferences.typography.line_height_percent,
-                            settings::MIN_LINE_HEIGHT_PERCENT
-                                ..=settings::MAX_LINE_HEIGHT_PERCENT,
+                            settings::MIN_LINE_HEIGHT_PERCENT..=settings::MAX_LINE_HEIGHT_PERCENT,
                         )
                         .text("line height %"),
                     )
@@ -3278,10 +3274,7 @@ impl WorkbenchApp {
                 // A11Y-006: follow the OS application theme, or keep the explicit override.
                 ui.label(RichText::new("Theme").strong());
                 changed_follows |= ui
-                    .checkbox(
-                        &mut theme_follows_system,
-                        "Follow the OS light/dark theme",
-                    )
+                    .checkbox(&mut theme_follows_system, "Follow the OS light/dark theme")
                     .on_hover_text(
                         "On: an OS application-theme change repaints the window, keeping the \
                          document, the caret, the run and the focus. Off: the toolbar's Dark/Light \
@@ -3290,7 +3283,10 @@ impl WorkbenchApp {
                     .changed();
                 ui.label(
                     RichText::new(if theme_follows_system {
-                        format!("Following the OS theme (currently {})", self.theme_button_label())
+                        format!(
+                            "Following the OS theme (currently {})",
+                            self.theme_button_label()
+                        )
                     } else {
                         format!("Explicit override: {}", self.theme_button_label())
                     })
@@ -3478,13 +3474,8 @@ impl WorkbenchApp {
             .on_hover_text("The encoding and newline style this document saves with");
             let name = document.tab_label();
             ui.add(
-                egui::Label::new(
-                    RichText::new(name)
-                        .monospace()
-                        .small()
-                        .color(theme::dim()),
-                )
-                .truncate(),
+                egui::Label::new(RichText::new(name).monospace().small().color(theme::dim()))
+                    .truncate(),
             );
         });
     }
@@ -3814,8 +3805,7 @@ impl WorkbenchApp {
             })
         });
         if let Some(shift) = tab_shift {
-            let editor_focused =
-                ui.ctx().memory(|memory| memory.focused()) == Some(surface_id());
+            let editor_focused = ui.ctx().memory(|memory| memory.focused()) == Some(surface_id());
             if editor_focused {
                 let active = self.workbench.active();
                 self.editors[active].handle_tab(shift);
@@ -3989,9 +3979,7 @@ impl WorkbenchApp {
 
             if ui
                 .button("Editor settings")
-                .on_hover_text(
-                    "Indent width, tabs vs spaces and bracket/quote auto-close (Ctrl+,)",
-                )
+                .on_hover_text("Indent width, tabs vs spaces and bracket/quote auto-close (Ctrl+,)")
                 .clicked()
             {
                 self.editor_settings_open = true;
@@ -4062,7 +4050,9 @@ impl WorkbenchApp {
                         "Reset pane sizes ({})",
                         keyboard::chord_of(Action::ResetLayout)
                     ))
-                    .on_hover_text("Restore the default editor, graph, workspace, logs and inspector sizes")
+                    .on_hover_text(
+                        "Restore the default editor, graph, workspace, logs and inspector sizes",
+                    )
                     .clicked()
                 {
                     self.reset_pane_sizes();
@@ -4088,12 +4078,10 @@ impl WorkbenchApp {
 
             // VIS-002: the runtime theme toggle. Its label carries the render state, so a UIA
             // capture names the control ("Theme: Dark") and the same name opens the next theme.
-            let theme_response = ui
-                .button(self.theme_button_label())
-                .on_hover_text(
-                    "Switch between the dark and light theme at runtime; the open documents, \
+            let theme_response = ui.button(self.theme_button_label()).on_hover_text(
+                "Switch between the dark and light theme at runtime; the open documents, \
                      carets, selection and keyboard focus are preserved",
-                );
+            );
             self.theme_button = Some(theme_response.rect);
             if theme_response.clicked() {
                 let next = self.theme.toggled();
@@ -4229,7 +4217,11 @@ impl WorkbenchApp {
                         .small()
                         .color(theme::warning()),
                 )
-                .on_hover_text(format!("{}. {}", cost.line(), curve.measured_line()));
+                .on_hover_text(format!(
+                    "{}. {}",
+                    cost.line(),
+                    curve.measured_line()
+                ));
             } else {
                 ui.label(
                     RichText::new("measuring the engine's cost…")
@@ -4370,9 +4362,8 @@ impl WorkbenchApp {
                 // toggle button: a reader announces "round-43-a11y.lv, tab, selected" and the
                 // tab strip's `TabList` parent tells it how many tabs there are.
                 let name = title.clone();
-                response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Tab, true, name.clone())
-                });
+                response
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, true, name.clone()));
                 // The selected state is the tab's own property, not a checked toggle.
                 ui.ctx().accesskit_node_builder(response.id, |node| {
                     node.set_selected(selected);
@@ -4452,148 +4443,138 @@ impl WorkbenchApp {
         // height one pass after painting it, so a row that wrapped *down* would let that pass's
         // controls hang below the client edge: the wrapped row is what this layout removes, not
         // the facts (the full text is still the `Status` node's name and the label's tooltip).
-        egui::Sides::new()
-            .shrink_left()
-            .truncate()
-            .show(
-                ui,
-                |ui| {
-                    if let Some(marker) = marker {
-                        ui.label(
-                            RichText::new(marker)
-                                .font(type_scale::Role::Badge.font())
-                                .color(state_color),
-                        )
-                        .on_hover_text(if diagnostic.is_some() {
-                            "The last run failed; the log names its line and column"
-                        } else {
-                            "The last run's outcome (the marker is text, not only colour)"
-                        });
-                    }
-                    // A11Y-012: a failed run's status names the error's location in text. The
-                    // colour is redundant with the marker and the words. It is placed before the
-                    // summary because it is short and must never be the part that elides.
-                    if let Some(diagnostic) = &diagnostic {
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!(
-                                "error at Ln {}, Col {}",
-                                diagnostic.line, diagnostic.column
-                            ))
-                            .monospace()
-                            .color(theme::error()),
-                        );
-                    }
-                    // VIS-002: the run state's semantic colour is a theme token, not a fixed
-                    // accent. This label is last in the shrinking side, so it is the one that
-                    // truncates when the client is narrower than the facts.
-                    let mut visible = status.clone();
-                    if running {
-                        visible.push_str("  |  Cancel is available in the toolbar.");
-                    }
-                    let status_line = ui.add(
-                        egui::Label::new(
-                            RichText::new(visible).monospace().color(state_color),
-                        )
-                        .truncate()
-                        .show_tooltip_when_elided(false),
+        egui::Sides::new().shrink_left().truncate().show(
+            ui,
+            |ui| {
+                if let Some(marker) = marker {
+                    ui.label(
+                        RichText::new(marker)
+                            .font(type_scale::Role::Badge.font())
+                            .color(state_color),
+                    )
+                    .on_hover_text(if diagnostic.is_some() {
+                        "The last run failed; the log names its line and column"
+                    } else {
+                        "The last run's outcome (the marker is text, not only colour)"
+                    });
+                }
+                // A11Y-012: a failed run's status names the error's location in text. The
+                // colour is redundant with the marker and the words. It is placed before the
+                // summary because it is short and must never be the part that elides.
+                if let Some(diagnostic) = &diagnostic {
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!(
+                            "error at Ln {}, Col {}",
+                            diagnostic.line, diagnostic.column
+                        ))
+                        .monospace()
+                        .color(theme::error()),
+                    );
+                }
+                // VIS-002: the run state's semantic colour is a theme token, not a fixed
+                // accent. This label is last in the shrinking side, so it is the one that
+                // truncates when the client is narrower than the facts.
+                let mut visible = status.clone();
+                if running {
+                    visible.push_str("  |  Cancel is available in the toolbar.");
+                }
+                let status_line = ui
+                    .add(
+                        egui::Label::new(RichText::new(visible).monospace().color(state_color))
+                            .truncate()
+                            .show_tooltip_when_elided(false),
                     )
                     .on_hover_text(&label);
-                    // TST-011 / J-19: the run-state transition is the status strip's announcement.
-                    // The live region is this leaf, not the strip's container: AccessKit inherits
-                    // `live` from the nearest ancestor (accesskit_consumer `Node::live`), so a
-                    // live container would also announce the marker, the last-run time and the
-                    // focus group. A leaf announces one status line per transition, and only on
-                    // the transition itself - a permanently live leaf would re-speak the caret.
-                    if announce_status {
-                        let id = status_line.id;
-                        ui.ctx().accesskit_node_builder(id, |node| {
-                            node.set_live(egui::accesskit::Live::Polite);
-                        });
-                    }
-                },
-                |ui| {
-                    // A11Y-001: the status strip names the focus group, so a keyboard-only user
-                    // (and a UIA capture) can tell which pane F6 is in without reading the
-                    // ring's position. Right-to-left: the first item added is the rightmost.
-                    // A right-to-left Ui lays a galley out right-aligned, which anchors
-                    // `TextShape::pos` at the rect's right edge; a left-aligned galley in a rect
-                    // that is exactly the text's width paints the same picture and keeps the
-                    // shape's origin at its left edge. The painted shapes a11y_004 measures are
-                    // read from that origin, so keep the labels on the convention they measure.
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("focus: {focus}"))
-                                .small()
-                                .color(theme::dim()),
-                        )
-                        .halign(egui::Align::LEFT),
-                    )
-                    .on_hover_text(
-                        "The pane group the keyboard is in (F6 moves it; Ctrl+1..5 jump directly)",
-                    );
-                    if let Some(last_run_ms) = last_run_ms {
-                        ui.separator();
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{last_run_ms} ms last run"))
-                                    .color(theme::dim()),
-                            )
-                            .halign(egui::Align::LEFT),
-                        );
-                    }
-                    // A11Y-002: the committed progress is a real `ProgressIndicator` with a
-                    // numeric value, not text a reader has to parse out of the status string.
-                    // egui fills the node's value with a percentage; the explicit range below
-                    // states the numbers a screen reader can act on (committed statements out of
-                    // the run's total).
-                    ui.separator();
-                    let progress = ui.add(
-                        egui::ProgressBar::new(committed as f32 / total as f32)
-                            .desired_width(76.0)
-                            .text(format!("{committed}/{total}")),
-                    );
-                    ui.ctx().accesskit_node_builder(progress.id, |node| {
-                        node.set_min_numeric_value(0.0);
-                        node.set_max_numeric_value(total as f64);
-                        node.set_numeric_value(committed as f64);
-                        // TST-011 / J-19: the committed count is progress a screen reader hears.
-                        // The node's name only changes when a statement commits (or a new run's
-                        // total appears), so a polite live region here cannot echo the caret.
+                // TST-011 / J-19: the run-state transition is the status strip's announcement.
+                // The live region is this leaf, not the strip's container: AccessKit inherits
+                // `live` from the nearest ancestor (accesskit_consumer `Node::live`), so a
+                // live container would also announce the marker, the last-run time and the
+                // focus group. A leaf announces one status line per transition, and only on
+                // the transition itself - a permanently live leaf would re-speak the caret.
+                if announce_status {
+                    let id = status_line.id;
+                    ui.ctx().accesskit_node_builder(id, |node| {
                         node.set_live(egui::accesskit::Live::Polite);
                     });
-                    progress.on_hover_text("Committed statements of the last run's snapshot");
-                    // RUN-005: the in-flight statement's kernel sub-progress, painted as its OWN
-                    // readout beside the statement count. The count is statements committed out of
-                    // the run's total; this is the engine's phase and the kernel's own percentage
-                    // of its own work, so a single long `sqrt(2)`/`pi(n)`/`n!` statement no longer
-                    // looks hung at `1/1`. Absent whenever the engine published none (a short
-                    // statement, or an evaluator with no kernel progress seam).
-                    if let Some(kernel) = self
-                        .workbench
-                        .active_document()
-                        .kernel_progress()
-                        .cloned()
-                    {
-                        ui.separator();
-                        let kernel_bar = ui.add(
-                            egui::ProgressBar::new(kernel.fraction.clamp(0.0, 1.0))
-                                .desired_width(112.0)
-                                .text(format!("kernel {}", kernel.label())),
-                        );
-                        ui.ctx().accesskit_node_builder(kernel_bar.id, |node| {
-                            node.set_min_numeric_value(0.0);
-                            node.set_max_numeric_value(1.0);
-                            node.set_numeric_value(kernel.fraction as f64);
-                        });
-                        kernel_bar.on_hover_text(
-                            "Kernel sub-progress reported by the running statement's engine \
+                }
+            },
+            |ui| {
+                // A11Y-001: the status strip names the focus group, so a keyboard-only user
+                // (and a UIA capture) can tell which pane F6 is in without reading the
+                // ring's position. Right-to-left: the first item added is the rightmost.
+                // A right-to-left Ui lays a galley out right-aligned, which anchors
+                // `TextShape::pos` at the rect's right edge; a left-aligned galley in a rect
+                // that is exactly the text's width paints the same picture and keeps the
+                // shape's origin at its left edge. The painted shapes a11y_004 measures are
+                // read from that origin, so keep the labels on the convention they measure.
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("focus: {focus}"))
+                            .small()
+                            .color(theme::dim()),
+                    )
+                    .halign(egui::Align::LEFT),
+                )
+                .on_hover_text(
+                    "The pane group the keyboard is in (F6 moves it; Ctrl+1..5 jump directly)",
+                );
+                if let Some(last_run_ms) = last_run_ms {
+                    ui.separator();
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{last_run_ms} ms last run")).color(theme::dim()),
+                        )
+                        .halign(egui::Align::LEFT),
+                    );
+                }
+                // A11Y-002: the committed progress is a real `ProgressIndicator` with a
+                // numeric value, not text a reader has to parse out of the status string.
+                // egui fills the node's value with a percentage; the explicit range below
+                // states the numbers a screen reader can act on (committed statements out of
+                // the run's total).
+                ui.separator();
+                let progress = ui.add(
+                    egui::ProgressBar::new(committed as f32 / total as f32)
+                        .desired_width(76.0)
+                        .text(format!("{committed}/{total}")),
+                );
+                ui.ctx().accesskit_node_builder(progress.id, |node| {
+                    node.set_min_numeric_value(0.0);
+                    node.set_max_numeric_value(total as f64);
+                    node.set_numeric_value(committed as f64);
+                    // TST-011 / J-19: the committed count is progress a screen reader hears.
+                    // The node's name only changes when a statement commits (or a new run's
+                    // total appears), so a polite live region here cannot echo the caret.
+                    node.set_live(egui::accesskit::Live::Polite);
+                });
+                progress.on_hover_text("Committed statements of the last run's snapshot");
+                // RUN-005: the in-flight statement's kernel sub-progress, painted as its OWN
+                // readout beside the statement count. The count is statements committed out of
+                // the run's total; this is the engine's phase and the kernel's own percentage
+                // of its own work, so a single long `sqrt(2)`/`pi(n)`/`n!` statement no longer
+                // looks hung at `1/1`. Absent whenever the engine published none (a short
+                // statement, or an evaluator with no kernel progress seam).
+                if let Some(kernel) = self.workbench.active_document().kernel_progress().cloned() {
+                    ui.separator();
+                    let kernel_bar = ui.add(
+                        egui::ProgressBar::new(kernel.fraction.clamp(0.0, 1.0))
+                            .desired_width(112.0)
+                            .text(format!("kernel {}", kernel.label())),
+                    );
+                    ui.ctx().accesskit_node_builder(kernel_bar.id, |node| {
+                        node.set_min_numeric_value(0.0);
+                        node.set_max_numeric_value(1.0);
+                        node.set_numeric_value(kernel.fraction as f64);
+                    });
+                    kernel_bar.on_hover_text(
+                        "Kernel sub-progress reported by the running statement's engine \
                              (RUN-005): the phase the kernel is in and its own percentage of its \
                              own work",
-                        );
-                    }
-                },
-            );
+                    );
+                }
+            },
+        );
     }
 
     /// LAY-011: the one-row status strip used when the compact layout is in force.
@@ -4606,7 +4587,8 @@ impl WorkbenchApp {
         let (line, column) = self.editors[active].line_col_1based();
         let status = self.workbench.status_text(line, column);
         // VIS-007: the compact strip carries the same semantic marker and colour as the full one.
-        let marker = semantic::SemanticRole::for_run_state(self.view.run_state).map(|role| role.marker());
+        let marker =
+            semantic::SemanticRole::for_run_state(self.view.run_state).map(|role| role.marker());
         let diagnostic = self.view.diagnostic.clone();
         // TST-011 / J-19: the compact layout announces the run-state transition through its own
         // status leaf; the split layout's strip is not painted in this mode.
@@ -4642,9 +4624,12 @@ impl WorkbenchApp {
             short.push_str(&format!(" · kernel {}", kernel.label()));
         }
         ui.horizontal(|ui| {
-            let compact_line = ui.label(RichText::new(short).monospace().small().color(
-                status_state_color(self.view.run_state),
-            ));
+            let compact_line = ui.label(
+                RichText::new(short)
+                    .monospace()
+                    .small()
+                    .color(status_state_color(self.view.run_state)),
+            );
             if announce_status {
                 let id = compact_line.id;
                 ui.ctx().accesskit_node_builder(id, |node| {
@@ -4848,11 +4833,7 @@ impl WorkbenchApp {
                     let selected = self.compact_pane == Some(pane);
                     let response = ui.selectable_label(selected, pane.label());
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::Role::Tab,
-                            true,
-                            pane.label().to_string(),
-                        )
+                        egui::WidgetInfo::labeled(egui::Role::Tab, true, pane.label().to_string())
                     });
                     ui.ctx().accesskit_node_builder(response.id, |node| {
                         node.set_selected(selected);
@@ -4894,8 +4875,7 @@ impl WorkbenchApp {
             let (line, column) = self.editors[active].line_col_1based();
             format!("run log · Ln {line}, Col {column}")
         };
-        let header_hint =
-            header_text_width(&header_line) + header_text_width("Logs") + 8.0 + 80.0;
+        let header_hint = header_text_width(&header_line) + header_text_width("Logs") + 8.0 + 80.0;
         with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 ui.label(
@@ -4942,7 +4922,8 @@ impl WorkbenchApp {
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             for entry in logs {
-                                let color = semantic::SemanticRole::for_log_kind(entry.kind).color();
+                                let color =
+                                    semantic::SemanticRole::for_log_kind(entry.kind).color();
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(entry.render()).monospace().color(color),
@@ -5005,7 +4986,8 @@ impl WorkbenchApp {
         // means the ring and the caret are already in place when the keys are read.
         if self.pane_focus == Some(Pane::Editor) {
             self.pane_focus = None;
-            ui.ctx().memory_mut(|memory| memory.request_focus(surface_id()));
+            ui.ctx()
+                .memory_mut(|memory| memory.request_focus(surface_id()));
         }
         let active = self.workbench.active();
         let (title, encoding) = match self.workbench.document(active) {
@@ -5077,11 +5059,16 @@ impl WorkbenchApp {
                 );
                 ui.label(RichText::new(&title).color(theme::accent()).monospace());
                 ui.label(RichText::new(&header_lines).color(theme::dim()));
-                ui.label(RichText::new(&encoding).monospace().small().color(theme::dim()))
-                    .on_hover_text(
-                        "The document's encoding and newline style; Save writes them back \
+                ui.label(
+                    RichText::new(&encoding)
+                        .monospace()
+                        .small()
+                        .color(theme::dim()),
+                )
+                .on_hover_text(
+                    "The document's encoding and newline style; Save writes them back \
                          unchanged unless the file is edited",
-                    );
+                );
                 if let Some(line) = &typography_line {
                     ui.label(RichText::new(line).monospace().small().color(theme::dim()))
                         .on_hover_text(
@@ -5346,9 +5333,7 @@ impl WorkbenchApp {
                         )
                         .on_hover_text("The literal replacement text");
                     label_input(ui, &replacement, "Replacement text");
-                    if replacement.has_focus()
-                        && ui.input(|input| input.key_pressed(Key::Enter))
-                    {
+                    if replacement.has_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                         replace = true;
                     }
                     let replace_button = ui
@@ -5361,7 +5346,8 @@ impl WorkbenchApp {
                     let replace_all_button = ui.button("Replace all").on_hover_text(
                         "Replace every match in one undo step; each match is rewritten once",
                     );
-                    self.find_buttons.push(("Replace all", replace_all_button.rect));
+                    self.find_buttons
+                        .push(("Replace all", replace_all_button.rect));
                     if replace_all_button.clicked() {
                         replace_all = true;
                     }
@@ -5419,8 +5405,7 @@ impl WorkbenchApp {
         let mut header_hint = if compact {
             36.0 + 48.0 + 78.0 + 72.0 + 100.0 + 105.0 + 16.0
         } else {
-            36.0
-                + 48.0
+            36.0 + 48.0
                 + 78.0
                 + 72.0
                 + 8.0
@@ -5484,12 +5469,8 @@ impl WorkbenchApp {
                     self.plot.zoom_step(plot::WHEEL_STEP);
                 }
                 if !compact {
-                    ui.label(
-                        RichText::new(&zoom_label)
-                            .monospace()
-                            .color(theme::dim()),
-                    )
-                    .on_hover_text("Zoom as a percentage of natural size");
+                    ui.label(RichText::new(&zoom_label).monospace().color(theme::dim()))
+                        .on_hover_text("Zoom as a percentage of natural size");
                     ui.separator();
                     match &plot_title {
                         Some(title) => {
@@ -5508,9 +5489,7 @@ impl WorkbenchApp {
                     // a UIA capture rather than only in the painted pixels.
                     ui.add(
                         egui::Label::new(
-                            RichText::new(&provenance_label)
-                                .small()
-                                .color(theme::dim()),
+                            RichText::new(&provenance_label).small().color(theme::dim()),
                         )
                         .truncate(),
                     )
@@ -5588,8 +5567,7 @@ impl WorkbenchApp {
                     // the same number the canvas badge draws at the series' first point. The
                     // number labels are real text nodes, so a UIA dump names them.
                     for (number, color) in &legend {
-                        let (swatch, _) =
-                            ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                        let (swatch, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                         ui.painter().rect_filled(swatch, 1.0, *color);
                         ui.label(
                             RichText::new(format!("series {number}"))
@@ -5807,21 +5785,19 @@ impl WorkbenchApp {
         };
         let name = plot::export_file_name(self.plot_title().as_deref(), "png");
         let path = directory.join(&name);
-        self.plot_export_status = Some(match self.plot.export_png_to(
-            &path,
-            2.0,
-            PngBackground::Opaque,
-        ) {
-            Ok([width, height]) => (
-                format!(
-                    "PNG: {width}x{height} px {} -> {}",
-                    PngBackground::Opaque.label(),
-                    name
+        self.plot_export_status = Some(
+            match self.plot.export_png_to(&path, 2.0, PngBackground::Opaque) {
+                Ok([width, height]) => (
+                    format!(
+                        "PNG: {width}x{height} px {} -> {}",
+                        PngBackground::Opaque.label(),
+                        name
+                    ),
+                    false,
                 ),
-                false,
-            ),
-            Err(error) => (error, true),
-        });
+                Err(error) => (error, true),
+            },
+        );
     }
 
     /// A11Y-007: the Help > Keyboard Shortcuts dialog.
@@ -5977,11 +5953,9 @@ impl WorkbenchApp {
                 );
                 ui.separator();
                 ui.horizontal(|ui| {
-                    let set = ui
-                        .add(egui::Button::new("Set precision"))
-                        .on_hover_text(
-                            "Apply the precision. Every later evaluation runs at this precision.",
-                        );
+                    let set = ui.add(egui::Button::new("Set precision")).on_hover_text(
+                        "Apply the precision. Every later evaluation runs at this precision.",
+                    );
                     let cancel = ui
                         .add(egui::Button::new("Cancel"))
                         .on_hover_text("Leave the precision unchanged");
@@ -6670,15 +6644,13 @@ impl WorkbenchApp {
         if pane_focus == Some(Pane::Workspace) {
             if let Some(id) = self.workspace_tab_ids[0] {
                 self.pane_focus = None;
-                ui.ctx()
-                    .memory_mut(|memory| memory.request_focus(id));
+                ui.ctx().memory_mut(|memory| memory.request_focus(id));
             }
         }
         if self.filter_focus {
             if let Some(id) = self.workspace_filter_id {
                 self.filter_focus = false;
-                ui.ctx()
-                    .memory_mut(|memory| memory.request_focus(id));
+                ui.ctx().memory_mut(|memory| memory.request_focus(id));
             }
         }
     }
@@ -7276,10 +7248,11 @@ impl WorkbenchApp {
             Some(LogRequest::CopyDetails(index)) => {
                 let line = self.view.logs.get(index).cloned();
                 if let Some(line) = line {
-                    ui.ctx()
-                        .copy_text(format!("{}\r\n", line.text.trim_end()));
-                    self.log_status =
-                        Some(format!("copied diagnostic details ({} chars)", line.text.len()));
+                    ui.ctx().copy_text(format!("{}\r\n", line.text.trim_end()));
+                    self.log_status = Some(format!(
+                        "copied diagnostic details ({} chars)",
+                        line.text.len()
+                    ));
                 }
             }
             Some(LogRequest::Save) => {
@@ -7361,10 +7334,7 @@ impl WorkbenchApp {
         let count = self.view.logs.len();
         match std::fs::write(&path, text.as_bytes()) {
             Ok(()) => {
-                self.log_status = Some(format!(
-                    "saved {count} log line(s) to {}",
-                    path.display()
-                ));
+                self.log_status = Some(format!("saved {count} log line(s) to {}", path.display()));
             }
             Err(error) => {
                 self.log_status = Some(format!("save log failed: {error}"));
@@ -7379,7 +7349,10 @@ impl WorkbenchApp {
     /// named.
     fn jump_to_source_position(&mut self, line: usize, column: usize, ctx: &egui::Context) {
         let active = self.workbench.active();
-        if self.editors[active].jump_to_position(line, column).is_some() {
+        if self.editors[active]
+            .jump_to_position(line, column)
+            .is_some()
+        {
             self.request_pane_focus(Pane::Editor, ctx);
             self.pending_focus = Some(surface_id());
             self.log_status = Some(format!("opened source at {line}:{column}"));
@@ -7387,7 +7360,6 @@ impl WorkbenchApp {
             self.log_status = Some(format!("no source position {line}:{column} in this buffer"));
         }
     }
-
 
     /// LAY-002: the dedicated Symbolic Inspector pane.
     ///
@@ -7412,51 +7384,57 @@ impl WorkbenchApp {
         let expansion = &mut self.inspector_expansion;
         let mut toggles: Vec<TreeRowSeam> = Vec::new();
         let mut controls: Vec<(String, Rect)> = Vec::new();
-        with_pane(ui, rect, "Symbolic Inspector", header_hint, |ui, header, body| {
-            header_row(ui, header, |ui| {
-                ui.label(
-                    RichText::new("Symbolic Inspector")
-                        .font(type_scale::Role::PaneTitle.font())
-                        .color(theme::text()),
-                );
-                ui.label(RichText::new(&state_line).small().color(theme::dim()))
-                    .on_hover_text(
-                        "The six symbolic sections of the last committed result; the editor \
-                         buffer is never inspected",
+        with_pane(
+            ui,
+            rect,
+            "Symbolic Inspector",
+            header_hint,
+            |ui, header, body| {
+                header_row(ui, header, |ui| {
+                    ui.label(
+                        RichText::new("Symbolic Inspector")
+                            .font(type_scale::Role::PaneTitle.font())
+                            .color(theme::text()),
                     );
-            });
-            ui.scope_builder(
-                UiBuilder::new()
-                    .max_rect(body.shrink2(vec2(8.0, 4.0)))
-                    .layout(Layout::top_down(Align::Min)),
-                |ui| {
-                    let width = (body.width() - 112.0).max(80.0);
-                    // LAY-011: egui's default minimum scrolled size is 64 points, which is taller
-                    // than the bottom strip at the minimum window; the viewport would then report
-                    // rows below the pane even though the paint clip is correct. The body is the
-                    // authority for this pane's viewport, so the minimum is removed.
-                    egui::ScrollArea::vertical()
-                        .id_salt("symbolic_inspector_scroll")
-                        .min_scrolled_height(0.0)
-                        .min_scrolled_width(0.0)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let inspector_action = paint_inspector(
-                                ui,
-                                view,
-                                width,
-                                expansion,
-                                &mut toggles,
-                                &mut controls,
-                                export_dir.as_deref(),
-                            );
-                            if inspector_action == Some(empty::EmptyAction::Run) {
-                                self.workbench.run_active();
-                            }
-                        });
-                },
-            );
-        });
+                    ui.label(RichText::new(&state_line).small().color(theme::dim()))
+                        .on_hover_text(
+                            "The six symbolic sections of the last committed result; the editor \
+                         buffer is never inspected",
+                        );
+                });
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .max_rect(body.shrink2(vec2(8.0, 4.0)))
+                        .layout(Layout::top_down(Align::Min)),
+                    |ui| {
+                        let width = (body.width() - 112.0).max(80.0);
+                        // LAY-011: egui's default minimum scrolled size is 64 points, which is taller
+                        // than the bottom strip at the minimum window; the viewport would then report
+                        // rows below the pane even though the paint clip is correct. The body is the
+                        // authority for this pane's viewport, so the minimum is removed.
+                        egui::ScrollArea::vertical()
+                            .id_salt("symbolic_inspector_scroll")
+                            .min_scrolled_height(0.0)
+                            .min_scrolled_width(0.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let inspector_action = paint_inspector(
+                                    ui,
+                                    view,
+                                    width,
+                                    expansion,
+                                    &mut toggles,
+                                    &mut controls,
+                                    export_dir.as_deref(),
+                                );
+                                if inspector_action == Some(empty::EmptyAction::Run) {
+                                    self.workbench.run_active();
+                                }
+                            });
+                    },
+                );
+            },
+        );
         self.symbolic_inspector_toggle_rects = toggles;
         self.symbolic_inspector_control_rects = controls;
     }
@@ -7860,13 +7838,9 @@ fn paint_inspector(
             for attempt in attempts {
                 ui.add_space(2.0);
                 ui.label(
-                    RichText::new(format!(
-                        "{}  {}",
-                        attempt.rule_id,
-                        attempt.status_label()
-                    ))
-                    .monospace()
-                    .color(theme::warning()),
+                    RichText::new(format!("{}  {}", attempt.rule_id, attempt.status_label()))
+                        .monospace()
+                        .color(theme::warning()),
                 );
                 ui.label(
                     RichText::new(format!("precondition  {}", attempt.precondition))
@@ -7967,14 +7941,27 @@ fn paint_inspector_assumption(ui: &mut Ui, assumption: &crate::inspector::Assump
                 .small()
                 .color(theme::dim()),
         );
-        ui.label(RichText::new(assumption.type_label()).small().color(theme::accent()));
-        ui.label(RichText::new(&assumption.label).monospace().color(theme::text()));
+        ui.label(
+            RichText::new(assumption.type_label())
+                .small()
+                .color(theme::accent()),
+        );
+        ui.label(
+            RichText::new(&assumption.label)
+                .monospace()
+                .color(theme::text()),
+        );
     });
     if let Some(canonical) = &assumption.canonical {
         ui.horizontal_wrapped(|ui| {
             ui.add_space(12.0);
             ui.label(RichText::new("canonical").small().color(theme::dim()));
-            ui.label(RichText::new(canonical).small().monospace().color(theme::dim()));
+            ui.label(
+                RichText::new(canonical)
+                    .small()
+                    .monospace()
+                    .color(theme::dim()),
+            );
         });
     }
 }
@@ -8024,8 +8011,7 @@ fn paint_result_status(ui: &mut Ui, view: &DocumentView) {
             )
             .on_hover_text(format!("{}: {}", badge.tone.label(), badge.detail));
             ui.add(
-                egui::Label::new(RichText::new(&badge.detail).small().color(theme::dim()))
-                    .wrap(),
+                egui::Label::new(RichText::new(&badge.detail).small().color(theme::dim())).wrap(),
             );
         }
     });
@@ -8159,14 +8145,21 @@ fn paint_inspector_tree(
                         row.path,
                         if row.collapsed { "expand" } else { "collapse" }
                     ));
-                    toggles.push(TreeRowSeam { path: row.path.clone(), rect: response.rect, id: response.id });
+                    toggles.push(TreeRowSeam {
+                        path: row.path.clone(),
+                        rect: response.rect,
+                        id: response.id,
+                    });
 
                     // SYM-003: copy this node's engine canonical form.
                     let enabled = !row.canonical.is_empty();
                     let copy = ui.add_enabled(
                         enabled,
                         egui::Button::new(
-                            RichText::new("copy").small().monospace().color(theme::dim()),
+                            RichText::new("copy")
+                                .small()
+                                .monospace()
+                                .color(theme::dim()),
                         )
                         .frame(false),
                     );
@@ -8302,8 +8295,7 @@ fn export_mathir(ui: &mut Ui, view: &DocumentView, text: &str, dir: Option<&Path
             data.insert_temp(
                 inspector_status_id(),
                 (
-                    "Export MathIR: this window has no writable application directory"
-                        .to_string(),
+                    "Export MathIR: this window has no writable application directory".to_string(),
                     true,
                 ),
             )
@@ -8496,8 +8488,9 @@ fn paint_mathir_body(
             egui::Button::new(RichText::new("Export MathIR").small()),
         );
         let export_name = "Export MathIR".to_string();
-        export
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, export_name.clone()));
+        export.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, true, export_name.clone())
+        });
         let export = export.on_hover_text(match export_dir {
             Some(dir) => format!("Write the IR unchanged to {}", dir.display()),
             None => "This window has no writable application directory".to_string(),
@@ -8507,9 +8500,13 @@ fn paint_mathir_body(
             exported = true;
         }
         ui.label(
-            RichText::new(format!("{} bytes · {} lines", mathir.text.len(), mathir.text.lines().count()))
-                .small()
-                .color(theme::dim()),
+            RichText::new(format!(
+                "{} bytes · {} lines",
+                mathir.text.len(),
+                mathir.text.lines().count()
+            ))
+            .small()
+            .color(theme::dim()),
         );
     });
     if copied {
@@ -8518,14 +8515,15 @@ fn paint_mathir_body(
     if exported {
         export_mathir(ui, view, &mathir.text, export_dir);
     }
-    if let Some((message, error)) = ui.data(|data| data.get_temp::<(String, bool)>(inspector_status_id()))
+    if let Some((message, error)) =
+        ui.data(|data| data.get_temp::<(String, bool)>(inspector_status_id()))
     {
         ui.add(
-            egui::Label::new(
-                RichText::new(message)
-                    .small()
-                    .color(if error { theme::warning() } else { theme::positive() }),
-            )
+            egui::Label::new(RichText::new(message).small().color(if error {
+                theme::warning()
+            } else {
+                theme::positive()
+            }))
             .wrap(),
         );
     }
@@ -8586,20 +8584,15 @@ fn paint_result_section(
     let projection = ResultProjection::new(view.result.clone(), view.result_structured.clone());
     // RES-002: exactness and provenance, from the projection and the committed precision. A
     // value whose projection states no exactness says so instead of implying it is exact.
-    if let Some(provenance) =
-        crate::results_tree::Provenance::of(&projection, view.precision)
-    {
+    if let Some(provenance) = crate::results_tree::Provenance::of(&projection, view.precision) {
         let line = provenance.line();
-        ui.label(
-            RichText::new(&line)
-                .small()
-                .monospace()
-                .color(if provenance.exactness == crate::results_tree::Exactness::Approximate {
-                    theme::warning()
-                } else {
-                    theme::dim()
-                }),
-        )
+        ui.label(RichText::new(&line).small().monospace().color(
+            if provenance.exactness == crate::results_tree::Exactness::Approximate {
+                theme::warning()
+            } else {
+                theme::dim()
+            },
+        ))
         .on_hover_text(
             "The engine's own kind, exactness and precision for this value, and any print budget \
              that shortened its rendering",
@@ -8662,7 +8655,10 @@ fn paint_toggle(
     let visible = expansion.header_text(path, label);
     let response = ui
         .push_id(path, |ui| {
-            ui.add(egui::Button::new(RichText::new(visible).monospace().color(theme::accent())).frame(false))
+            ui.add(
+                egui::Button::new(RichText::new(visible).monospace().color(theme::accent()))
+                    .frame(false),
+            )
         })
         .inner;
     if response.clicked() {
@@ -8776,7 +8772,11 @@ fn describe_scalar_detail(key: &str, raw: &str) -> String {
 
 /// The absent value, painted where a node would be.
 fn paint_absent(ui: &mut Ui) {
-    ui.label(RichText::new("Null - no value").monospace().color(theme::dim()));
+    ui.label(
+        RichText::new("Null - no value")
+            .monospace()
+            .color(theme::dim()),
+    );
 }
 
 /// Paints one matrix cell. A scalar (the common case) is compact on the cell's row; a symbolic
@@ -8853,7 +8853,11 @@ fn paint_symbolic_body(ui: &mut Ui, symbolic: &crate::results_tree::SymbolicNode
         );
     }
     for (key, value) in &symbolic.details {
-        ui.label(RichText::new(format!("{key}={value}")).small().color(theme::dim()));
+        ui.label(
+            RichText::new(format!("{key}={value}"))
+                .small()
+                .color(theme::dim()),
+        );
     }
 }
 
@@ -9007,8 +9011,7 @@ fn paint_virtual_array(ui: &mut Ui, array: &ArrayNode, path: &str) {
                     );
                     for column_index in 0..painted_columns {
                         let node = if array.is_matrix() && !rows.is_empty() {
-                            rows.get(row_index)
-                                .and_then(|row| row.get(column_index))
+                            rows.get(row_index).and_then(|row| row.get(column_index))
                         } else {
                             array.elements.get(row_index)
                         };
@@ -9222,8 +9225,13 @@ fn paint_variable_detail(ui: &mut Ui, row: &crate::workspace_table::VariableRow)
             });
             let (shown, hidden) = bounded_value_text(&row.display);
             ui.add(
-                egui::Label::new(RichText::new(&shown).monospace().small().color(theme::text()))
-                    .wrap(),
+                egui::Label::new(
+                    RichText::new(&shown)
+                        .monospace()
+                        .small()
+                        .color(theme::text()),
+                )
+                .wrap(),
             );
             if hidden > 0 {
                 ui.label(
@@ -9381,7 +9389,11 @@ fn paint_value_structure(ui: &mut Ui, structured: &lovelace_json::Json) {
                     lovelace_json::Json::Num(text) => Some(text.clone()),
                     _ => None,
                 })
-                .or_else(|| child.get("pretty").and_then(|pretty| pretty.as_str().map(str::to_string)))
+                .or_else(|| {
+                    child
+                        .get("pretty")
+                        .and_then(|pretty| pretty.as_str().map(str::to_string))
+                })
                 .unwrap_or_default(),
         };
         let name = child
@@ -9570,7 +9582,8 @@ fn column_header(ui: &mut Ui, width: f32, label: &str, sorted: bool) -> Response
         egui::Button::new(RichText::new(label).small()).frame(false),
     );
     let name = label.to_string();
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColumnHeader, true, name.clone()));
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColumnHeader, true, name.clone()));
     // `WidgetInfo::selected` fills the *toggled* property, which is the check-box state; a
     // column header's sort state is its `selected` property in the platform tree.
     ui.ctx()
@@ -9666,8 +9679,7 @@ fn faulted_capture_svg(svg: &str) -> String {
                 for point in 0..30_000 {
                     let x = 8.0 + point as f32 * (784.0 / 29_999.0);
                     let y = base
-                        + 42.0
-                            * ((point as f32 * 0.19) + series as f32 * 1.7).sin()
+                        + 42.0 * ((point as f32 * 0.19) + series as f32 * 1.7).sin()
                         + 10.0 * ((point as f32 * 0.031) + series as f32).cos();
                     svg.push_str(&format!("{x:.1},{y:.1} "));
                 }
@@ -9731,8 +9743,12 @@ fn with_pane<R>(
         |ui| {
             ui.shrink_clip_rect(rect);
             ui.painter().rect_filled(rect, 4.0, theme::panel_bg());
-            ui.painter()
-                .rect_stroke(rect, 4.0, Stroke::new(1.0, theme::border()), StrokeKind::Inside);
+            ui.painter().rect_stroke(
+                rect,
+                4.0,
+                Stroke::new(1.0, theme::border()),
+                StrokeKind::Inside,
+            );
             let header = Rect::from_min_size(rect.min, vec2(rect.width(), header_h));
             ui.painter().rect_filled(header, 4.0, theme::header_bg());
             let body_top = (header.bottom() + 1.0).min(rect.bottom() - 1.0);
@@ -9759,7 +9775,13 @@ struct SplitterOutcome {
     keyboard: bool,
 }
 
-fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &str) -> SplitterOutcome {
+fn splitter(
+    ui: &mut Ui,
+    rect: Rect,
+    salt: &str,
+    horizontal_axis: bool,
+    label: &str,
+) -> SplitterOutcome {
     let id = Id::unique(salt);
     let response = ui.interact(rect, id, Sense::click_and_drag());
     if response.clicked() || response.drag_started() || response.is_pointer_button_down_on() {
@@ -9767,15 +9789,29 @@ fn splitter(ui: &mut Ui, rect: Rect, salt: &str, horizontal_axis: bool, label: &
     }
     let focused = response.has_focus();
     let hot = response.hovered() || response.dragged() || focused;
-    ui.painter()
-        .rect_filled(rect, 0.0, if hot { theme::splitter_hot() } else { theme::splitter_bg() });
+    ui.painter().rect_filled(
+        rect,
+        0.0,
+        if hot {
+            theme::splitter_hot()
+        } else {
+            theme::splitter_bg()
+        },
+    );
     let grip = if horizontal_axis {
         Rect::from_center_size(rect.center(), vec2(2.0, rect.height()))
     } else {
         Rect::from_center_size(rect.center(), vec2(rect.width(), 2.0))
     };
-    ui.painter()
-        .rect_filled(grip, 1.0, if hot { theme::accent() } else { theme::control_border() });
+    ui.painter().rect_filled(
+        grip,
+        1.0,
+        if hot {
+            theme::accent()
+        } else {
+            theme::control_border()
+        },
+    );
 
     if hot {
         ui.ctx().set_cursor_icon(if horizontal_axis {
@@ -9985,8 +10021,7 @@ mod tests {
         }));
         let mut app = WorkbenchApp::with_workbench(workbench);
         let ctx = egui::Context::default();
-        app.workbench
-            .set_source(0, "sqrt(2)\n".to_string());
+        app.workbench.set_source(0, "sqrt(2)\n".to_string());
         assert!(
             app.workbench.run_active(),
             "the run must be accepted before a frame can paint it"
@@ -10208,7 +10243,11 @@ mod tests {
         let before_focus = ctx.memory(|memory| memory.focused());
         let before_revision = app.workbench.documents()[0].revision;
         let before_dirty = app.workbench.documents()[0].dirty();
-        assert_eq!(app.theme, theme::ThemeId::Dark, "dark is the shipped default");
+        assert_eq!(
+            app.theme,
+            theme::ThemeId::Dark,
+            "dark is the shipped default"
+        );
         assert_eq!(before_focus, Some(surface_id()), "the editor owns focus");
         assert!(app.workbench.documents()[0].source.contains("41 + 17"));
         assert_eq!(
@@ -10227,9 +10266,14 @@ mod tests {
         pointer_click(&ctx, &mut app, button.center());
 
         assert_eq!(app.theme, theme::ThemeId::Light, "the toggle switched");
-        assert_eq!(app.settings.theme, theme::ThemeId::Light, "the choice persists");
         assert_eq!(
-            app.workbench.documents()[0].source, before_source,
+            app.settings.theme,
+            theme::ThemeId::Light,
+            "the choice persists"
+        );
+        assert_eq!(
+            app.workbench.documents()[0].source,
+            before_source,
             "the document text must survive the theme switch"
         );
         assert_eq!(
@@ -10242,7 +10286,8 @@ mod tests {
             "the text selection must survive the theme switch"
         );
         assert_eq!(
-            app.workbench.documents()[0].revision, before_revision,
+            app.workbench.documents()[0].revision,
+            before_revision,
             "the theme switch must not advance the document revision"
         );
         assert_eq!(
@@ -10263,8 +10308,14 @@ mod tests {
         let light = theme::tokens_for(theme::ThemeId::Light);
         assert_eq!(ctx.global_style().visuals.panel_fill, light.app_bg);
         assert_eq!(ctx.global_style().visuals.window_fill, light.window_bg);
-        assert_eq!(ctx.global_style().visuals.widgets.inactive.bg_fill, light.button_bg);
-        assert!(!ctx.global_style().visuals.dark_mode, "light text transfer function");
+        assert_eq!(
+            ctx.global_style().visuals.widgets.inactive.bg_fill,
+            light.button_bg
+        );
+        assert!(
+            !ctx.global_style().visuals.dark_mode,
+            "light text transfer function"
+        );
 
         // Switching back restores the dark tokens and still preserves the buffer and focus.
         let button = app.theme_button.expect("still painted");
@@ -10300,7 +10351,11 @@ mod tests {
     #[test]
     fn the_status_strip_uses_the_semantic_status_tokens() {
         use crate::run_state::RunState;
-        frame(&egui::Context::default(), &mut app_with_source("1", 0, 0), Vec::new());
+        frame(
+            &egui::Context::default(),
+            &mut app_with_source("1", 0, 0),
+            Vec::new(),
+        );
         let dark = theme::tokens_for(theme::ThemeId::Dark);
         assert_eq!(status_state_color(RunState::Finished), dark.positive);
         assert_eq!(status_state_color(RunState::Failed), dark.error);
@@ -10426,7 +10481,10 @@ mod tests {
         );
         assert_eq!(app.editors[0].line_col_1based(), (3, 1));
         assert_eq!(app.editors[0].source(), "one\ntwo\nthree\nfour");
-        assert!(app.goto_line.is_none(), "a successful jump closes the prompt");
+        assert!(
+            app.goto_line.is_none(),
+            "a successful jump closes the prompt"
+        );
     }
 
     #[test]
@@ -10615,7 +10673,9 @@ mod tests {
             "typing in the find field must not edit the document"
         );
         assert!(
-            app.find_buttons.iter().any(|(label, _)| *label == "Replace all"),
+            app.find_buttons
+                .iter()
+                .any(|(label, _)| *label == "Replace all"),
             "the bar paints the replace actions"
         );
 
@@ -10686,7 +10746,8 @@ mod tests {
         pointer_click(&ctx, &mut app, replace_all);
         assert_eq!(app.editors[0].source(), "1 two 1 two 1");
         assert_eq!(
-            app.workbench.documents()[0].source, "1 two 1 two 1",
+            app.workbench.documents()[0].source,
+            "1 two 1 two 1",
             "the bar publishes the rewritten buffer through the same path as a typed edit"
         );
         assert_eq!(
@@ -10730,16 +10791,19 @@ mod tests {
         let regex = find_bar_button(&app, ".*");
         pointer_click(&ctx, &mut app, regex);
         assert_eq!(
-            app.editors[0].find.error().map(|error| {
-                error.contains("Invalid regular expression")
-            }),
+            app.editors[0]
+                .find
+                .error()
+                .map(|error| { error.contains("Invalid regular expression") }),
             Some(true),
             "the invalid pattern is a visible error state"
         );
-        assert!(app.editors[0]
-            .find_summary()
-            .expect("open")
-            .starts_with("Find: invalid regex"));
+        assert!(
+            app.editors[0]
+                .find_summary()
+                .expect("open")
+                .starts_with("Find: invalid regex")
+        );
         assert_eq!(app.editors[0].find.count_text(), None);
 
         // Replace all with an invalid pattern must be a no-op, not a panic.
@@ -10763,12 +10827,7 @@ mod tests {
             "the popup and the header carry the engine's sqrt(x) signature"
         );
 
-        let mut compile = completion_app(
-            "",
-            0,
-            0,
-            vec![builtin("compile", &["f", "params"])],
-        );
+        let mut compile = completion_app("", 0, 0, vec![builtin("compile", &["f", "params"])]);
         let ctx = egui::Context::default();
         frame(&ctx, &mut compile, Vec::new());
         for ch in "compile(".chars() {
@@ -11288,10 +11347,7 @@ mod tests {
         frame(
             &ctx,
             &mut app,
-            vec![
-                egui::Event::ModifiersChanged(ctrl),
-                key(Key::Enter, ctrl),
-            ],
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::Enter, ctrl)],
         );
         assert_eq!(
             app.workbench.documents()[0].state(),
@@ -11309,10 +11365,7 @@ mod tests {
         frame(
             &ctx,
             &mut app,
-            vec![
-                egui::Event::ModifiersChanged(ctrl),
-                key(Key::Enter, ctrl),
-            ],
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::Enter, ctrl)],
         );
         assert!(
             app.workbench.active_is_running(),
@@ -11360,10 +11413,7 @@ mod tests {
         frame(
             &ctx,
             &mut app,
-            vec![
-                egui::Event::ModifiersChanged(ctrl),
-                key(Key::Enter, ctrl),
-            ],
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::Enter, ctrl)],
         );
         assert_eq!(
             app.workbench.documents()[0].state(),
@@ -11381,14 +11431,14 @@ mod tests {
                 active_range_chars: None,
             })],
         );
-        assert!(!app.ime_composition, "the empty pre-edit ended the composition");
+        assert!(
+            !app.ime_composition,
+            "the empty pre-edit ended the composition"
+        );
         frame(
             &ctx,
             &mut app,
-            vec![
-                egui::Event::ModifiersChanged(ctrl),
-                key(Key::Enter, ctrl),
-            ],
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::Enter, ctrl)],
         );
         assert!(
             app.workbench.active_is_running(),
@@ -11419,9 +11469,7 @@ mod tests {
         frame(
             &ctx,
             &mut app,
-            vec![egui::Event::Ime(egui::ImeEvent::Commit(
-                "か".to_string(),
-            ))],
+            vec![egui::Event::Ime(egui::ImeEvent::Commit("か".to_string()))],
         );
         assert!(
             app.editors[0].source().starts_with("か"),
@@ -12942,8 +12990,7 @@ mod tests {
                                     (
                                         "canonical",
                                         Json::Str(
-                                            "(mul (rat 3 1) (pow (sym x) (rat 2 1)))"
-                                                .to_string(),
+                                            "(mul (rat 3 1) (pow (sym x) (rat 2 1)))".to_string(),
                                         ),
                                     ),
                                     (
@@ -13033,10 +13080,7 @@ mod tests {
                                         Json::Str("pow.sqrt-square-nonnegative".to_string()),
                                     ),
                                     ("patternMatched", Json::Bool(true)),
-                                    (
-                                        "precondition",
-                                        Json::Str("NotApplicable".to_string()),
-                                    ),
+                                    ("precondition", Json::Str("NotApplicable".to_string())),
                                     (
                                         "reason",
                                         Json::Str(
@@ -13213,10 +13257,9 @@ mod tests {
         // SYM-005: the step states its applicability instead of claiming the engine publishes
         // none, and the wording distinguishes "conditioned" from "unconditional".
         assert!(
-            texts
-                .iter()
-                .any(|text| text
-                    == "applicability  conditioned (met under the required conditions)"),
+            texts.iter().any(
+                |text| text == "applicability  conditioned (met under the required conditions)"
+            ),
             "the step's applicability is painted: {texts:?}"
         );
         assert!(
@@ -13424,10 +13467,7 @@ mod tests {
             ("kind", Json::Str("Add".to_string())),
             ("label", Json::Str("sum".to_string())),
             ("canonical", Json::Str("(add ...)".to_string())),
-            (
-                "children",
-                Json::Arr((0..children).map(leaf).collect()),
-            ),
+            ("children", Json::Arr((0..children).map(leaf).collect())),
         ]);
         let mut view = result_view("Symbolic sum");
         view.result_inspection = Some(Json::obj([
@@ -13476,7 +13516,10 @@ mod tests {
                 ("kind", Json::Str("Add".to_string())),
                 ("label", Json::Str(format!("d{level}"))),
                 ("canonical", Json::Str(format!("(add d{level})"))),
-                ("children", Json::Arr(vec![node(level - 1), node(level - 1)])),
+                (
+                    "children",
+                    Json::Arr(vec![node(level - 1), node(level - 1)]),
+                ),
             ])
         }
         let mut view = result_view("Symbolic d");
@@ -13491,10 +13534,7 @@ mod tests {
             (
                 "sections",
                 Json::obj([
-                    (
-                        "pretty",
-                        Json::obj([("text", Json::Str("d".to_string()))]),
-                    ),
+                    ("pretty", Json::obj([("text", Json::Str("d".to_string()))])),
                     (
                         "tree",
                         Json::obj([
@@ -13548,8 +13588,10 @@ mod tests {
             "the clipboard carries the engine canonical form of that node only"
         );
         assert!(
-            texts.iter().any(|text| text
-                .starts_with("Copied Pow · x^2 [inspect.tree.1] expanded (23 bytes)")),
+            texts
+                .iter()
+                .any(|text| text
+                    .starts_with("Copied Pow · x^2 [inspect.tree.1] expanded (23 bytes)")),
             "the pane reports the copy with its size: {texts:?}"
         );
     }
@@ -13587,7 +13629,8 @@ mod tests {
                 vec![key_press(key)],
                 None,
             );
-            let _ = paint_inspector_pass(&ctx, &view, &mut expansion, &mut toggles, Vec::new(), None);
+            let _ =
+                paint_inspector_pass(&ctx, &view, &mut expansion, &mut toggles, Vec::new(), None);
             let focused = ctx.memory(|memory| memory.focused());
             let named = toggles
                 .iter()
@@ -13613,9 +13656,13 @@ mod tests {
             expansion.is_collapsed("inspect.tree"),
             "ArrowLeft on an expanded node collapses it"
         );
-        let collapsed = paint_inspector_frame(&ctx, &view, &mut expansion, &mut toggles, Vec::new());
+        let collapsed =
+            paint_inspector_frame(&ctx, &view, &mut expansion, &mut toggles, Vec::new());
         assert_eq!(
-            collapsed.iter().filter(|text| text.starts_with('\u{25be}')).count(),
+            collapsed
+                .iter()
+                .filter(|text| text.starts_with('\u{25be}'))
+                .count(),
             0,
             "the collapsed tree paints no expanded row: {collapsed:?}"
         );
@@ -13683,7 +13730,10 @@ mod tests {
         let boolean = |value: bool| {
             Json::obj([
                 ("kind", Json::Str("Boolean".to_string())),
-                ("value", Json::Str(if value { "true" } else { "false" }.to_string())),
+                (
+                    "value",
+                    Json::Str(if value { "true" } else { "false" }.to_string()),
+                ),
             ])
         };
         let solve_view = |variant: &str, complete: bool| {
@@ -13811,12 +13861,14 @@ mod tests {
                 "{class} must carry its own syntax colour: {colors:?}"
             );
         }
-        let distinct = colors.iter().fold(Vec::new(), |mut seen: Vec<Color32>, color| {
-            if !seen.contains(color) {
-                seen.push(*color);
-            }
-            seen
-        });
+        let distinct = colors
+            .iter()
+            .fold(Vec::new(), |mut seen: Vec<Color32>, color| {
+                if !seen.contains(color) {
+                    seen.push(*color);
+                }
+                seen
+            });
         assert!(
             distinct.len() >= 3,
             "the IR view is highlighted, not one flat colour: {distinct:?}"
@@ -13924,7 +13976,8 @@ mod tests {
     /// changes neither the payload nor the painted inspector; a new committed result does both.
     #[test]
     #[cfg(feature = "real-engine")]
-    fn the_inspector_is_bound_to_the_committed_result_not_the_buffer() {        let mut workbench =
+    fn the_inspector_is_bound_to_the_committed_result_not_the_buffer() {
+        let mut workbench =
             Workbench::with_factory(Box::new(|| Box::new(crate::engine::RealEngine::new())));
         workbench.set_source(
             0,
@@ -14343,7 +14396,9 @@ mod tests {
         frame(&ctx, &mut app, vec![key(Key::S, ctrl_modifiers())]);
         settle(&ctx, &mut app);
 
-        let summary = app.conflict_summary().expect("Save must open the conflict prompt");
+        let summary = app
+            .conflict_summary()
+            .expect("Save must open the conflict prompt");
         assert_eq!(summary.headline, "File changed on disk");
         assert_eq!(summary.target, path);
         assert_eq!(
@@ -14449,10 +14504,11 @@ mod tests {
         // The buffer is dirty, so Reload first asks whether to discard it.
         let summary = app.conflict_summary().expect("the confirmation is open");
         assert!(summary.confirm_reload);
-        assert!(app
-            .reload_buttons
-            .iter()
-            .any(|(choice, _)| *choice == ReloadAnswer::DiscardAndReload));
+        assert!(
+            app.reload_buttons
+                .iter()
+                .any(|(choice, _)| *choice == ReloadAnswer::DiscardAndReload)
+        );
 
         let discard = reload_button(&app, ReloadAnswer::DiscardAndReload);
         pointer_click(&ctx, &mut app, discard);
@@ -14491,7 +14547,9 @@ mod tests {
         frame(&ctx, &mut app, vec![key(Key::S, ctrl_modifiers())]);
         settle(&ctx, &mut app);
 
-        let summary = app.conflict_summary().expect("Save must report the missing file");
+        let summary = app
+            .conflict_summary()
+            .expect("Save must report the missing file");
         assert_eq!(summary.headline, "File missing on disk");
         assert!(!path.exists(), "Save must not recreate a deleted file");
         assert_eq!(app.workbench.documents()[index].source, "a = 2\n");
@@ -14588,9 +14646,11 @@ mod tests {
         let mut app = WorkbenchApp::with_workbench(workbench);
         let ctx = egui::Context::default();
         settle(&ctx, &mut app);
-        assert!(!app.workbench.documents()[index]
-            .tab_label()
-            .contains("changed on disk"));
+        assert!(
+            !app.workbench.documents()[index]
+                .tab_label()
+                .contains("changed on disk")
+        );
 
         // The window was in the background while another program wrote the file; regaining focus
         // must probe immediately rather than wait for the 750 ms poll.
@@ -14602,9 +14662,11 @@ mod tests {
             app.workbench.documents()[index].disk_status,
             crate::document_io::DiskStatus::Changed
         );
-        assert!(app.workbench.documents()[index]
-            .tab_label()
-            .contains("changed on disk"));
+        assert!(
+            app.workbench.documents()[index]
+                .tab_label()
+                .contains("changed on disk")
+        );
         assert!(
             app.workbench.documents()[index]
                 .logs
@@ -15249,7 +15311,10 @@ mod tests {
             GlyphMode::Ascii,
             "selecting tab 2 restores tab 2's ASCII notation"
         );
-        assert_eq!(app.precision_input, "250", "tab 2's precision in the toolbar");
+        assert_eq!(
+            app.precision_input, "250",
+            "tab 2's precision in the toolbar"
+        );
         assert!(
             texts.iter().any(|text| text == "[result] = sqrt(2)*pi"),
             "tab 2 paints ASCII despite tab 1 being Unicode: {texts:?}"
@@ -15351,7 +15416,11 @@ mod tests {
             !app.workbench.documents().is_empty(),
             "the launch still opened a document"
         );
-        assert_eq!(app.settings.window, Settings::new().window, "defaults are usable");
+        assert_eq!(
+            app.settings.window,
+            Settings::new().window,
+            "defaults are usable"
+        );
         let logs: String = app
             .workbench
             .documents()
@@ -15689,11 +15758,7 @@ mod tests {
     /// Runs the document through Ctrl+Enter and waits for the terminal state, painting frames
     /// exactly as the window does.
     fn run_from_keyboard(ctx: &egui::Context, app: &mut WorkbenchApp) -> Vec<String> {
-        let mut texts = press_action(
-            ctx,
-            app,
-            Action::Workbench(keyboard::WorkbenchCommand::Run),
-        );
+        let mut texts = press_action(ctx, app, Action::Workbench(keyboard::WorkbenchCommand::Run));
         for _ in 0..600 {
             if matches!(
                 app.view.run_state,
@@ -15803,7 +15868,10 @@ mod tests {
             .expect("the focused widget was painted");
         let mut strokes = Vec::new();
         for clipped in &output.shapes {
-            if clipped.clip_rect.intersects(ring_rect.expand(a11y::FOCUS_RING_GAP + 4.0)) {
+            if clipped
+                .clip_rect
+                .intersects(ring_rect.expand(a11y::FOCUS_RING_GAP + 4.0))
+            {
                 rect_stroke_colors(&clipped.shape, &mut strokes);
             }
         }
@@ -15856,7 +15924,9 @@ mod tests {
         // Global and editor sections are both present.
         for scope in keyboard::Scope::ALL {
             assert!(
-                texts.iter().any(|text| text == &scope.label().to_uppercase()),
+                texts
+                    .iter()
+                    .any(|text| text == &scope.label().to_uppercase()),
                 "the reference is missing the {} section: {texts:?}",
                 scope.label()
             );
@@ -15943,7 +16013,11 @@ mod tests {
 
         // Ctrl+Shift+T: the theme toggle, the one VIS-002 control that had no key.
         press_action(&ctx, &mut app, Action::ToggleTheme);
-        assert_eq!(app.theme, theme::ThemeId::Light, "the theme switch is a binding");
+        assert_eq!(
+            app.theme,
+            theme::ThemeId::Light,
+            "the theme switch is a binding"
+        );
         press_action(&ctx, &mut app, Action::ToggleTheme);
         assert_eq!(app.theme, theme::ThemeId::Dark);
 
@@ -16045,7 +16119,10 @@ mod tests {
         press_action(&ctx, &mut app, Action::File(FileCommand::New));
         assert_eq!(app.workbench.documents().len(), documents_before + 1);
         assert!(
-            app.workbench.active_document().title.starts_with("untitled"),
+            app.workbench
+                .active_document()
+                .title
+                .starts_with("untitled"),
             "a fresh tab is untitled: {:?}",
             app.workbench.active_document().title
         );
@@ -16095,7 +16172,9 @@ mod tests {
         let texts = press_action(&ctx, &mut app, Action::WorkspaceResultView);
         assert!(!app.inspector_open);
         assert!(
-            texts.iter().any(|text| text == "RESULT · structured projection"),
+            texts
+                .iter()
+                .any(|text| text == "RESULT · structured projection"),
             "the result surface must be painted: {texts:?}"
         );
         assert!(
@@ -16180,10 +16259,7 @@ mod tests {
         );
         step!(
             "toolbar-enter",
-            format!(
-                "focused=run run_state={:?}",
-                app.view.run_state
-            )
+            format!("focused=run run_state={:?}", app.view.run_state)
         );
 
         // 11. Ctrl+Z: the editor's own history key, reached without the pointer.
@@ -16268,7 +16344,10 @@ mod tests {
             "the New click adds exactly one document"
         );
         assert!(
-            app.workbench.active_document().title.starts_with("untitled"),
+            app.workbench
+                .active_document()
+                .title
+                .starts_with("untitled"),
             "the new tab is untitled: {:?}",
             app.workbench.active_document().title
         );
@@ -16306,9 +16385,11 @@ mod tests {
         );
 
         let ascii_texts = pump_text(&ctx, &mut app, 1);
-        assert!(ascii_texts
-            .iter()
-            .any(|text| text == "[result] = sqrt(2)*pi"));
+        assert!(
+            ascii_texts
+                .iter()
+                .any(|text| text == "[result] = sqrt(2)*pi")
+        );
         assert!(
             !ascii_texts.iter().any(|text| text.contains(&expected)),
             "ASCII is the default mode: {ascii_texts:?}"
@@ -16694,8 +16775,7 @@ mod tests {
         );
 
         // A later successful run replaces the chart with its own.
-        app.workbench
-            .set_source(0, "plot(\"gamma\")".to_string());
+        app.workbench.set_source(0, "plot(\"gamma\")".to_string());
         run_and_settle_plot(&ctx, &mut app);
         assert_eq!(
             app.plot.title.as_deref(),
@@ -16737,7 +16817,10 @@ mod tests {
             let _ = pump_text(ctx, app, 1);
             std::thread::sleep(Duration::from_millis(2));
         }
-        panic!("the run did not reach a terminal state: {:?}", app.view.run_state);
+        panic!(
+            "the run did not reach a terminal state: {:?}",
+            app.view.run_state
+        );
     }
 
     /// Runs the active document and returns the accessibility rows of the frame that follows.
@@ -16796,7 +16879,8 @@ mod tests {
         }
 
         // Both workspace tables, each with a row count and named rows.
-        let tables: Vec<&a11y::NodeRow> = rows.iter().filter(|row| row.role == Role::Table).collect();
+        let tables: Vec<&a11y::NodeRow> =
+            rows.iter().filter(|row| row.role == Role::Table).collect();
         assert_eq!(tables.len(), 2, "variables and functions\n{dump}");
         for table in &tables {
             assert!(
@@ -16813,7 +16897,8 @@ mod tests {
                 table.name
             );
         }
-        let data_rows: Vec<&a11y::NodeRow> = rows.iter().filter(|row| row.role == Role::Row).collect();
+        let data_rows: Vec<&a11y::NodeRow> =
+            rows.iter().filter(|row| row.role == Role::Row).collect();
         assert!(
             data_rows.len() >= 4,
             "both tables' data rows must be Row nodes, got {}\n{dump}",
@@ -16848,12 +16933,7 @@ mod tests {
             .iter()
             .filter(|row| row.role == Role::Button)
             .map(|row| row.name.as_str())
-            .filter(|name| {
-                matches!(
-                    *name,
-                    "Name ▲" | "Kind" | "Value" | "Parameters" | "Origin"
-                )
-            })
+            .filter(|name| matches!(*name, "Name ▲" | "Kind" | "Value" | "Parameters" | "Origin"))
             .collect();
         assert!(
             duplicate_header_buttons.is_empty(),
@@ -16878,7 +16958,10 @@ mod tests {
         );
         for tab in &tabs {
             assert!(!tab.name.is_empty(), "a tab has no name");
-            assert!(tab.selected.is_some(), "a tab must expose its selection state");
+            assert!(
+                tab.selected.is_some(),
+                "a tab must expose its selection state"
+            );
         }
         assert_eq!(
             tabs.iter().filter(|tab| tab.selected == Some(true)).count(),
@@ -16908,7 +16991,11 @@ mod tests {
             .iter()
             .find(|row| row.role == Role::Image)
             .unwrap_or_else(|| panic!("no plot node\n{dump}"));
-        assert!(plot.name.contains("SVG plot canvas"), "plot name: {}", plot.name);
+        assert!(
+            plot.name.contains("SVG plot canvas"),
+            "plot name: {}",
+            plot.name
+        );
         assert_eq!(plot.value.as_deref(), Some("round 43 a11y plot"));
 
         // Status: its own role, named with the run state and the success marker.
@@ -16934,8 +17021,10 @@ mod tests {
         assert_eq!(progress.numeric_value, Some(app.view.total as f64));
 
         // Splitters: the four pane dividers have a role and a name.
-        let splitters: Vec<&a11y::NodeRow> =
-            rows.iter().filter(|row| row.role == Role::Splitter).collect();
+        let splitters: Vec<&a11y::NodeRow> = rows
+            .iter()
+            .filter(|row| row.role == Role::Splitter)
+            .collect();
         assert_eq!(splitters.len(), 4, "four pane splitters\n{dump}");
         for splitter in &splitters {
             assert!(
@@ -17211,15 +17300,29 @@ mod tests {
             // Caret inside the bracket pair of line 2 (1-based line 2, column 9).
             app.editors[0].set_caret(1, 8);
             ctx.memory_mut(|memory| memory.request_focus(surface_id()));
-            let _ = frame_capturing(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new(), Default::default());
-            let output =
-                frame_capturing(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new(), Default::default());
+            let _ = frame_capturing(
+                &ctx,
+                &mut app,
+                vec2(1600.0, 1000.0),
+                Vec::new(),
+                Default::default(),
+            );
+            let output = frame_capturing(
+                &ctx,
+                &mut app,
+                vec2(1600.0, 1000.0),
+                Vec::new(),
+                Default::default(),
+            );
             let mut painted = Painted::default();
             for clipped in &output.shapes {
                 collect_painted(&clipped.shape, &mut painted);
             }
             let metrics = app.editors[0].metrics;
-            assert_eq!(metrics.font_size, size as f32, "the configured size is painted");
+            assert_eq!(
+                metrics.font_size, size as f32,
+                "the configured size is painted"
+            );
             assert_eq!(metrics.ligatures, ligatures);
             assert!(
                 metrics.row_h + 0.01 >= size as f32 * line_height as f32 / 100.0,
@@ -17407,17 +17510,33 @@ mod tests {
             "following the OS must switch the token set"
         );
         assert_eq!(theme::active(), theme::ThemeId::Light);
-        assert_eq!(app.settings.theme, theme::ThemeId::Light, "the follow state persists");
+        assert_eq!(
+            app.settings.theme,
+            theme::ThemeId::Light,
+            "the follow state persists"
+        );
         // Nothing else may have moved.
-        assert_eq!(app.workbench.documents()[0].source, source, "the document survives");
+        assert_eq!(
+            app.workbench.documents()[0].source,
+            source,
+            "the document survives"
+        );
         assert_eq!(app.editors[0].caret(), caret, "the caret survives");
         assert_eq!(app.view.run_state, run_state, "the run state survives");
-        assert_eq!(ctx.memory(|memory| memory.focused()), focused, "the focus survives");
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            focused,
+            "the focus survives"
+        );
         assert_eq!(app.workbench.documents().len(), tabs, "the tabs survive");
         assert_eq!(app.editors.len(), tabs);
 
         notify(&mut app, egui::Theme::Dark);
-        assert_eq!(app.theme, theme::ThemeId::Dark, "a second OS change is followed back");
+        assert_eq!(
+            app.theme,
+            theme::ThemeId::Dark,
+            "a second OS change is followed back"
+        );
         assert_eq!(app.editors[0].caret(), caret);
         assert_eq!(app.view.run_state, run_state);
 
@@ -17453,8 +17572,13 @@ mod tests {
         assert_eq!(app.view.run_state, RunState::Failed);
         app.editors[0].set_caret(1, 8);
         ctx.memory_mut(|memory| memory.request_focus(surface_id()));
-        let output =
-            frame_capturing(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new(), Default::default());
+        let output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1600.0, 1000.0),
+            Vec::new(),
+            Default::default(),
+        );
         let mut painted = Painted::default();
         for clipped in &output.shapes {
             collect_painted(&clipped.shape, &mut painted);
@@ -17699,8 +17823,8 @@ mod tests {
                 if layout.mode == LayoutMode::DenseSplit {
                     for title in ["Graph", "Workspace", "Logs", "Symbolic Inspector"] {
                         assert!(
-                            rows.iter().any(|row| row.role == egui::Role::Pane
-                                && row.name == title),
+                            rows.iter()
+                                .any(|row| row.role == egui::Role::Pane && row.name == title),
                             "{percent}% {:.0}x{:.0}: the dense split must paint the {title} pane",
                             physical.x,
                             physical.y
@@ -17759,8 +17883,9 @@ mod tests {
                             CompactPane::Inspector => "Symbolic Inspector",
                         };
                         assert!(
-                            pane_rows.iter().any(|row| row.role == egui::Role::Pane
-                                && row.name == title),
+                            pane_rows
+                                .iter()
+                                .any(|row| row.role == egui::Role::Pane && row.name == title),
                             "{percent}%: the {} pane is not painted\n{}",
                             pane.label(),
                             a11y::dump_table(&pane_rows)
@@ -17792,7 +17917,8 @@ mod tests {
                         );
                     }
                 }
-                let output = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+                let output =
+                    frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
                 let mut shapes = 0usize;
                 for clipped in &output.shapes {
                     let mut painted = Painted::default();
@@ -17939,9 +18065,7 @@ mod tests {
         );
         let texts = painted_texts(&ctx, &mut app, screen);
         assert!(
-            texts
-                .iter()
-                .any(|text| text.contains("No match for")),
+            texts.iter().any(|text| text.contains("No match for")),
             "the search empty state must name the reason; texts: {texts:?}"
         );
         assert!(
@@ -18026,7 +18150,11 @@ mod tests {
         let screen = vec2(1280.0, 800.0);
         frame_sized(&ctx, &mut app, screen, Vec::new());
         let layout = app.layout.expect("the frame paints the pane layout");
-        assert_eq!(layout.mode, LayoutMode::Split, "1280x800 is the normal split");
+        assert_eq!(
+            layout.mode,
+            LayoutMode::Split,
+            "1280x800 is the normal split"
+        );
         let share = layout.editor.width() / layout.full.width().max(1.0);
         eprintln!(
             "LAY-001 editor share={:.1}% editor={:.1}x{:.1} full={:.1}x{:.1}",
@@ -18132,9 +18260,7 @@ mod tests {
             );
         }
         assert!(
-            pane_names
-                .iter()
-                .any(|name| name.starts_with("Editor - ")),
+            pane_names.iter().any(|name| name.starts_with("Editor - ")),
             "the editor pane is titled with its document: {pane_names:?}"
         );
         // The titles are visible text, not only accessible names.
@@ -18166,8 +18292,8 @@ mod tests {
         // The graph pane holds the engine SVG canvas; the inspector tree has a node header.
         let rows = accessibility_rows(&ctx, &mut app, screen);
         assert!(
-            rows.iter().any(|row| row.role == egui::Role::Image
-                && row.name.contains("SVG plot canvas")),
+            rows.iter()
+                .any(|row| row.role == egui::Role::Image && row.name.contains("SVG plot canvas")),
             "the graph pane must carry the engine plot canvas"
         );
         assert!(
@@ -18237,7 +18363,11 @@ mod tests {
         frame_sized(&ctx, &mut app, screen, Vec::new());
         let splitter_center = app.layout.expect("the reset layout").split_a.center();
         pointer_click_sized(&ctx, &mut app, screen, splitter_center);
-        let before_key = app.layout.expect("the layout before the arrow key").editor.width();
+        let before_key = app
+            .layout
+            .expect("the layout before the arrow key")
+            .editor
+            .width();
         frame_sized(
             &ctx,
             &mut app,
@@ -18403,8 +18533,7 @@ mod tests {
         );
         let vertical = app.layout.expect("the vertical layout");
         assert!(
-            vertical.logs.height() >= MIN_LOGS - 0.5
-                && vertical.logs.height() <= MIN_LOGS + 20.0,
+            vertical.logs.height() >= MIN_LOGS - 0.5 && vertical.logs.height() <= MIN_LOGS + 20.0,
             "the logs strip must stop at its {MIN_LOGS} minimum: {}",
             vertical.logs.height()
         );
@@ -18684,9 +18813,7 @@ mod tests {
             "two contradictory display strings must paint the identical structure"
         );
         assert!(
-            from_array_display
-                .iter()
-                .any(|text| text.contains("Array")),
+            from_array_display.iter().any(|text| text.contains("Array")),
             "the projection's array kind is painted: {from_array_display:?}"
         );
         assert!(
@@ -18894,9 +19021,8 @@ mod tests {
     /// user function row in the functions table, and the counts follow the same snapshot.
     #[test]
     fn wks_004_clear_variables_keeps_the_painted_function_rows() {
-        let mut workbench = Workbench::with_factory(Box::new(|| {
-            Box::new(crate::engine::RealEngine::new())
-        }));
+        let mut workbench =
+            Workbench::with_factory(Box::new(|| Box::new(crate::engine::RealEngine::new())));
         workbench.set_source(
             0,
             "func twice(x) = x * 2\nanswer = 21\ntwice(answer)\n".to_string(),
@@ -18934,8 +19060,7 @@ mod tests {
             "the user function row survives"
         );
         assert_eq!(
-            app.view.workspace_revision,
-            2,
+            app.view.workspace_revision, 2,
             "the clear moved the workspace revision once"
         );
     }
@@ -18944,9 +19069,8 @@ mod tests {
     /// row's detail view opens the full value the preview shortened.
     #[test]
     fn wks_006_the_table_paints_a_typed_preview_and_the_detail_opens_the_full_value() {
-        let mut workbench = Workbench::with_factory(Box::new(|| {
-            Box::new(crate::engine::RealEngine::new())
-        }));
+        let mut workbench =
+            Workbench::with_factory(Box::new(|| Box::new(crate::engine::RealEngine::new())));
         workbench.set_source(0, "m = [[1, 2], [3, 4]]\ndivrem(7, 2)\n".to_string());
         assert!(workbench.run_active());
         assert!(workbench.wait_until_idle(Duration::from_secs(10)));
@@ -19010,7 +19134,9 @@ mod tests {
             "the detail view states the shape: {texts:?}"
         );
         assert!(
-            texts.iter().any(|text| text.trim_start().starts_with("[0]  Natural")),
+            texts
+                .iter()
+                .any(|text| text.trim_start().starts_with("[0]  Natural")),
             "the detail view lists the element kinds: {texts:?}"
         );
     }
@@ -19165,8 +19291,9 @@ mod tests {
             "pretty: {texts:?}"
         );
         assert!(
-            texts.iter().any(|text| text
-                == "canonical  (add (pow (sym x) (rat 2 1)) (rat -1 1))"),
+            texts
+                .iter()
+                .any(|text| text == "canonical  (add (pow (sym x) (rat 2 1)) (rat -1 1))"),
             "canonical: {texts:?}"
         );
         assert!(
@@ -19532,8 +19659,7 @@ mod tests {
         );
         let copied = copied_texts(&output.platform_output);
         assert_eq!(copied.len(), 1, "one clipboard command: {copied:?}");
-        let selected_line = app.view.logs[*app.log_selection.iter().next().unwrap()]
-            .render();
+        let selected_line = app.view.logs[*app.log_selection.iter().next().unwrap()].render();
         assert_eq!(
             copied[0],
             format!("{selected_line}\r\n"),
@@ -19606,10 +19732,7 @@ mod tests {
         for clipped in &output.shapes {
             collect_shape_text(&clipped.shape, &mut texts);
         }
-        assert!(
-            app.view.logs_dropped > 0,
-            "the flood exceeded the cap"
-        );
+        assert!(app.view.logs_dropped > 0, "the flood exceeded the cap");
         assert!(
             texts.iter().any(|text| text.contains("truncated history:")),
             "the pane states that its history is truncated: {texts:?}"
@@ -19740,7 +19863,10 @@ mod tests {
                 .iter()
                 .any(|(index, _)| *index + 1 == app.view.logs.len()),
             "the newest record is painted: rows {:?}",
-            app.log_row_rects.iter().map(|(i, _)| *i).collect::<Vec<_>>()
+            app.log_row_rects
+                .iter()
+                .map(|(i, _)| *i)
+                .collect::<Vec<_>>()
         );
         assert_eq!(app.log_unseen, 0);
         assert_eq!(app.log_jump_rect, None, "no jump control while following");
@@ -19793,10 +19919,11 @@ mod tests {
             "scrolling away from the bottom ends follow mode; painted before: {rows_before_scroll:?}"
         );
         let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
-        let scrolled_rows: Vec<usize> =
-            app.log_row_rects.iter().map(|(index, _)| *index).collect();
+        let scrolled_rows: Vec<usize> = app.log_row_rects.iter().map(|(index, _)| *index).collect();
         assert!(
-            scrolled_rows.iter().all(|index| index + 1 < app.view.logs.len()),
+            scrolled_rows
+                .iter()
+                .all(|index| index + 1 < app.view.logs.len()),
             "the scrolled window is above the tail: {scrolled_rows:?}"
         );
         assert!(
@@ -19814,7 +19941,9 @@ mod tests {
         );
         let after_rows: Vec<usize> = app.log_row_rects.iter().map(|(index, _)| *index).collect();
         assert!(
-            after_rows.iter().all(|index| index + 1 < app.view.logs.len()),
+            after_rows
+                .iter()
+                .all(|index| index + 1 < app.view.logs.len()),
             "the viewport stayed where the user left it: {after_rows:?}"
         );
         let jump = app
@@ -19822,9 +19951,7 @@ mod tests {
             .expect("the jump control is still painted after the append");
         let texts = painted_texts(&ctx, &mut app, screen);
         assert!(
-            texts
-                .iter()
-                .any(|text| text == "scrolled back · 41 new"),
+            texts.iter().any(|text| text == "scrolled back · 41 new"),
             "the header states how many records arrived: {texts:?}"
         );
 
@@ -19844,7 +19971,10 @@ mod tests {
                 .iter()
                 .any(|(index, _)| *index + 1 == app.view.logs.len()),
             "the newest record is painted after the jump: rows {:?}",
-            app.log_row_rects.iter().map(|(i, _)| *i).collect::<Vec<_>>()
+            app.log_row_rects
+                .iter()
+                .map(|(i, _)| *i)
+                .collect::<Vec<_>>()
         );
         let texts = painted_texts(&ctx, &mut app, screen);
         assert!(
@@ -19880,7 +20010,9 @@ mod tests {
         app.precision_input = "20000".to_string();
         let texts = painted_texts(&ctx, &mut app, screen);
         assert!(
-            texts.iter().any(|text| text == "estimate ≈ 200 ms and ≈ 312.8 KB"),
+            texts
+                .iter()
+                .any(|text| text == "estimate ≈ 200 ms and ≈ 312.8 KB"),
             "the live estimate is painted beside the field: {texts:?}"
         );
 
@@ -19915,7 +20047,9 @@ mod tests {
             "the dialog states the estimate in the tool's words: {texts:?}"
         );
         assert!(
-            texts.iter().any(|text| text.contains("measured sqrt(2): 100 digits")),
+            texts
+                .iter()
+                .any(|text| text.contains("measured sqrt(2): 100 digits")),
             "the dialog names the measurements the estimate came from: {texts:?}"
         );
 
@@ -19953,13 +20087,15 @@ mod tests {
             .expect("the dialog paints Set precision");
         pointer_click_sized(&ctx, &mut app, screen, set.center());
         let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
-        assert_eq!(app.view.precision, 20_000, "Set precision applies the value");
+        assert_eq!(
+            app.view.precision, 20_000,
+            "Set precision applies the value"
+        );
         assert!(app.workbench.pending_precision().is_none());
         assert!(
-            app.view
-                .logs
-                .iter()
-                .any(|line| line.text.contains("Precision 20000 digits confirmed (≈ 200 ms")),
+            app.view.logs.iter().any(|line| line
+                .text
+                .contains("Precision 20000 digits confirmed (≈ 200 ms")),
             "the log carries the estimate with the confirmed change"
         );
     }
@@ -19994,5 +20130,3 @@ mod tests {
         );
     }
 }
-
-

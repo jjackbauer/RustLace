@@ -826,7 +826,10 @@ mod tests {
             .replacen("LOVELACE-RECOVERY 2", "LOVELACE-RECOVERY 1", 1)
             .replace("precision: 40\n", "")
             .replace("glyphs: 1\n", "");
-        assert!(!v1.contains("precision:"), "the old record has no such field");
+        assert!(
+            !v1.contains("precision:"),
+            "the old record has no such field"
+        );
         std::fs::write(record_path(&directory, 7), v1.as_bytes()).expect("write v1");
 
         let parsed = read_record(&record_path(&directory, 7)).expect("a v1 record is readable");
@@ -834,7 +837,8 @@ mod tests {
         assert_eq!(parsed.precision, crate::engine::DEFAULT_PRECISION);
         assert!(!parsed.unicode_glyphs);
         assert_eq!(
-            parsed.source, record().source,
+            parsed.source,
+            record().source,
             "migration must not disturb the buffer bytes"
         );
 
@@ -858,7 +862,8 @@ mod tests {
     }
 
     #[test]
-    fn a_record_without_a_path_or_selection_round_trips() {        let mut record = record();
+    fn a_record_without_a_path_or_selection_round_trips() {
+        let mut record = record();
         record.path = None;
         record.selection = None;
         record.source_mtime = None;
@@ -1008,8 +1013,7 @@ mod tests {
     #[test]
     fn a_write_is_due_only_for_an_untracked_or_changed_revision_after_the_debounce() {
         let directory = scratch("due");
-        let mut journal =
-            RecoveryJournal::with_debounce(directory.clone(), Duration::from_secs(1));
+        let mut journal = RecoveryJournal::with_debounce(directory.clone(), Duration::from_secs(1));
         let start = Instant::now();
         journal.track(7, 3, start);
         assert!(

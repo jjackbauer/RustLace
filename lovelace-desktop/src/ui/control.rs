@@ -23,9 +23,7 @@
 //! never also "hovered", an error field shows the error even while pressed, focus outranks
 //! selection because the keyboard needs to find the control, and selection outranks hover.
 
-use egui::{
-    Color32, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui,
-};
+use egui::{Color32, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui};
 
 use super::semantic::SemanticRole;
 use super::{theme, type_scale};
@@ -413,33 +411,33 @@ fn paint_hatch_edges(painter: &egui::Painter, rect: Rect, color: Color32) {
 }
 
 /// A dashed rectangle: eight segments per edge, `dash` on / `gap` off.
-fn paint_dashed_rect(
-    painter: &egui::Painter,
-    rect: Rect,
-    color: Color32,
-    dash: f32,
-    gap: f32,
-) {
+fn paint_dashed_rect(painter: &egui::Painter, rect: Rect, color: Color32, dash: f32, gap: f32) {
     let step = dash + gap;
     let stroke = Stroke::new(1.0, color);
     let mut x = rect.left();
     while x < rect.right() {
         let x2 = (x + dash).min(rect.right());
-        painter.line_segment([egui::pos2(x, rect.top()), egui::pos2(x2, rect.top())], stroke);
-        painter.line_segment([
-            egui::pos2(x, rect.bottom()),
-            egui::pos2(x2, rect.bottom()),
-        ], stroke);
+        painter.line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x2, rect.top())],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(x, rect.bottom()), egui::pos2(x2, rect.bottom())],
+            stroke,
+        );
         x += step;
     }
     let mut y = rect.top();
     while y < rect.bottom() {
         let y2 = (y + dash).min(rect.bottom());
-        painter.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.left(), y2)], stroke);
-        painter.line_segment([
-            egui::pos2(rect.right(), y),
-            egui::pos2(rect.right(), y2),
-        ], stroke);
+        painter.line_segment(
+            [egui::pos2(rect.left(), y), egui::pos2(rect.left(), y2)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(rect.right(), y), egui::pos2(rect.right(), y2)],
+            stroke,
+        );
         y += step;
     }
 }
@@ -508,7 +506,8 @@ pub fn matrix_window(ctx: &egui::Context, open: &mut bool) {
                                     );
                                     for state in ControlState::ALL {
                                         ui.horizontal(|ui| {
-                                            let label = format!("{} · {}", kind.name(), state.name());
+                                            let label =
+                                                format!("{} · {}", kind.name(), state.name());
                                             // A real Text node per row, so a UIA dump names every
                                             // kind × state combination instead of only the
                                             // painted specimen.
@@ -575,7 +574,8 @@ mod tests {
             for (index, first) in paints.iter().enumerate() {
                 for (other, second) in paints.iter().enumerate().skip(index + 1) {
                     assert_ne!(
-                        first, second,
+                        first,
+                        second,
                         "{}: {} and {} paint identically",
                         kind.name(),
                         ControlState::ALL[index].name(),
@@ -610,7 +610,8 @@ mod tests {
             );
             assert_eq!(rest.text.a(), 255);
             assert_ne!(
-                disabled.fill, rest.fill,
+                disabled.fill,
+                rest.fill,
                 "{}: disabled must use a different surface",
                 kind.name()
             );
@@ -644,12 +645,8 @@ mod tests {
             ControlState::Rest
         );
         // Hover: the pointer is over the button.
-        let response = run(
-            &ctx,
-            screen,
-            vec![egui::Event::PointerMoved(center)],
-        )
-        .expect("a response");
+        let response =
+            run(&ctx, screen, vec![egui::Event::PointerMoved(center)]).expect("a response");
         let flags = ControlFlags::from_response(&response, false, false);
         assert!(flags.hovered, "the pointer must hover the button");
         assert_eq!(flags.resolve(), ControlState::Hover);
@@ -717,7 +714,10 @@ mod tests {
         let mut flags = None;
         let mut output = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 120.0))),
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 120.0),
+                )),
                 ..Default::default()
             },
             |ui| {
@@ -737,11 +737,17 @@ mod tests {
         let mut line_segments = 0usize;
         let mut output = ctx.run_ui(
             egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 120.0))),
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 120.0),
+                )),
                 ..Default::default()
             },
             |ui| {
-                paint_disabled_cue(ui, Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(120.0, 24.0)));
+                paint_disabled_cue(
+                    ui,
+                    Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(120.0, 24.0)),
+                );
             },
         );
         output.textures_delta.clear();

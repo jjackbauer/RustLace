@@ -115,11 +115,7 @@ impl FactorialProgress {
     }
 }
 
-fn product_range(
-    low: u64,
-    high: u64,
-    progress: &mut FactorialProgress,
-) -> Result<Nat, LangError> {
+fn product_range(low: u64, high: u64, progress: &mut FactorialProgress) -> Result<Nat, LangError> {
     if lovelace_symbolics::cancel::check() {
         return Err(cancelled());
     }

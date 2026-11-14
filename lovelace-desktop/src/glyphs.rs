@@ -133,14 +133,14 @@ pub const FALLBACKS: &[(char, &str)] = &[
     // Astral Mathematical Alphanumeric Symbols (U+1D400-U+1D7FF). The engine's printer is ASCII
     // today; these entries are what makes an astral glyph reachable from a user value without a
     // tofu box, and they are the characters the A11Y-014 tests pin.
-    ('\u{1D44E}', "a"),       // 𝑥-adjacent: MATHEMATICAL ITALIC SMALL A
-    ('\u{1D456}', "i"),       // MATHEMATICAL ITALIC SMALL I
-    ('\u{1D465}', "x"),       // MATHEMATICAL ITALIC SMALL X
-    ('\u{1D54F}', "X"),       // MATHEMATICAL DOUBLE-STRUCK CAPITAL X
-    ('\u{1D703}', "theta"),   // MATHEMATICAL ITALIC SMALL THETA
-    ('\u{1D70B}', "pi"),      // MATHEMATICAL ITALIC SMALL PI
-    ('\u{1D70E}', "sigma"),   // MATHEMATICAL ITALIC SMALL SIGMA
-    ('\u{1D70F}', "tau"),     // MATHEMATICAL ITALIC SMALL TAU
+    ('\u{1D44E}', "a"),     // 𝑥-adjacent: MATHEMATICAL ITALIC SMALL A
+    ('\u{1D456}', "i"),     // MATHEMATICAL ITALIC SMALL I
+    ('\u{1D465}', "x"),     // MATHEMATICAL ITALIC SMALL X
+    ('\u{1D54F}', "X"),     // MATHEMATICAL DOUBLE-STRUCK CAPITAL X
+    ('\u{1D703}', "theta"), // MATHEMATICAL ITALIC SMALL THETA
+    ('\u{1D70B}', "pi"),    // MATHEMATICAL ITALIC SMALL PI
+    ('\u{1D70E}', "sigma"), // MATHEMATICAL ITALIC SMALL SIGMA
+    ('\u{1D70F}', "tau"),   // MATHEMATICAL ITALIC SMALL TAU
 ];
 
 /// The fallback spelling of `c`, if one is documented.
@@ -394,10 +394,19 @@ mod tests {
         // U+1D70B MATHEMATICAL ITALIC SMALL PI is astral (outside the BMP).
         let astral = '\u{1D70B}';
         assert!(!astral.is_ascii() && astral as u32 > 0xFFFF);
-        assert_eq!(render(&format!("{astral} = 3"), GlyphMode::Unicode, ascii_only), "pi = 3");
-        assert_eq!(render(&format!("{astral} = 3"), GlyphMode::Ascii, ascii_only), "pi = 3");
+        assert_eq!(
+            render(&format!("{astral} = 3"), GlyphMode::Unicode, ascii_only),
+            "pi = 3"
+        );
+        assert_eq!(
+            render(&format!("{astral} = 3"), GlyphMode::Ascii, ascii_only),
+            "pi = 3"
+        );
         // With a font that has it, Unicode mode keeps it verbatim.
-        assert_eq!(render(&format!("{astral} = 3"), GlyphMode::Unicode, |_| true), format!("{astral} = 3"));
+        assert_eq!(
+            render(&format!("{astral} = 3"), GlyphMode::Unicode, |_| true),
+            format!("{astral} = 3")
+        );
     }
 
     #[test]
@@ -435,7 +444,11 @@ mod tests {
         assert!(GlyphMode::Unicode.unicode());
         assert!(!GlyphMode::Ascii.unicode());
         assert_eq!(GlyphMode::Ascii.toggled(), GlyphMode::Unicode);
-        assert_eq!(GlyphMode::default(), GlyphMode::Ascii, "the engine's own default");
+        assert_eq!(
+            GlyphMode::default(),
+            GlyphMode::Ascii,
+            "the engine's own default"
+        );
         assert_eq!(GlyphMode::Ascii.name(), "ascii");
         assert_eq!(GlyphMode::Unicode.name(), "unicode");
     }

@@ -183,8 +183,8 @@ impl ValuePreview {
             "Array" => preview_array(structured),
             "Record" => preview_record(structured),
             "Symbolic" => {
-                let pretty = text_field(structured, "pretty")
-                    .unwrap_or_else(|| variable.display.clone());
+                let pretty =
+                    text_field(structured, "pretty").unwrap_or_else(|| variable.display.clone());
                 let shortened = pretty.chars().count() > MAX_PREVIEW_CHARS;
                 ValuePreview {
                     type_label: "symbolic".to_string(),
@@ -325,7 +325,10 @@ fn preview_record(structured: &Json) -> ValuePreview {
     }
     let mut body = format!("{} {{{}}}", type_name, shown.join(", "));
     if fields.len() > PREVIEW_ITEMS {
-        body.push_str(&format!(" … {} more field(s)", fields.len() - PREVIEW_ITEMS));
+        body.push_str(&format!(
+            " … {} more field(s)",
+            fields.len() - PREVIEW_ITEMS
+        ));
     }
     if fields.is_empty() {
         body = format!("{type_name} {{}}");

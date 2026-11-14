@@ -51,7 +51,10 @@ pub fn run() -> i32 {
         "platform=windows arch={} advertised=windows-11-x64 (the only supported platform)",
         std::env::consts::ARCH
     );
-    println!("system_dpi={dpi} ({:.0}%) monitors={monitors}", dpi as f64 / 96.0 * 100.0);
+    println!(
+        "system_dpi={dpi} ({:.0}%) monitors={monitors}",
+        dpi as f64 / 96.0 * 100.0
+    );
     let checks = checks();
     let mut failed = 0usize;
     for check in &checks {
@@ -71,11 +74,7 @@ pub fn run() -> i32 {
         checks.len() - failed,
         checks.len()
     );
-    if failed == 0 {
-        0
-    } else {
-        1
-    }
+    if failed == 0 { 0 } else { 1 }
 }
 
 /// PLF-010 "keyboard modifiers": Windows Ctrl drives the file/editor chords and Alt does not.
@@ -203,11 +202,15 @@ fn clipboard_check() -> Check {
     editor.select_to(0, 10);
     let copied = editor_pass(&mut editor, vec![egui::Event::Copy]);
     if copied != vec!["beta".to_string()] {
-        problems.push(format!("Ctrl+C put {copied:?} on the clipboard, want [\"beta\"]"));
+        problems.push(format!(
+            "Ctrl+C put {copied:?} on the clipboard, want [\"beta\"]"
+        ));
     }
     let cut = editor_pass(&mut editor, vec![egui::Event::Cut]);
     if cut != vec!["beta".to_string()] {
-        problems.push(format!("Ctrl+X put {cut:?} on the clipboard, want [\"beta\"]"));
+        problems.push(format!(
+            "Ctrl+X put {cut:?} on the clipboard, want [\"beta\"]"
+        ));
     }
     if editor.source() != "alpha  gamma" {
         problems.push(format!("Ctrl+X left {:?}", editor.source()));
@@ -349,18 +352,17 @@ mod tests {
             "the five PLF-010 areas must all be reported"
         );
         for check in checks {
-            assert!(
-                check.ok,
-                "{} failed: {}",
-                check.area,
-                check.observed
-            );
+            assert!(check.ok, "{} failed: {}", check.area, check.observed);
         }
     }
 
     #[test]
     fn the_probe_exits_zero_when_every_area_passes() {
-        assert_eq!(run(), 0, "--platform-parity must succeed on the advertised platform");
+        assert_eq!(
+            run(),
+            0,
+            "--platform-parity must succeed on the advertised platform"
+        );
     }
 
     #[test]

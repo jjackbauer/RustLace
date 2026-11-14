@@ -19,8 +19,8 @@
 //! budget makes the process exit non-zero and the report says `RESULT FAIL`.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use eframe::egui;
@@ -152,7 +152,11 @@ impl MeasureRunApp {
                     self.run_id = self.inner.measure_run_id();
                     self.run_started = Some(now);
                     self.started_frames = frames;
-                    self.phase = if accepted { Phase::Running } else { Phase::Done };
+                    self.phase = if accepted {
+                        Phase::Running
+                    } else {
+                        Phase::Done
+                    };
                     self.last_frame = Some(now);
                 } else {
                     self.phase = Phase::Warmup { frames };
@@ -231,19 +235,21 @@ impl MeasureRunApp {
         );
         report.push_str(&format!(
             "run_id={} run_started_after_warmup_frames={}\n",
-            run_id.map(|id| id.to_string()).unwrap_or_else(|| "none".to_string()),
+            run_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string()),
             self.started_frames
         ));
         report.push_str(&format!("run_seconds={run_seconds:.3}\n"));
-        report.push_str(&format!("run_at_least_2s={}\n", run_seconds >= MIN_RUN_SECONDS));
+        report.push_str(&format!(
+            "run_at_least_2s={}\n",
+            run_seconds >= MIN_RUN_SECONDS
+        ));
         report.push_str(&format!(
             "result_preview={preview}\nresult_len={result_len}\n"
         ));
         report.push_str(&frames.line("frame_interval"));
-        report.push_str(&format!(
-            "\nworst_gap_ms={:.3}\n",
-            frames.max
-        ));
+        report.push_str(&format!("\nworst_gap_ms={:.3}\n", frames.max));
         report.push_str(&format!(
             "input_events={} input_acknowledged={}\n",
             self.input_events, self.input_acknowledged
@@ -274,7 +280,11 @@ impl MeasureRunApp {
             inputs_ok
         ));
         let pass = frames_ok && inputs_ok && run_ok;
-        report.push_str(if pass { "RESULT PASS\n" } else { "RESULT FAIL\n" });
+        report.push_str(if pass {
+            "RESULT PASS\n"
+        } else {
+            "RESULT FAIL\n"
+        });
         if let Some(parent) = self.out.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -344,11 +354,7 @@ pub fn run(script: Option<PathBuf>, out: Option<PathBuf>) -> i32 {
     if exit != 0 {
         return exit;
     }
-    if outcome.load(Ordering::SeqCst) {
-        0
-    } else {
-        1
-    }
+    if outcome.load(Ordering::SeqCst) { 0 } else { 1 }
 }
 
 #[cfg(test)]

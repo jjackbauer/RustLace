@@ -12,9 +12,7 @@
 
 use std::time::Instant;
 
-use egui::{
-    Align2, Color32, CursorIcon, Rect, RichText, Sense, Stroke, Ui, pos2, vec2,
-};
+use egui::{Align2, Color32, CursorIcon, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::completion::{self, CaretContext, CompletionItem, CompletionKind, CompletionSession};
 use crate::diagnostic_map::{self, DiagnosticRange};
@@ -428,7 +426,9 @@ impl TextEditor {
     /// Both sides are checked so a caret immediately before `)` and a caret immediately after
     /// `(` both name that bracket. A non-bracket character on both sides yields `None`.
     fn bracket_at_caret(&self) -> Option<(usize, usize, char)> {
-        let at = self.char_at(self.caret_row, self.caret_col).filter(|ch| is_bracket(*ch));
+        let at = self
+            .char_at(self.caret_row, self.caret_col)
+            .filter(|ch| is_bracket(*ch));
         if let Some(ch) = at {
             return Some((self.caret_row, self.caret_col, ch));
         }
@@ -596,10 +596,7 @@ impl TextEditor {
             .parse()
             .map_err(|_| format!("'{line_text}' is not a line number."))?;
         if line == 0 || line > self.line_count() {
-            return Err(format!(
-                "Line {line} is outside 1..={}.",
-                self.line_count()
-            ));
+            return Err(format!("Line {line} is outside 1..={}.", self.line_count()));
         }
         let row = line - 1;
         let col = if column_text.is_empty() {
@@ -1597,7 +1594,8 @@ impl TextEditor {
     /// keeps the per-pass cost independent of a 5 000-line document's size.
     fn call_context(&self) -> Option<((usize, usize), String, usize)> {
         // A caret inside a string or comment is inside text, not inside an argument list.
-        if completion::caret_context(&self.lines[self.caret_row], self.caret_col) != CaretContext::Code
+        if completion::caret_context(&self.lines[self.caret_row], self.caret_col)
+            != CaretContext::Code
         {
             return None;
         }
@@ -1681,7 +1679,10 @@ impl TextEditor {
     /// table. `None` outside a call or for a name the engine does not register.
     pub fn signature_help(&self, engine: &crate::engine::EngineState) -> Option<SignatureHelp> {
         let (open, name, commas) = self.call_context()?;
-        let function = engine.functions.iter().find(|function| function.name == name)?;
+        let function = engine
+            .functions
+            .iter()
+            .find(|function| function.name == name)?;
         let parameters = function.parameters.clone();
         let active = if parameters.is_empty() {
             0
@@ -2319,10 +2320,7 @@ impl TextEditor {
                 );
                 if current {
                     painter.rect_filled(
-                        Rect::from_min_max(
-                            pos2(x0, y + row_h - 2.0),
-                            pos2(x1, y + row_h - 1.0),
-                        ),
+                        Rect::from_min_max(pos2(x0, y + row_h - 2.0), pos2(x1, y + row_h - 1.0)),
                         1.0,
                         theme::find_current_mark(),
                     );
@@ -2340,10 +2338,7 @@ impl TextEditor {
                         let from_x = text_left + self.display_column(row, from) as f32 * char_w;
                         let to_x = text_left + self.display_column(row, to) as f32 * char_w;
                         painter.rect_filled(
-                            Rect::from_min_max(
-                                pos2(from_x, y + 1.0),
-                                pos2(to_x, y + row_h - 1.0),
-                            ),
+                            Rect::from_min_max(pos2(from_x, y + 1.0), pos2(to_x, y + row_h - 1.0)),
                             1.0,
                             theme::selection_bg(),
                         );
@@ -2374,12 +2369,20 @@ impl TextEditor {
                     );
                 };
                 if matched.is_matched() {
-                    paint_cell(matched.at, theme::bracket_match_bg(), theme::bracket_match());
+                    paint_cell(
+                        matched.at,
+                        theme::bracket_match_bg(),
+                        theme::bracket_match(),
+                    );
                     if let Some(mate) = matched.mate {
                         paint_cell(mate, theme::bracket_match_bg(), theme::bracket_match());
                     }
                 } else {
-                    paint_cell(matched.at, theme::bracket_unmatched_bg(), theme::bracket_unmatched());
+                    paint_cell(
+                        matched.at,
+                        theme::bracket_unmatched_bg(),
+                        theme::bracket_unmatched(),
+                    );
                 }
             }
             let line = &self.lines[row];
@@ -2416,8 +2419,7 @@ impl TextEditor {
                 if range.line == row + 1 {
                     // Underline the offending span, from the reported column to end-of-line.
                     // An empty span (column at EOL) still gets one cell so the failure is visible.
-                    let x0 =
-                        text_left + self.display_column(row, range.start_char) as f32 * char_w;
+                    let x0 = text_left + self.display_column(row, range.start_char) as f32 * char_w;
                     let cells = range.end_char.saturating_sub(range.start_char).max(1);
                     let x1 = x0 + cells as f32 * char_w;
                     painter.rect_filled(
@@ -2799,7 +2801,9 @@ fn paint_signature(
     let above_space = (caret_top - 3.0 - above_top).max(0.0);
     let place_below = below_space >= height || below_space >= above_space;
     let y = if place_below {
-        below_top.min(rect.bottom() - height - 2.0).max(rect.top() + 2.0)
+        below_top
+            .min(rect.bottom() - height - 2.0)
+            .max(rect.top() + 2.0)
     } else {
         (caret_top - height - 3.0)
             .max(rect.top() + 2.0)
@@ -3196,7 +3200,11 @@ mod tests {
         editor.set_caret(0, 4);
         assert!(editor.delete_surrounding(2, 1));
         assert_eq!(editor.source(), "ab", "two characters before and one after");
-        assert_eq!(caret(&editor), (0, 2), "the caret stays where the range began");
+        assert_eq!(
+            caret(&editor),
+            (0, 2),
+            "the caret stays where the range began"
+        );
         assert!(editor.undo());
         assert_eq!(editor.source(), "ab日cd", "one undo restores both sides");
     }
@@ -3217,7 +3225,10 @@ mod tests {
         let _ = editor_clipboard_pass(&mut editor, vec![egui::Event::Ime(disable)]);
         assert_eq!(editor.preedit, None);
         assert_eq!(editor.source(), "value");
-        assert!(!editor.undo(), "a composition that never committed has no step");
+        assert!(
+            !editor.undo(),
+            "a composition that never committed has no step"
+        );
     }
 
     #[test]
@@ -3904,7 +3915,11 @@ mod tests {
 
         editor.find.set_option(true, false, false);
         editor.find_refresh();
-        assert_eq!(editor.find.matches().len(), 1, "the toggle isolates 'alpha'");
+        assert_eq!(
+            editor.find.matches().len(),
+            1,
+            "the toggle isolates 'alpha'"
+        );
         assert_eq!(editor.find.matches()[0].start, 6);
         assert_eq!(editor.find.count_text().as_deref(), Some("1 of 1"));
     }
@@ -3933,9 +3948,15 @@ mod tests {
         let mut editor = find_editor("alpha beta\ngamma", "(");
         editor.find.set_option(false, false, true);
         editor.find_refresh();
-        let error = editor.find.error().expect("the invalid pattern has a reason");
+        let error = editor
+            .find
+            .error()
+            .expect("the invalid pattern has a reason");
         assert!(error.contains("Invalid regular expression"), "{error}");
-        assert!(editor.find.matches().is_empty(), "no match list is published");
+        assert!(
+            editor.find.matches().is_empty(),
+            "no match list is published"
+        );
         assert_eq!(editor.find.count_text(), None, "no count is shown");
         assert!(!editor.find_next(), "there is nowhere to move");
         assert_eq!(
@@ -3943,7 +3964,12 @@ mod tests {
             "alpha beta\ngamma",
             "an invalid pattern never edits the buffer"
         );
-        assert!(editor.find_summary().expect("open").starts_with("Find: invalid regex"));
+        assert!(
+            editor
+                .find_summary()
+                .expect("open")
+                .starts_with("Find: invalid regex")
+        );
 
         // A valid pattern in the same session recovers the count and clears the error.
         editor.find.set_query("a+");
@@ -4061,7 +4087,9 @@ mod tests {
         };
         let mut editor = TextEditor::from_source("transform(");
         editor.set_caret(0, 10);
-        let help = editor.signature_help(&state).expect("a call to a known function");
+        let help = editor
+            .signature_help(&state)
+            .expect("a call to a known function");
         assert_eq!(help.name, "transform");
         assert_eq!(
             help.parameters,
@@ -4149,7 +4177,9 @@ mod tests {
     fn known_builtins_sqrt_and_compile_read_their_parameters_from_the_engine_registry() {
         use crate::engine::Evaluator;
         let engine = crate::engine::RealEngine::new();
-        let state = engine.state().expect("the real engine captures its registry");
+        let state = engine
+            .state()
+            .expect("the real engine captures its registry");
 
         let sqrt = state
             .functions
@@ -4181,7 +4211,9 @@ mod tests {
         assert_eq!(help.signature(), "compile(f, params)");
         assert_eq!(help.active, 0);
         editor.insert_str("x^2, ");
-        let help = editor.signature_help(&state).expect("still inside the call");
+        let help = editor
+            .signature_help(&state)
+            .expect("still inside the call");
         assert_eq!(help.active, 1, "the comma advances to the params parameter");
         assert_eq!(help.active_parameter(), Some("params"));
     }

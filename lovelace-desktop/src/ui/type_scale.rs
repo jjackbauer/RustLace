@@ -255,11 +255,19 @@ pub fn ensure_installed(ctx: &Context) {
 /// buttons, text edits, menus) inherits the scale through this function.
 pub fn install(style: &mut egui::Style) {
     use egui::TextStyle;
-    style.text_styles.insert(TextStyle::Heading, Role::Title.font());
+    style
+        .text_styles
+        .insert(TextStyle::Heading, Role::Title.font());
     style.text_styles.insert(TextStyle::Body, Role::Body.font());
-    style.text_styles.insert(TextStyle::Button, Role::Body.font());
-    style.text_styles.insert(TextStyle::Monospace, Role::Code.font());
-    style.text_styles.insert(TextStyle::Small, Role::Caption.font());
+    style
+        .text_styles
+        .insert(TextStyle::Button, Role::Body.font());
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, Role::Code.font());
+    style
+        .text_styles
+        .insert(TextStyle::Small, Role::Caption.font());
 }
 
 /// A monospaced badge glyph fitted into `height` points, never above the scale's badge size.
@@ -322,7 +330,10 @@ pub fn legibility_report(ctx: &Context) -> (String, bool) {
             let required = crate::ui::theme::PairClass::NormalText.required();
             let ok = value + 1e-9 >= required;
             passed &= ok;
-            contrasts.push(format!("{surface} {value:.2}:1{}", if ok { "" } else { " FAIL" }));
+            contrasts.push(format!(
+                "{surface} {value:.2}:1{}",
+                if ok { "" } else { " FAIL" }
+            ));
         }
         let size_ok = role.pt() + 1e-9 >= MIN_RENDERED_PT;
         let line_ok = ratio + 1e-9 >= MIN_LINE_RATIO;
@@ -367,7 +378,11 @@ pub fn legibility_report(ctx: &Context) -> (String, bool) {
         format_contrast(smallest_role(), 0),
         format_contrast(smallest_role(), 1),
     ));
-    text.push_str(if passed { "RESULT PASS\n" } else { "RESULT FAIL\n" });
+    text.push_str(if passed {
+        "RESULT PASS\n"
+    } else {
+        "RESULT FAIL\n"
+    });
     (text, passed)
 }
 
@@ -401,7 +416,10 @@ pub fn legibility_cli() -> i32 {
     output.textures_delta.clear();
     let mut text = String::new();
     let mut passed = true;
-    for theme in [crate::ui::theme::ThemeId::Dark, crate::ui::theme::ThemeId::Light] {
+    for theme in [
+        crate::ui::theme::ThemeId::Dark,
+        crate::ui::theme::ThemeId::Light,
+    ] {
         crate::ui::theme::set_active(theme);
         let mut style = egui::Style::default();
         crate::ui::theme::apply_style(&mut style, theme);
@@ -410,11 +428,7 @@ pub fn legibility_cli() -> i32 {
         passed &= ok;
     }
     print!("{text}");
-    if passed {
-        0
-    } else {
-        1
-    }
+    if passed { 0 } else { 1 }
 }
 
 #[cfg(test)]
@@ -450,7 +464,10 @@ mod tests {
         assert_eq!(BODY_PT, CODE_PT, "code and body share the size step");
         assert!(BODY_PT >= 13.0, "VIS-005: body text is never below 13 pt");
         assert!(CODE_PT >= 13.0, "VIS-005: code text is never below 13 pt");
-        assert!(CAPTION_PT >= 11.0, "VIS-005: caption text is never below 11 pt");
+        assert!(
+            CAPTION_PT >= 11.0,
+            "VIS-005: caption text is never below 11 pt"
+        );
         for role in Role::ALL {
             assert!(
                 role.line_ratio() + 1e-4 >= MIN_LINE_RATIO,
@@ -458,9 +475,17 @@ mod tests {
                 role.name(),
                 role.line_ratio()
             );
-            assert!(role.pt() >= MIN_RENDERED_PT, "{}: below the size floor", role.name());
+            assert!(
+                role.pt() >= MIN_RENDERED_PT,
+                "{}: below the size floor",
+                role.name()
+            );
         }
-        assert_eq!(smallest_role(), Role::Caption, "the caption is the smallest role");
+        assert_eq!(
+            smallest_role(),
+            Role::Caption,
+            "the caption is the smallest role"
+        );
     }
 
     #[test]
@@ -478,7 +503,12 @@ mod tests {
             (egui::TextStyle::Small, Role::Caption),
         ] {
             let font = &style.text_styles[&text_style];
-            assert_eq!(font.size, role.pt(), "{text_style:?} must use {}", role.name());
+            assert_eq!(
+                font.size,
+                role.pt(),
+                "{text_style:?} must use {}",
+                role.name()
+            );
             assert_eq!(
                 font.family,
                 role.font().family,
@@ -536,15 +566,19 @@ mod tests {
             FontFamily::Name(STRONG_FAMILY.into()),
             "a semibold face must be the strong family"
         );
-        let owners = ctx
-            .fonts_mut(|fonts| fonts.characters(&strong_family()).get(&'E').cloned());
+        let owners = ctx.fonts_mut(|fonts| fonts.characters(&strong_family()).get(&'E').cloned());
         assert_eq!(
             owners,
             Some(vec![STRONG_FAMILY.to_string()]),
             "the registered semibold face must own the glyphs"
         );
         for role in [Role::Title, Role::PaneTitle, Role::Badge] {
-            assert_eq!(role.font().family, strong_family(), "{}: strong family", role.name());
+            assert_eq!(
+                role.font().family,
+                strong_family(),
+                "{}: strong family",
+                role.name()
+            );
             assert_eq!(role.weight(), Weight::Strong);
         }
         for role in [Role::Body, Role::Caption] {
@@ -558,7 +592,10 @@ mod tests {
     fn the_badge_fit_never_exceeds_the_scale() {
         for height in [6.0, 8.0, 10.0, 16.0, 40.0] {
             let font = fitted_badge(height);
-            assert!(font.size <= BADGE_PT, "{height}: {font:?} exceeds the badge step");
+            assert!(
+                font.size <= BADGE_PT,
+                "{height}: {font:?} exceeds the badge step"
+            );
             assert!(
                 font.size >= BADGE_PT * 0.8 - 1e-6,
                 "{height}: {font:?} is too small to read"
@@ -573,8 +610,14 @@ mod tests {
         ensure_installed(&ctx);
         settle(&ctx);
         let (report, passed) = legibility_report(&ctx);
-        assert!(passed, "the shipped scale must pass its own legibility check:\n{report}");
-        assert!(report.contains("smallest rendered text: caption at 11.0 pt"), "{report}");
+        assert!(
+            passed,
+            "the shipped scale must pass its own legibility check:\n{report}"
+        );
+        assert!(
+            report.contains("smallest rendered text: caption at 11.0 pt"),
+            "{report}"
+        );
         assert!(report.contains("RESULT PASS"), "{report}");
     }
 
@@ -614,7 +657,9 @@ mod tests {
 
     #[test]
     fn the_ui_source_sets_no_font_size_outside_the_scale() {
-        let ui_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("ui");
+        let ui_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("ui");
         let mut offenders = Vec::new();
         let mut files = 0usize;
         for entry in std::fs::read_dir(&ui_dir).expect("src/ui") {
@@ -631,7 +676,10 @@ mod tests {
                 offenders.push(format!("{}:{line}: {literal}", path.display()));
             }
         }
-        assert!(files >= 8, "the audit must read the whole ui module, saw {files} files");
+        assert!(
+            files >= 8,
+            "the audit must read the whole ui module, saw {files} files"
+        );
         assert!(
             offenders.is_empty(),
             "every UI font size must come from the type scale; found ad-hoc sizes:\n{}",

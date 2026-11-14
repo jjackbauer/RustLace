@@ -358,7 +358,8 @@ impl TypographySettings {
 
     /// The line height as a multiple of the font size.
     pub fn line_height(&self) -> f32 {
-        self.line_height_percent.clamp(MIN_LINE_HEIGHT_PERCENT, MAX_LINE_HEIGHT_PERCENT) as f32
+        self.line_height_percent
+            .clamp(MIN_LINE_HEIGHT_PERCENT, MAX_LINE_HEIGHT_PERCENT) as f32
             / 100.0
     }
 
@@ -553,10 +554,7 @@ impl Settings {
                         "line_height_percent",
                         Json::Num(self.editor.typography.line_height_percent.to_string()),
                     ),
-                    (
-                        "ligatures",
-                        Json::Bool(self.editor.typography.ligatures),
-                    ),
+                    ("ligatures", Json::Bool(self.editor.typography.ligatures)),
                 ]),
             ),
             (
@@ -589,16 +587,10 @@ impl Settings {
                                     .iter()
                                     .map(|tab| {
                                         let mut fields = vec![
-                                            (
-                                                "document_id",
-                                                Json::Num(tab.document_id.to_string()),
-                                            ),
+                                            ("document_id", Json::Num(tab.document_id.to_string())),
                                             // DOC-009: each tab's own precision and notation.
                                             ("precision", Json::Num(tab.precision.to_string())),
-                                            (
-                                                "unicode_glyphs",
-                                                Json::Bool(tab.unicode_glyphs),
-                                            ),
+                                            ("unicode_glyphs", Json::Bool(tab.unicode_glyphs)),
                                         ];
                                         if let Some(path) = &tab.path {
                                             fields.push(("path", Json::Str(path.clone())));
@@ -917,7 +909,8 @@ impl Settings {
             if !matches!(session, Json::Null) {
                 // DOC-009: a session written before per-tab settings existed keeps the file's
                 // persisted notation default for every tab; read_session records that migration.
-                if let Some(parsed) = read_session(session, settings.unicode_glyphs, &mut warnings) {
+                if let Some(parsed) = read_session(session, settings.unicode_glyphs, &mut warnings)
+                {
                     settings.session = Some(parsed);
                 }
             }
@@ -1280,7 +1273,10 @@ mod tests {
         let older = Settings::from_json(r#"{"schema_version": 1, "active_precision": 30}"#);
         assert_eq!(older.theme, ThemePreference::Dark);
         assert!(
-            !older.warnings.iter().any(|warning| warning.contains("theme")),
+            !older
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("theme")),
             "a missing theme is not a warning: {:?}",
             older.warnings
         );
@@ -1288,7 +1284,10 @@ mod tests {
         let unknown = Settings::from_json(r#"{"schema_version": 1, "theme": "blue"}"#);
         assert_eq!(unknown.theme, ThemePreference::Dark);
         assert!(
-            unknown.warnings.iter().any(|warning| warning.contains("theme")),
+            unknown
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("theme")),
             "warnings: {:?}",
             unknown.warnings
         );
@@ -1363,7 +1362,10 @@ mod tests {
         assert_eq!(bad.workbench_layout.logs_permille, 100);
         assert_eq!(bad.workbench_layout.inspector_permille, 150);
         assert_eq!(bad.workbench_layout.compact_editor_permille, 820);
-        assert_eq!(bad.workbench_layout.compact_pane, CompactPaneSetting::Hidden);
+        assert_eq!(
+            bad.workbench_layout.compact_pane,
+            CompactPaneSetting::Hidden
+        );
         assert!(
             bad.warnings
                 .iter()
@@ -1848,7 +1850,10 @@ mod tests {
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 
         let older = Settings::from_json(r#"{"schema_version": 1}"#);
-        assert!(!older.unicode_glyphs, "an older file keeps the ASCII default");
+        assert!(
+            !older.unicode_glyphs,
+            "an older file keeps the ASCII default"
+        );
         assert!(
             !older
                 .warnings
@@ -1877,7 +1882,10 @@ mod tests {
     fn the_scale_typography_and_theme_follow_settings_round_trip_and_clamp() {
         let mut settings = Settings::new();
         assert_eq!(settings.ui_scale_percent, MIN_UI_SCALE_PERCENT);
-        assert!(!settings.theme_follows_system, "the shipped default is an explicit theme");
+        assert!(
+            !settings.theme_follows_system,
+            "the shipped default is an explicit theme"
+        );
         assert_eq!(settings.editor.typography, TypographySettings::default());
         assert_eq!(TypographySettings::default().font, EditorFont::Hack);
         assert_eq!(TypographySettings::default().font_size_pt, 13);
@@ -1977,7 +1985,10 @@ mod tests {
         let loaded = Settings::load(&path);
         assert_eq!(loaded.active_precision, DEFAULT_PRECISION, "defaults used");
         assert!(
-            loaded.warnings.iter().any(|warning| warning.contains("not valid JSON")),
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("not valid JSON")),
             "warning: {:?}",
             loaded.warnings
         );

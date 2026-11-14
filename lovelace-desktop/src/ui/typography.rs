@@ -317,7 +317,8 @@ pub fn render_line(
             }
             // A substitution that is not exactly one cell wide would move every following
             // character off the cell grid, which is what the alignment tests forbid.
-            let one_cell = glyph_advance(glyph).is_some_and(|advance| (advance - cell).abs() <= 0.5);
+            let one_cell =
+                glyph_advance(glyph).is_some_and(|advance| (advance - cell).abs() <= 0.5);
             if one_cell {
                 out.push(glyph);
                 for _ in 1..sequence.len() {
@@ -343,7 +344,12 @@ mod tests {
     use super::*;
     use crate::settings::{EditorFont, TypographySettings};
 
-    fn typography(font: EditorFont, size: u32, line_height: u32, ligatures: bool) -> TypographySettings {
+    fn typography(
+        font: EditorFont,
+        size: u32,
+        line_height: u32,
+        ligatures: bool,
+    ) -> TypographySettings {
         TypographySettings {
             font,
             font_size_pt: size,
@@ -400,7 +406,11 @@ mod tests {
         assert_eq!(scale_factor(150), 1.5);
         assert_eq!(scale_factor(200), 2.0);
         assert_eq!(scale_factor(0), 1.0, "below the range is the 100% floor");
-        assert_eq!(scale_factor(900), 2.0, "above the range is the 200% ceiling");
+        assert_eq!(
+            scale_factor(900),
+            2.0,
+            "above the range is the 200% ceiling"
+        );
     }
 
     #[test]
@@ -455,7 +465,10 @@ mod tests {
 
     #[test]
     fn every_offered_family_reports_whether_its_file_is_installed() {
-        assert!(EditorFont::Hack.available(), "the shipped face is always available");
+        assert!(
+            EditorFont::Hack.available(),
+            "the shipped face is always available"
+        );
         for font in EditorFont::ALL {
             if font == EditorFont::Hack {
                 continue;

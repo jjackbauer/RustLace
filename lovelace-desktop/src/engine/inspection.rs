@@ -572,11 +572,14 @@ fn applicability_section(steps: &[&Value], attempts: &[&Value]) -> Json {
     Json::obj([
         ("applied", Json::Arr(applied)),
         ("attempts", Json::Arr(rejected)),
-        ("counts", Json::obj([
-            ("applied", Json::Num((steps.len()).to_string())),
-            ("rejected", Json::Num((attempts.len()).to_string())),
-            ("conditioned", Json::Num(conditioned.to_string())),
-        ])),
+        (
+            "counts",
+            Json::obj([
+                ("applied", Json::Num((steps.len()).to_string())),
+                ("rejected", Json::Num((attempts.len()).to_string())),
+                ("conditioned", Json::Num(conditioned.to_string())),
+            ]),
+        ),
     ])
 }
 
@@ -899,7 +902,11 @@ mod tests {
             "neither power rule may fire without an assumption"
         );
         let attempts = inspection.applicability.supplied().expect("applicability");
-        assert_eq!(attempts.len(), 2, "both sqrt rules were tried: {attempts:?}");
+        assert_eq!(
+            attempts.len(),
+            2,
+            "both sqrt rules were tried: {attempts:?}"
+        );
         assert_eq!(attempts[0].rule_id, "pow.sqrt-square-nonnegative");
         assert!(attempts[0].pattern_matched);
         assert_eq!(attempts[0].precondition, "NotApplicable");

@@ -250,10 +250,7 @@ pub fn relative_luminance(color: egui::Color32) -> f32 {
 /// A11Y-012: the WCAG contrast ratio between two colours, from luminance alone.
 #[cfg(test)]
 pub fn luminance_contrast(first: egui::Color32, second: egui::Color32) -> f32 {
-    let (a, b) = (
-        relative_luminance(first),
-        relative_luminance(second),
-    );
+    let (a, b) = (relative_luminance(first), relative_luminance(second));
     let (lighter, darker) = if a >= b { (a, b) } else { (b, a) };
     (lighter + 0.05) / (darker + 0.05)
 }
@@ -367,17 +364,13 @@ fn short(text: &str, limit: usize) -> String {
 pub fn accesskit_rows(update: &egui::accesskit::TreeUpdate) -> Vec<NodeRow> {
     use std::collections::HashMap;
     let nodes: HashMap<_, _> = update.nodes.iter().cloned().collect();
-    let root = update
-        .tree
-        .as_ref()
-        .map(|tree| tree.root)
-        .or_else(|| {
-            update
-                .nodes
-                .iter()
-                .find(|(_, node)| node.role() == egui::accesskit::Role::Window)
-                .map(|(id, _)| *id)
-        });
+    let root = update.tree.as_ref().map(|tree| tree.root).or_else(|| {
+        update
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == egui::accesskit::Role::Window)
+            .map(|(id, _)| *id)
+    });
     let Some(root) = root else {
         return Vec::new();
     };
@@ -475,10 +468,9 @@ pub fn is_descendant(rows: &[NodeRow], row: &NodeRow, ancestor: egui::accesskit:
 pub fn in_scroll_container(rows: &[NodeRow], row: &NodeRow) -> bool {
     let mut current = row.parent;
     while let Some(id) = current {
-        if rows
-            .iter()
-            .any(|candidate| candidate.parent == Some(id) && candidate.role == egui::Role::ScrollBar)
-        {
+        if rows.iter().any(|candidate| {
+            candidate.parent == Some(id) && candidate.role == egui::Role::ScrollBar
+        }) {
             return true;
         }
         current = rows
@@ -606,8 +598,18 @@ mod tests {
             "\u{221a}(2)\u{00d7}\u{03c0}"
         );
         // Inspector label.
-        let ascii_root = ascii.result_inspection.as_ref().unwrap().get("root").unwrap();
-        let unicode_root = unicode.result_inspection.as_ref().unwrap().get("root").unwrap();
+        let ascii_root = ascii
+            .result_inspection
+            .as_ref()
+            .unwrap()
+            .get("root")
+            .unwrap();
+        let unicode_root = unicode
+            .result_inspection
+            .as_ref()
+            .unwrap()
+            .get("root")
+            .unwrap();
         assert_eq!(
             ascii_root.get("label").and_then(Json::as_str),
             Some("sqrt(2)*pi")

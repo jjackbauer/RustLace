@@ -100,11 +100,7 @@ impl PrecisionCurve {
             .map(|(digits, _)| (*digits as f64).ln())
             .sum::<f64>()
             / count;
-        let mean_y = samples
-            .iter()
-            .map(|(_, seconds)| seconds.ln())
-            .sum::<f64>()
-            / count;
+        let mean_y = samples.iter().map(|(_, seconds)| seconds.ln()).sum::<f64>() / count;
         let mut covariance = 0.0;
         let mut variance = 0.0;
         for (digits, seconds) in &samples {
@@ -422,8 +418,8 @@ mod tests {
         let big = curve.cost(MAX_FOR_TEST);
         assert!(big.seconds < SESSION_BUDGET_SECONDS);
         // ...while a steeper curve refuses the same request with the reason spelled out.
-        let extreme = PrecisionCurve::from_samples(vec![(100, 0.002), (1_000, 2.0)])
-            .expect("two points fit");
+        let extreme =
+            PrecisionCurve::from_samples(vec![(100, 0.002), (1_000, 2.0)]).expect("two points fit");
         let CostDecision::Refuse(cost, reason) = CostDecision::of(&extreme, 8_000) else {
             panic!("an estimate past the budget must be refused");
         };
@@ -512,7 +508,9 @@ mod real_engine_curve_tests {
             runtime_at_max
         );
         assert!(
-            runtime_at_max > 0.05 && runtime_at_max < wide_at_max * 10.0 && runtime_at_max > wide_at_max / 10.0,
+            runtime_at_max > 0.05
+                && runtime_at_max < wide_at_max * 10.0
+                && runtime_at_max > wide_at_max / 10.0,
             "the runtime curve must agree with the wide measurement in order of magnitude: \
              {runtime_at_max} vs {wide_at_max}"
         );

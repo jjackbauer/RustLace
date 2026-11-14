@@ -108,7 +108,12 @@ pub fn audit_src(src: &Path) -> ThreadReport {
             plot_source = code_only.clone();
             plot_source_text = production.clone();
         }
-        scan_sites(&relative, &production, &mut spawn_sites, &mut blocking_sites);
+        scan_sites(
+            &relative,
+            &production,
+            &mut spawn_sites,
+            &mut blocking_sites,
+        );
     }
 
     let mut primitives = Vec::new();
@@ -140,10 +145,14 @@ pub fn audit_src(src: &Path) -> ThreadReport {
     } else {
         failures.push("Drop for ExecutionHost is missing".to_string());
     }
-    if plot_source.contains("JoinHandle") && plot_source.contains("fn drop") && plot_source.contains(".join()") {
+    if plot_source.contains("JoinHandle")
+        && plot_source.contains("fn drop")
+        && plot_source.contains(".join()")
+    {
         join_path.push("RasterWorker stores the worker's JoinHandle and Drop joins it".to_string());
     } else {
-        failures.push("ui/plot.rs has no JoinHandle/Drop/join path for the canvas worker".to_string());
+        failures
+            .push("ui/plot.rs has no JoinHandle/Drop/join path for the canvas worker".to_string());
     }
     if plot_source.contains("Shutdown") && plot_source.contains("fetch_add") {
         join_path.push(
@@ -154,7 +163,8 @@ pub fn audit_src(src: &Path) -> ThreadReport {
         failures.push("ui/plot.rs has no Shutdown/cancellation protocol".to_string());
     }
     if workbench_source.contains("next_event") && !workbench_source.contains("thread::sleep") {
-        join_path.push("Workbench wait path blocks on ExecutionHost::next_event, not sleep".to_string());
+        join_path
+            .push("Workbench wait path blocks on ExecutionHost::next_event, not sleep".to_string());
     } else {
         failures.push("Workbench wait path does not block on the event channel".to_string());
     }
@@ -170,13 +180,17 @@ pub fn audit_src(src: &Path) -> ThreadReport {
     let plot_site = spawn_sites.iter().find(|site| site.file == "ui/plot.rs");
     match run_site {
         Some(_) if execution_source_text.contains("lovelace-run-") => {}
-        Some(_) => failures.push("the run worker is not named lovelace-run-<doc>-<run>".to_string()),
+        Some(_) => {
+            failures.push("the run worker is not named lovelace-run-<doc>-<run>".to_string())
+        }
         None => failures.push("the run worker's spawn site in execution.rs is missing".to_string()),
     }
     match plot_site {
         Some(_) if plot_source_text.contains("lovelace-plot-raster") => {}
         Some(_) => failures.push("the canvas worker is not named lovelace-plot-raster".to_string()),
-        None => failures.push("the canvas worker's spawn site in ui/plot.rs is missing".to_string()),
+        None => {
+            failures.push("the canvas worker's spawn site in ui/plot.rs is missing".to_string())
+        }
     }
     for site in &spawn_sites {
         if site.file != "execution.rs" && site.file != "ui/plot.rs" {
@@ -305,11 +319,7 @@ mod tests {
     fn the_shipped_source_passes_the_thread_audit() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let report = audit_src(&src);
-        assert!(
-            report.pass(),
-            "ARC-008 violations: {:#?}",
-            report.failures
-        );
+        assert!(report.pass(), "ARC-008 violations: {:#?}", report.failures);
         assert_eq!(report.spawn_sites.len(), 2);
         let files: Vec<&str> = report
             .spawn_sites
