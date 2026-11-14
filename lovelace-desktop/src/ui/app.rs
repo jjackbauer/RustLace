@@ -872,6 +872,10 @@ pub struct WorkbenchApp {
     focused_pane: Pane,
     /// A11Y-001: a focus request waiting for its pane to paint its first control.
     pane_focus: Option<Pane>,
+    /// TST-011 / J-19: the run state whose transition the status strip last exposed as a live
+    /// region. The status leaf is announced only on the pass the state changes, so moving the
+    /// caret does not re-speak the whole status line to a screen reader.
+    last_announced_run: Option<crate::run_state::RunState>,
     /// A11Y-001: the Run button's widget id from the last painted pass, so the toolbar group can
     /// be focused without a pointer.
     run_button_id: Option<Id>,
@@ -1236,6 +1240,7 @@ impl WorkbenchApp {
             // A11Y-001: the editor owns the keyboard at launch, as it always has.
             focused_pane: Pane::Editor,
             pane_focus: None,
+            last_announced_run: None,
             run_button_id: None,
             plot_fit_id: None,
             workspace_tab_ids: [None; 2],
@@ -4409,6 +4414,11 @@ impl WorkbenchApp {
         let outcome = semantic::SemanticRole::for_run_state(self.view.run_state);
         let marker = outcome.map(|role| role.marker());
         let diagnostic = self.view.diagnostic.clone();
+        let state = self.view.run_state;
+        // TST-011 / J-19: a run-state transition is the one status change a screen reader must
+        // hear. `last_announced_run` makes the status leaf a live region on exactly that pass.
+        let announce_status = self.last_announced_run != Some(state);
+        self.last_announced_run = Some(state);
         let mut label = match marker {
             Some(marker) => format!("{marker} {status}"),
             None => status.clone(),
@@ -4425,7 +4435,6 @@ impl WorkbenchApp {
         if self.trace_pending {
             crate::run_trace::mark("status_bar_drawn", format!("status={status:?}"));
         }
-        let state = self.view.run_state;
         let state_color = status_state_color(state);
         let total = self.view.total.max(1);
         let committed = self.view.committed_steps.min(total);
@@ -4482,7 +4491,7 @@ impl WorkbenchApp {
                     if running {
                         visible.push_str("  |  Cancel is available in the toolbar.");
                     }
-                    ui.add(
+                    let status_line = ui.add(
                         egui::Label::new(
                             RichText::new(visible).monospace().color(state_color),
                         )
@@ -4490,6 +4499,18 @@ impl WorkbenchApp {
                         .show_tooltip_when_elided(false),
                     )
                     .on_hover_text(&label);
+                    // TST-011 / J-19: the run-state transition is the status strip's announcement.
+                    // The live region is this leaf, not the strip's container: AccessKit inherits
+                    // `live` from the nearest ancestor (accesskit_consumer `Node::live`), so a
+                    // live container would also announce the marker, the last-run time and the
+                    // focus group. A leaf announces one status line per transition, and only on
+                    // the transition itself - a permanently live leaf would re-speak the caret.
+                    if announce_status {
+                        let id = status_line.id;
+                        ui.ctx().accesskit_node_builder(id, |node| {
+                            node.set_live(egui::accesskit::Live::Polite);
+                        });
+                    }
                 },
                 |ui| {
                     // A11Y-001: the status strip names the focus group, so a keyboard-only user
@@ -4536,6 +4557,10 @@ impl WorkbenchApp {
                         node.set_min_numeric_value(0.0);
                         node.set_max_numeric_value(total as f64);
                         node.set_numeric_value(committed as f64);
+                        // TST-011 / J-19: the committed count is progress a screen reader hears.
+                        // The node's name only changes when a statement commits (or a new run's
+                        // total appears), so a polite live region here cannot echo the caret.
+                        node.set_live(egui::accesskit::Live::Polite);
                     });
                     progress.on_hover_text("Committed statements of the last run's snapshot");
                     // RUN-005: the in-flight statement's kernel sub-progress, painted as its OWN
@@ -4583,6 +4608,10 @@ impl WorkbenchApp {
         // VIS-007: the compact strip carries the same semantic marker and colour as the full one.
         let marker = semantic::SemanticRole::for_run_state(self.view.run_state).map(|role| role.marker());
         let diagnostic = self.view.diagnostic.clone();
+        // TST-011 / J-19: the compact layout announces the run-state transition through its own
+        // status leaf; the split layout's strip is not painted in this mode.
+        let announce_status = self.last_announced_run != Some(self.view.run_state);
+        self.last_announced_run = Some(self.view.run_state);
         let mut accessible = match marker {
             Some(marker) => format!("{marker} {status}"),
             None => status.clone(),
@@ -4613,9 +4642,15 @@ impl WorkbenchApp {
             short.push_str(&format!(" · kernel {}", kernel.label()));
         }
         ui.horizontal(|ui| {
-            ui.label(RichText::new(short).monospace().small().color(
+            let compact_line = ui.label(RichText::new(short).monospace().small().color(
                 status_state_color(self.view.run_state),
             ));
+            if announce_status {
+                let id = compact_line.id;
+                ui.ctx().accesskit_node_builder(id, |node| {
+                    node.set_live(egui::accesskit::Live::Polite);
+                });
+            }
             if let Some(diagnostic) = &diagnostic {
                 ui.separator();
                 ui.label(
@@ -7041,6 +7076,14 @@ impl WorkbenchApp {
                                 });
                                 ui.ctx().accesskit_node_builder(response.id, |node| {
                                     node.set_selected(is_selected);
+                                    // TST-011 / J-19: the newest record is the log's live region.
+                                    // A row appended (or rewritten at the tail) raises UIA
+                                    // LiveRegionChanged with its full text, which is how a screen
+                                    // reader hears progress/result/diagnostic without polling.
+                                    // Older rows stay silent unless the user navigates to them.
+                                    if index + 1 == logs.len() {
+                                        node.set_live(egui::accesskit::Live::Polite);
+                                    }
                                 });
                                 if response.clicked() {
                                     let (shift, command) = ui.input(|input| {
