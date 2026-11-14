@@ -4074,6 +4074,11 @@ impl WorkbenchApp {
     /// move into the Actions menu, one click away and still named for UI Automation. The editor's
     /// own row/byte counters move to the status strip so they do not force a second row.
     fn toolbar_compact(&mut self, ui: &mut Ui) {
+        // LAY-011: with Cancel on the row the compact toolbar is at its widest. At 200% in the
+        // 900x600 minimum window the default 8 pt gap pushed the Actions menu 16 px past the
+        // client edge while a run was in flight (round 61). Four points between controls keeps the
+        // whole row - including Actions - inside the client without dropping any control.
+        ui.spacing_mut().item_spacing.x = 4.0;
         ui.horizontal(|ui| {
             self.run_precision_controls(ui);
             ui.separator();
@@ -17080,7 +17085,9 @@ mod tests {
             frame_sized(&ctx, &mut app, screen, Vec::new());
             let rows = accessibility_rows(&ctx, &mut app, screen);
             let window = Rect::from_min_size(pos2(0.0, 0.0), screen);
-            for required in ["Run", "Cancel", "Apply", "Precision (digits)"] {
+            // Round 61: the Actions menu shares this row with Run and Cancel; at 200% in the
+            // 900x600 minimum window its button was the one control that left the client.
+            for required in ["Run", "Cancel", "Apply", "Precision (digits)", "Actions"] {
                 let row = rows
                     .iter()
                     .find(|row| row.name == required && row.interactive())
