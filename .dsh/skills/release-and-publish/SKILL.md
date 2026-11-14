@@ -8,13 +8,16 @@ whenToUse: Use when cutting a RustLace release, bumping the workspace version, p
 
 The release artifact is one Windows executable, built from the workspace root. There is no
 installer, no MSIX, no side-by-side DLL set and no packaging script. The version lives in one place
-(`[workspace.package] version` in `Cargo.toml`), CI builds and uploads the same file, and the
-honest release note is an unsigned build with a published hash unless someone signs it.
+(`[workspace.package] version` in `Cargo.toml`), the release workflow builds the file at the tagged
+release commit and checks its `--version`, and the honest release note is an unsigned build with a
+published hash unless someone signs it.
 
 **The normal path is automatic.** `.github/workflows/release.yml` runs after a green CI run on
-`main`, derives the version from conventional commits with `tools/next-version.ps1`, tags it,
-and publishes the executable plus `SHA256SUMS`. The manual procedure below is the fallback for when
-that workflow cannot run; do not hand-tag while the workflow is available.
+`main`, derives the version from conventional commits with `tools/next-version.ps1`, tags it, builds
+the executable at that tag, verifies `--version`, and publishes the executable plus `SHA256SUMS`.
+When the tag already exists without a release the same workflow recovers by building from the tag;
+when both exist it stops without creating anything. The manual procedure below is the fallback for
+when that workflow cannot run; do not hand-tag while the workflow is available.
 
 ## Files you will touch
 
@@ -97,27 +100,35 @@ that workflow cannot run; do not hand-tag while the workflow is available.
    Verify with `git ls-remote --tags origin` that the tag exists on the remote and points at the
    release commit, not at an earlier one.
 
-6. **Publish the artifact.** The normal path is the CI artifact from the Windows job. Download the
-   run's `lovelace-desktop-windows-x86_64` artifact (the GitHub CLI, if installed, does this with
-   `gh run download <run-id> -n lovelace-desktop-windows-x86_64`; otherwise use the Actions run
-   page), compare its SHA-256 with step 3, and create the release with the CLI:
+6. **Publish the artifact.** The normal path is the executable the release workflow built at the
+   tag. For a manual release, check out the tag, build with `cargo build --release -p
+   lovelace-desktop`, confirm `.\target\release\lovelace-desktop.exe --version` prints the tag's
+   version, record its SHA-256, write `SHA256SUMS` in `sha256sum` format
+   (`<hash>  lovelace-desktop.exe`), and create the release from that file:
 
    ```console
-   gh release create v0.1.0 .\lovelace-desktop.exe --title "RustLace 0.1.0" --notes-file .\release-notes.md
+   git checkout --detach v0.1.0
+   cargo build --release -p lovelace-desktop
+   .\target\release\lovelace-desktop.exe --version
+   gh release create v0.1.0 .\target\release\lovelace-desktop.exe .\SHA256SUMS --title "RustLace v0.1.0" --notes-file .\release-notes.md --verify-tag
    ```
 
-   If the CLI is not installed, create the same release in the GitHub UI and attach the artifact.
-   Publishing a local build that CI did not produce from the tagged commit is not the release path.
+   If the CLI is not installed, create the same release in the GitHub UI and attach both files.
+   A build that did not come from the tagged commit is not the release path: an asset whose
+   `--version` disagrees with the tag is wrong even when the tag is right.
 
-7. **Check CI before announcing.** Open the run for the release commit and confirm both jobs are
+7. **Check CI before announcing.** Open the run for the validated commit and confirm both jobs are
    green:
    - "Windows (full workspace)" ran `cargo fmt --all -- --check`, `cargo clippy --workspace
      --all-targets`, `cargo test --workspace`, `cargo build --release -p lovelace-desktop`, and
      uploaded `lovelace-desktop-windows-x86_64` with `if-no-files-found: error`;
    - "Linux (engine crates)" ran the format check, the engine clippy selection and the engine tests
      (`lovelace-lang`, `lovelace-real`, `lovelace-symbolics`).
-   The desktop crate is Windows-only and must not be built or tested on Linux. If either job is red,
-   do not publish; fix and re-tag only if the tag has not been announced.
+   The desktop crate is Windows-only and must not be built or tested on Linux. The release commit
+   carries `[skip ci]`, so the CI run that matters is the validated commit before the bump. Then
+   read the Release run's log: it must state the guard branch, print the built executable's
+   `--version`, and show the assets. If either job is red, do not publish; fix and re-tag only if
+   the tag has not been announced.
 
 8. **Write the release note from observations.** State the version, the commit, the artifact name,
    size and SHA-256, the test and corpus counts observed on that commit, the unsigned/SmartScreen
@@ -139,5 +150,5 @@ git ls-remote --tags origin
 Observable success: every command exits 0; the corpus prints `214 passed, 0 failed, 214 total`; the
 desktop suite reports 716 passed; the release binary exists and its SHA-256 is the hash in the
 release note; `git ls-remote --tags origin` lists the new `v<version>` tag at the release commit;
-the CI run for that commit has both jobs green and the uploaded artifact's hash matches the
-published one.
+the CI run for the validated commit has both jobs green; and the Release run logs the guard branch,
+the built executable printing the tagged version, and the published asset hashes.

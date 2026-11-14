@@ -62,35 +62,49 @@ only when a CI run triggered by a push to `main` finishes with `conclusion == 's
 or unvalidated tree can never be tagged. The job:
 
 1. checks out the triggering run's head SHA with full history and tags;
-2. runs `tools/next-version.ps1`; when it prints `bump=none` the reason is logged and the job stops
-   without a tag;
-3. stops when `vX.Y.Z` already exists, so a re-run or a replayed event can never release the same
-   version twice;
-4. stops when `main` has moved past the validated commit, so a stale run cannot resurrect an older
-   tree;
-5. bumps `[workspace.package] version` in `Cargo.toml` and lets `cargo metadata` rewrite the twelve
-   member versions in `Cargo.lock`, then commits `chore(release): vX.Y.Z [skip ci]`;
-6. creates the tag and pushes the commit and the tag atomically (`git push --atomic`): a rejected
+2. runs `tools/next-version.ps1`; when it prints `bump=none` and no tag exists the reason is logged
+   and the job stops without a tag;
+3. takes one of three guard branches and logs which one:
+   - the target tag and its GitHub Release both exist: stop, because this version is already
+     published (a re-run or a replayed event cannot publish it twice);
+   - the target tag exists but its GitHub Release does not (for example the build failed after the
+     tag was pushed): recover by building from that tag and creating the release; the version bump,
+     release commit and tag push are skipped because the tag is already the release commit;
+   - neither exists: the normal path, which also stops when `main` has moved past the validated
+     commit, so a stale run cannot resurrect an older tree;
+4. on the normal path, bumps `[workspace.package] version` in `Cargo.toml` and lets `cargo metadata`
+   rewrite the twelve member versions in `Cargo.lock`, then commits
+   `chore(release): vX.Y.Z [skip ci]`;
+5. creates the tag and pushes the commit and the tag atomically (`git push --atomic`): a rejected
    push leaves neither behind;
-7. downloads the `lovelace-desktop-windows-x86_64` artifact from the triggering CI run (the exact
-   executable CI built and tested, not a local rebuild), writes `SHA256SUMS`, generates the notes
-   with `tools/release-notes.ps1`, and creates the GitHub Release with `gh release create`.
+6. on both the normal and the recovery path, checks out the tag and builds the executable with
+   `cargo build --release -p lovelace-desktop` from that commit. The built file is run with
+   `--version` and the job fails unless it prints `lovelace-desktop X.Y.Z` for the tag's version, so
+   the attached asset cannot disagree with its tag;
+7. writes `SHA256SUMS` over that built file, generates the notes with `tools/release-notes.ps1`,
+   and creates the GitHub Release with `gh release create --verify-tag`.
 
 The release commit carries `[skip ci]`, so the version bump cannot start CI again. The `concurrency`
-group `release-${{ github.ref }}` queues overlapping runs instead of racing them, and the tag check
-turns the queued run into a no-op. The workflow asks for `contents: write` (push and release) and
-`actions: read` (download an artifact from a different run).
+group `release-${{ github.ref }}` queues overlapping runs instead of racing them, and the guard's
+tag-and-release check turns the queued run into a no-op. The workflow asks for `contents: write`
+(push and release).
 
 Every release carries two assets:
 
 ```text
-lovelace-desktop.exe     the executable built by the successful CI run
+lovelace-desktop.exe     the executable built at the tagged release commit in the release job
 SHA256SUMS               "<sha256>  lovelace-desktop.exe"
 ```
 
+The asset is rebuilt in the release job instead of being taken from CI's artifact because CI builds
+the validated commit *before* the version bump; attaching that file is what made `v0.2.0` ship an
+executable that printed `0.1.0`. Building at the tag and checking `--version` makes the asset and
+the tag agree.
+
 To retry a release, re-run the release workflow that belongs to the triggering CI run
-(`gh run rerun <release-run-id>`). If the tag was already pushed the guard stops, so a retry cannot
-double-publish; if the job failed before the push, the same re-run is safe and does the work.
+(`gh run rerun <release-run-id>`). If the tag and the release both exist the guard stops, so a retry
+cannot double-publish. If the tag exists but the release does not, the same re-run rebuilds from the
+tag and publishes it. If the job failed before the tag was pushed, the re-run is the normal path.
 
 ## The release build
 
@@ -111,11 +125,12 @@ published release note and `SHA256SUMS`, not a number copied into this page. For
 0.1.0 tree the file was 24 169 472 bytes with SHA-256
 `0135514eb6bf5e66ba6cfbe250ee636655014954288e3967e44bec78d3eb79b8`.
 
-CI performs the same build in its Windows job and uploads exactly that file as the artifact
+CI performs the same build in its Windows job and uploads the file as the artifact
 `lovelace-desktop-windows-x86_64` (`.github/workflows/ci.yml`), with `if-no-files-found: error` so a
-silent build failure cannot produce an empty release. The release workflow downloads that artifact
-from the successful run instead of building again, so the published executable is the one the
-Windows job tested.
+silent build failure cannot produce an empty release. That artifact is evidence that the validated
+tree builds; it is not the released file, because CI builds the validated commit before the release
+workflow adds the version bump. The release job rebuilds at the tagged release commit and verifies
+`--version` against the tag before attaching anything.
 
 ## Artifact layout
 
@@ -171,6 +186,7 @@ prove the same things on the release commit:
    journeys match their expected observables.
 9. `cargo build --release -p lovelace-desktop` — the artifact above.
 10. Record the artifact's size and SHA-256 in the release note, along with the unsigned/SmartScreen
-    caveat. The automatic workflow does this from the downloaded artifact.
+    caveat. The automatic workflow does this from the executable it built at the tag and verified
+    with `--version`.
 11. Update `[workspace.package] version` in `Cargo.toml`, commit `Cargo.lock` with it, and tag
     `vX.Y.Z`. The automatic workflow does this; do not tag by hand while it is green.
