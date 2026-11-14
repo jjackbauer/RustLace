@@ -1,0 +1,41 @@
+{
+  "protocolVersion": 1,
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "mathIrVersion": 2,
+  "ok": false,
+  "code": "InvalidOperation",
+  "category": "DomainError",
+  "message": "solve(): currently supports domains real and complex; got integer.",
+  "recoverable": true,
+  "diagnostics": [
+    {
+      "message": "solve(): currently supports domains real and complex; got integer.",
+      "position": 17,
+      "line": 1,
+      "column": 18
+    }
+  ],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "timings": "<volatile>",
+  "output": [],
+  "partialVariables": [
+    {
+      "name": "x",
+      "kind": "Symbolic",
+      "display": "x",
+      "structured": {
+        "kind": "Symbolic",
+        "pretty": "x",
+        "canonical": "(sym x)",
+        "domain": "complex",
+        "exact": true,
+        "nodeCount": 1,
+        "freeSymbols": [
+          "x"
+        ]
+      }
+    }
+  ],
+  "artifacts": []
+}

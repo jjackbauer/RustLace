@@ -8787,7 +8787,7 @@ mod tests {
     #[cfg(feature = "real-engine")]
     fn the_failed_run_matches_the_oracle_ref_error_prefix() {
         let oracle = lovelace_json::Json::parse(
-            include_str!("../../../docs/goal-desktop-v4/reference/REF-error.json")
+            include_str!("../../docs/goal-desktop-v4/reference/REF-error.json")
                 .trim_start_matches('\u{feff}'),
         )
         .expect("REF-error.json is valid JSON");

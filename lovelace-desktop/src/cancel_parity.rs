@@ -72,7 +72,7 @@ mod tests {
     /// The reference capture, loaded from the repository at test time.
     fn reference() -> Json {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/goal-desktop-v4/round-64/REF-cancel.json");
+            .join("../docs/goal-desktop-v4/round-64/REF-cancel.json");
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
         Json::parse(&text).unwrap_or_else(|error| panic!("{} is not JSON: {error:?}", path.display()))

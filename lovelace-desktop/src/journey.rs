@@ -1467,7 +1467,6 @@ mod tests {
     fn reference_corpus() -> std::collections::BTreeMap<String, Json> {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
-            .join("..")
             .join("docs")
             .join("goal-desktop-v4")
             .join("reference");
@@ -1707,7 +1706,7 @@ mod tests {
 
         // 3. Every reference the journey table names exists, and every implemented journey is
         // named in the table with a reference: the scenarios are independent of the product.
-        let table = include_str!("../../../docs/goal-desktop-v4/journeys.md");
+        let table = include_str!("../../docs/goal-desktop-v4/journeys.md");
         let mut named = std::collections::BTreeSet::new();
         for token in table.split(|character: char| {
             !(character.is_ascii_alphanumeric() || character == '-' || character == '_')

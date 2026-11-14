@@ -8,7 +8,7 @@ use lovelace_json::Json;
 
 const FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../Lovelace.Run.Tests/fixtures"
+    "/../docs/csharp-oracle/Lovelace.Run.Tests/fixtures"
 );
 const VOLATILE: [&str; 4] = ["revision", "elapsed", "elapsedTime", "timings"];
 

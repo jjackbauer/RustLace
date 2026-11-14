@@ -13,9 +13,9 @@
 
 /// The release matrix, resolved from the crate at build time.
 ///
-/// `CARGO_MANIFEST_DIR` is `rust/lovelace-desktop`, so this is the repository's document wherever
+/// `CARGO_MANIFEST_DIR` is `lovelace-desktop`, so this is the repository's document wherever
 /// the binary is later run from. The file is read, never written.
-pub const MATRIX_PATH: &str = "../../docs/goal-desktop-v4/platform-matrix.md";
+pub const MATRIX_PATH: &str = "../docs/goal-desktop-v4/platform-matrix.md";
 
 /// The platform this release is built for and certifies.
 pub const ADVERTISED_PLATFORM: &str = "windows";

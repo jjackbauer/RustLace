@@ -23,7 +23,6 @@ fn main() -> ExitCode {
     let verbose = args.iter().any(|a| a == "--verbose");
 
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
         .join("..");
     let files = [
         root.join("parity").join("corpus").join("lang.json"),

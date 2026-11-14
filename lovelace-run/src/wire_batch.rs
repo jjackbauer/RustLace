@@ -1271,7 +1271,7 @@ fn builtin_solve_short_form_publishes_the_same_record_as_full() {
 fn builtin_protocol_document_examples_match_the_binary() {
     let doc = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/symbolics/dsh-protocol.md"
+        "/../docs/symbolics/dsh-protocol.md"
     ))
     .expect("docs/symbolics/dsh-protocol.md");
     let env = eval("x = symbol(\"x\"); x^2 + 1");

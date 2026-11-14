@@ -495,7 +495,7 @@ fn valuedepthguardtests_a_deep_record_chain_is_refused_the_same_way() {
 // ---------------------------------------------------------------------------
 
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
 fn read_repo_file(relative: &str) -> String {
@@ -507,8 +507,8 @@ fn read_repo_file(relative: &str) -> String {
 /// (whitespace-normalized) in the compiled examples file.
 #[test]
 fn docssynctests_every_c_sharp_snippet_appears_in_usage_examples() {
-    let readme = read_repo_file("Lovelace.Symbolics/README.md");
-    let examples = read_repo_file("Lovelace.Symbolics.Tests/UsageExamples.cs");
+    let readme = read_repo_file("docs/csharp-oracle/Lovelace.Symbolics/README.md");
+    let examples = read_repo_file("docs/csharp-oracle/Lovelace.Symbolics.Tests/UsageExamples.cs.txt");
 
     let checked = check_csharp_snippets_appear(&readme, &examples)
         .unwrap_or_else(|missing| panic!("{}", missing.join("\n")));
@@ -519,7 +519,7 @@ fn docssynctests_every_c_sharp_snippet_appears_in_usage_examples() {
 /// whose expected result is non-blank.
 #[test]
 fn docssynctests_every_lovelace_example_has_an_expected_result() {
-    let readme = read_repo_file("Lovelace.Symbolics/README.md");
+    let readme = read_repo_file("docs/csharp-oracle/Lovelace.Symbolics/README.md");
     let examples = parse_examples(&readme);
 
     assert!(

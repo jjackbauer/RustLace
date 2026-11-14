@@ -448,7 +448,7 @@ fn scan_sources(
 }
 
 fn repo_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
 /// NoFloatingPointTests.cs:15 Dsp and Complex sources contain no double/float/System.Numerics.Complex.
