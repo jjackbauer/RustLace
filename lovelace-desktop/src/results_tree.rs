@@ -863,6 +863,52 @@ mod tests {
         );
     }
 
+    /// ARC-010: no presentation source infers structure by parsing a value's display text.
+    ///
+    /// The panes render `ResultProjection::tree` / `StructuredNode` (built from the engine's
+    /// projection) and the typed `Diagnostic`; there is no display-string parser to agree with
+    /// a projection and none may appear. The needles are assembled from parts so this audit does
+    /// not match its own source text.
+    #[test]
+    fn arc_010_presentation_sources_never_parse_the_display_text() {
+        let suffixes = [".split", ".parse", ".trim_matches", ".strip_prefix", ".strip_suffix"];
+        let subjects = ["display", "result"];
+        let needles: Vec<String> = subjects
+            .iter()
+            .flat_map(|subject| {
+                suffixes
+                    .iter()
+                    .map(move |suffix| format!("{subject}{suffix}"))
+            })
+            .collect();
+        let sources: [(&str, &str); 6] = [
+            ("ui/app.rs", include_str!("ui/app.rs")),
+            ("ui/plot.rs", include_str!("ui/plot.rs")),
+            ("ui/editor.rs", include_str!("ui/editor.rs")),
+            ("results_tree.rs", include_str!("results_tree.rs")),
+            ("workspace_table.rs", include_str!("workspace_table.rs")),
+            ("inspector.rs", include_str!("inspector.rs")),
+        ];
+        let mut violations = Vec::new();
+        for (name, source) in sources {
+            for (index, line) in source.lines().enumerate() {
+                let code = line.trim();
+                if code.starts_with("//") {
+                    continue;
+                }
+                for needle in &needles {
+                    if code.contains(needle) {
+                        violations.push(format!("{name}:{}: {code}", index + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            violations.is_empty(),
+            "presentation code parses a display string to recover structure: {violations:#?}"
+        );
+    }
+
     /// One symbolic expression in the projection's shape.
     fn symbolic_json(pretty: &str) -> Json {
         Json::obj([

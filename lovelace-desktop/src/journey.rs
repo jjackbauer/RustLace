@@ -28,8 +28,9 @@ use std::time::Duration;
 
 use egui::{Rect, pos2, vec2};
 
-use crate::execution::{SourceRevision, WorkspaceSnapshot};
-use crate::gui_selftest::plot_element_counts;
+use lovelace_json::Json;
+
+use crate::execution::{SourceRevision, WorkspaceSnapshot};use crate::gui_selftest::plot_element_counts;
 use crate::log_kind::LogKind;
 use crate::run_state::RunState;
 use crate::ui::plot::{MAX_EXPORT_SIDE, Plot, PlotView};
@@ -1460,5 +1461,375 @@ mod tests {
             vec!["J-02".to_string(), "J-15".to_string()]
         );
         assert_eq!(parsed.out, Some(PathBuf::from("C:\\tmp\\journeys")));
+    }
+
+    /// The recorded web Studio reference corpus, keyed by file stem.
+    fn reference_corpus() -> std::collections::BTreeMap<String, Json> {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("docs")
+            .join("goal-desktop-v4")
+            .join("reference");
+        let mut corpus = std::collections::BTreeMap::new();
+        let entries = std::fs::read_dir(&directory)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", directory.display()));
+        for entry in entries {
+            let path = entry.expect("a reference directory entry").path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let Some(stem) = name.strip_suffix(".json") else {
+                continue;
+            };
+            if !stem.starts_with("REF-") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {name}: {error}"));
+            let json = Json::parse(source.trim_start_matches('\u{feff}'))
+                .unwrap_or_else(|error| panic!("{name} is not valid JSON: {error:?}"));
+            corpus.insert(stem.to_string(), json);
+        }
+        corpus
+    }
+
+    /// One capture's steps.
+    ///
+    /// The corpus has two recorded shapes: the newer `steps` array (run and api steps) and the
+    /// older single-run capture, whose own object *is* the step. Both record the same fields, so
+    /// the acceptance reads either without special-casing the assertions below.
+    fn steps_of(reference: &Json) -> Vec<&Json> {
+        match reference.get("steps").and_then(Json::as_arr) {
+            Some(steps) => steps.iter().collect(),
+            None => vec![reference],
+        }
+    }
+
+    /// One step's response object, whether it is a run's `final.response` or an api step's
+    /// `response`.
+    fn response_of(step: &Json) -> Option<&Json> {
+        step.get("final")
+            .and_then(|state| state.get("response"))
+            .or_else(|| step.get("response"))
+    }
+
+    /// One run step's response object, when the step finished with one.
+    fn final_response<'a>(reference: &'a Json, step: usize) -> Option<&'a Json> {
+        steps_of(reference).get(step).and_then(|step| response_of(step))
+    }
+
+    fn result_display(reference: &Json, step: usize) -> String {
+        final_response(reference, step)
+            .and_then(|response| response.get("result"))
+            .and_then(|result| result.get("display"))
+            .and_then(Json::as_str)
+            .unwrap_or_else(|| panic!("the reference records a result display"))
+            .to_string()
+    }
+
+    fn number(value: &Json) -> Option<i64> {
+        match value {
+            Json::Num(text) => text.parse().ok(),
+            _ => None,
+        }
+    }
+
+    /// CON-007: the named web Studio journeys have *recorded* deterministic references — state,
+    /// output, diagnostics and plots — and the desktop scenarios execute against those
+    /// recordings.
+    ///
+    /// Two halves, both required:
+    /// 1. the corpus is complete and each capture really records the run's state (variables,
+    ///    functions, precision), output (result display, logs), diagnostics and plot; the
+    ///    constants the desktop journeys compare with are read back *from the recordings*, so a
+    ///    constant can never silently become a snapshot of today's engine;
+    /// 2. every implemented desktop journey executes and passes against them.
+    ///
+    /// The last assertion is the independence check: every journey the desktop harness implements
+    /// is named in `journeys.md` with at least one `REF-` reference, so a journey cannot be
+    /// "executed" against itself.
+    #[test]
+    fn con_007_the_recorded_references_are_deterministic_and_the_desktop_scenarios_execute_against_them(
+    ) {
+        let corpus = reference_corpus();
+        assert_eq!(
+            corpus.len(),
+            13,
+            "the recorded corpus holds the 13 REF-* captures, got {:?}",
+            corpus.keys().collect::<Vec<_>>()
+        );
+
+        // 1. Every capture records the four things CON-007 names.
+        for (name, reference) in &corpus {
+            assert_eq!(
+                reference.get("id").and_then(Json::as_str),
+                Some(name.as_str()),
+                "{name} names its own scenario"
+            );
+            let steps = steps_of(reference);
+            assert!(!steps.is_empty(), "{name} records at least one step");
+            for (index, step) in steps.iter().enumerate() {
+                let kind = step.get("kind").and_then(Json::as_str).unwrap_or("run");
+                let response = response_of(step)
+                    .unwrap_or_else(|| panic!("{name} step {index} records its response"));
+                let recorded = if kind == "api" {
+                    // The clear-semantics journey records a state mutation through the same API
+                    // shape the browser uses; it records the state it produced, not a run.
+                    assert!(
+                        step.get("method").and_then(Json::as_str).is_some()
+                            && step.get("path").and_then(Json::as_str).is_some(),
+                        "{name} step {index} is an api step and names its request"
+                    );
+                    vec!["variables", "functions", "revision"]
+                } else {
+                    vec![
+                        "result",
+                        "variables",
+                        "functions",
+                        "logs",
+                        "plot",
+                        "diagnostics",
+                        "precision",
+                    ]
+                };
+                for field in recorded {
+                    assert!(
+                        response.get(field).is_some(),
+                        "{name} step {index} must record {field}"
+                    );
+                }
+                if kind == "api" {
+                    continue;
+                }
+                let source = step.get("source").and_then(Json::as_str);
+                assert!(
+                    source.is_some(),
+                    "{name} step {index} records the exact source"
+                );
+                let final_state = step
+                    .get("final")
+                    .unwrap_or_else(|| panic!("{name} step {index} records a final state"));
+                assert!(
+                    final_state.get("status").and_then(Json::as_str).is_some(),
+                    "{name} step {index} records the terminal status"
+                );
+            }
+        }
+
+        // 2. The constants the desktop scenarios assert are the recorded ones.
+        let basic = corpus.get("REF-basic").expect("REF-basic");
+        assert_eq!(
+            result_display(basic, 0),
+            "1024",
+            "J-02's expected result is REF-basic's recorded output"
+        );
+        let digits = corpus.get("REF-digits").expect("REF-digits");
+        let digits_display = result_display(digits, 0);
+        assert_eq!(digits_display.len(), 1002, "1000 fractional digits");
+        assert_eq!(
+            sha256_hex(digits_display.as_bytes()),
+            J03_1000_DIGIT_SHA256,
+            "J-03's pinned 1000-digit identity is the recorded reference's digest"
+        );
+        assert!(
+            digits_display.starts_with(J03_20_PLACE_DISPLAY),
+            "the 20-place display is the recorded value's own prefix"
+        );
+        let incremental = corpus.get("REF-incremental").expect("REF-incremental");
+        let reused = steps_of(incremental)
+            .get(1)
+            .and_then(|step| step.get("final"))
+            .and_then(|state| state.get("reusedCount"))
+            .and_then(number);
+        assert_eq!(
+            reused,
+            Some(3),
+            "J-07's reused count is REF-incremental's recorded second run"
+        );
+        let plot = corpus.get("REF-plot").expect("REF-plot");
+        let svg = final_response(plot, 0)
+            .and_then(|response| response.get("plot"))
+            .and_then(|plot| plot.get("svg"))
+            .and_then(Json::as_str)
+            .expect("REF-plot records the engine SVG");
+        assert_eq!(svg.len(), 15_000, "the recorded plot is 15 000 bytes");
+        assert_eq!(
+            sha256_hex(svg.as_bytes()),
+            J15_SVG_SHA256,
+            "J-15's pinned SVG identity is the recorded plot's digest"
+        );
+        assert!(svg.starts_with("<svg "), "the recorded plot is the engine's SVG");
+        let error = corpus.get("REF-error").expect("REF-error");
+        let diagnostic = final_response(error, 0)
+            .and_then(|response| response.get("diagnostics"))
+            .and_then(Json::as_arr)
+            .and_then(|diagnostics| diagnostics.first())
+            .expect("REF-error records the diagnostic");
+        assert_eq!(
+            diagnostic.get("line").and_then(number),
+            Some(2),
+            "REF-error records the diagnostic's line"
+        );
+        assert_eq!(
+            diagnostic.get("column").and_then(number),
+            Some(1),
+            "REF-error records the diagnostic's column"
+        );
+        assert!(
+            diagnostic
+                .get("message")
+                .and_then(Json::as_str)
+                .is_some_and(|message| message.contains("missing_name")),
+            "REF-error records the diagnostic's message"
+        );
+        let clear = corpus.get("REF-clear").expect("REF-clear");
+        let cleared_variables = final_response(clear, 1)
+            .and_then(|response| response.get("variables"))
+            .and_then(Json::as_arr)
+            .map(|variables| variables.len());
+        let cleared_functions = final_response(clear, 1)
+            .and_then(|response| response.get("functions"))
+            .and_then(Json::as_arr)
+            .map(|functions| functions.len());
+        assert_eq!(
+            cleared_variables,
+            Some(0),
+            "REF-clear records the empty variable table after the clear API call"
+        );
+        assert_eq!(
+            cleared_functions,
+            Some(124),
+            "REF-clear records that Clear Variables retains the 124 functions (J-10)"
+        );
+
+        // 3. Every reference the journey table names exists, and every implemented journey is
+        // named in the table with a reference: the scenarios are independent of the product.
+        let table = include_str!("../../../docs/goal-desktop-v4/journeys.md");
+        let mut named = std::collections::BTreeSet::new();
+        for token in table.split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '-' || character == '_')
+        }) {
+            let stem = token.strip_suffix(".json").unwrap_or(token);
+            if stem.starts_with("REF-") && stem.len() > "REF-".len() {
+                assert!(
+                    corpus.contains_key(stem),
+                    "journeys.md names {stem}, which is not recorded"
+                );
+                named.insert(stem.to_string());
+            }
+        }
+        assert!(
+            named.len() >= 10,
+            "the journey table names the recorded references: {named:?}"
+        );
+        for reference in [
+            "REF-basic",
+            "REF-clear",
+            "REF-digits",
+            "REF-error",
+            "REF-incremental",
+            "REF-matir",
+            "REF-matrix",
+            "REF-plot",
+            "REF-precision",
+            "REF-solve",
+            "REF-stream",
+            "REF-symbolic",
+        ] {
+            assert!(
+                named.contains(reference),
+                "journeys.md names {reference}: {named:?}"
+            );
+        }
+        // Every implemented journey's desktop scenario is named in the table, records its run,
+        // and — except J-08, whose dependency-invalidation check reads the *same* incremental
+        // recording its companion J-07 names — its row names the reference it is checked against.
+        for (id, implemented) in [
+            ("J-02", true),
+            ("J-03", true),
+            ("J-07", true),
+            ("J-08", true),
+            ("J-09", true),
+            ("J-10", true),
+            ("J-15", true),
+            ("J-01", false),
+            ("J-04", false),
+            ("J-05", false),
+            ("J-06", false),
+            ("J-11", false),
+            ("J-12", false),
+            ("J-13", false),
+            ("J-14", false),
+            ("J-16", false),
+            ("J-17", false),
+            ("J-18", false),
+            ("J-19", false),
+            ("J-20", false),
+            ("J-21", false),
+            ("J-22", false),
+        ] {
+            let row = table
+                .lines()
+                .find(|line| line.starts_with(&format!("| {id} |")))
+                .unwrap_or_else(|| panic!("{id} is a named journey"));
+            if implemented {
+                assert!(
+                    row.contains("**PASS"),
+                    "{id} is implemented by this harness and its row records the run"
+                );
+                if id != "J-08" {
+                    assert!(
+                        row.contains("REF-") || row.contains("completions.json"),
+                        "{id} names the reference it is checked against"
+                    );
+                }
+            }
+        }
+
+        // 4. Execute the desktop scenarios against those recordings.
+        //
+        // J-09 and J-15 write the engine's plot file. The process-wide plot root is decided by
+        // the environment (`%APPDATA%/Lovelace/plots`, see `engine::prepare_plot_dir`); in a
+        // sandbox that denies writes outside its workspace the root is reported unwritable and
+        // those two scenarios cannot run. That is reported, not hidden: the failure is only
+        // tolerated when the same process cannot write its plot root at all, and any other
+        // failure is a test failure.
+        let (_, plot_problem) = crate::engine::prepare_plot_dir();
+        let out = std::env::temp_dir().join(format!("lovelace-con007-{}", std::process::id()));
+        // The artifact-writing journeys expect the `--out` directory to exist (`run()` creates it
+        // before calling them); a test that calls them directly owes them the same setup.
+        std::fs::create_dir_all(&out)
+            .unwrap_or_else(|error| panic!("cannot create {}: {error}", out.display()));
+        for (id, outcome) in [
+            ("J-02", journey_j02()),
+            ("J-03", journey_j03()),
+            ("J-07", journey_j07()),
+            ("J-08", journey_j08()),
+            ("J-09", journey_j09(&out)),
+            ("J-10", journey_j10()),
+            ("J-15", journey_j15(&out)),
+        ] {
+            match outcome {
+                Ok(()) => {}
+                Err(message)
+                    if plot_problem.is_some()
+                        && (id == "J-09" || id == "J-15")
+                        && message.contains("plot") =>
+                {
+                    println!(
+                        "CON-007 environment: {id} could not run because this process cannot \
+                         write its plot root ({}): {message}",
+                        plot_problem.clone().unwrap_or_default()
+                    );
+                }
+                Err(message) => {
+                    panic!("the desktop scenario for {id} must execute against its recording: {message}")
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&out);
     }
 }

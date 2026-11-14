@@ -34,6 +34,9 @@ use crate::execution::{
 use crate::keyboard::WorkbenchCommand;
 use crate::language;
 use crate::log_kind::{LogKind, LogLine};
+use crate::precision_budget::{
+    CostDecision, PrecisionCost, PrecisionCurve, WARN_DIGITS,
+};
 use crate::recovery::RecoveryRecord;
 use crate::run_state::{RunState, RunStateMachine, RunStateTransition};
 use crate::settings::{MAX_PRECISION, MIN_PRECISION, SessionState, SessionTab};
@@ -733,6 +736,22 @@ pub struct Workbench {
     /// with their parameter names). Once a run publishes a snapshot, that snapshot's capture
     /// adds the document's variables and user functions on top of it.
     engine_state: EngineState,
+    /// PERF-011: the measured digits-to-time curve for this workbench's engine.
+    ///
+    /// `None` until the engine's cost has actually been measured. No estimate is ever produced
+    /// from a constant: the only way this becomes `Some` is [`PrecisionCurve::measure`] or an
+    /// explicit injection (tests). The UI refuses to guess while it is `None`.
+    precision_curve: Option<PrecisionCurve>,
+    /// PERF-011: how to build a fresh engine to measure the curve with.
+    ///
+    /// The shipped constructor supplies the same engine factory its documents use; a test
+    /// workbench over an arbitrary factory supplies nothing and injects a curve instead. The
+    /// measurement is bounded ([`PrecisionCurve::measure_runtime`]) and happens on the first
+    /// extreme request, on the thread that asked for it: that is one bounded calibration on an
+    /// explicit user action, not a per-frame cost and not a third worker to own and join.
+    precision_measure: Option<engine::EngineFactory>,
+    /// PERF-011: the estimate a precision request is waiting for the user to confirm.
+    precision_pending: Option<PrecisionCost>,
 }
 
 impl Default for Workbench {
@@ -762,8 +781,13 @@ impl Workbench {
             Box::new(engine::default_engine_factory()),
             plot_root.clone(),
         );
-        let mut workbench =
-            Workbench::with_plot_root(factory, engine_name, plot_root.clone(), engine_state);
+        let mut workbench = Workbench::with_plot_root(
+            factory,
+            engine_name,
+            plot_root.clone(),
+            engine_state,
+            Some(engine::default_engine_factory()),
+        );
         workbench.log(
             0,
             LogKind::Info,
@@ -792,6 +816,7 @@ impl Workbench {
             engine_name,
             plot_root.clone(),
             engine_state,
+            None,
         );
         workbench.log(
             0,
@@ -816,6 +841,7 @@ impl Workbench {
             engine_name,
             engine::default_plot_dir(),
             EngineState::default(),
+            None,
         )
     }
 
@@ -826,6 +852,7 @@ impl Workbench {
         engine_name: &'static str,
         plot_root: PathBuf,
         engine_state: EngineState,
+        precision_measure: Option<engine::EngineFactory>,
     ) -> Workbench {
         let host = ExecutionHost::new(factory);
         let mut workbench = Workbench {
@@ -840,6 +867,9 @@ impl Workbench {
             recent_files: Vec::new(),
             next_id: 3,
             engine_state,
+            precision_curve: None,
+            precision_measure,
+            precision_pending: None,
         };
         workbench.log(
             0,
@@ -1963,6 +1993,173 @@ impl Workbench {
     /// [`Workbench::set_precision_text`]).
     pub fn set_active_precision_text(&mut self, text: &str) -> Result<usize, String> {
         self.set_precision_text(self.active, text)
+    }
+
+    /// PERF-011: the measured digits-to-time curve for this workbench's engine.
+    ///
+    /// `None` means the engine's cost has not been measured; the product refuses to estimate
+    /// from a constant, so no dialog can open until this is `Some`.
+    pub fn precision_curve(&self) -> Option<&PrecisionCurve> {
+        self.precision_curve.as_ref()
+    }
+
+    /// PERF-011: installs a measured curve (the request path and the tests use this).
+    pub fn set_precision_curve(&mut self, curve: PrecisionCurve) {
+        self.precision_curve = Some(curve);
+    }
+
+    /// PERF-011: true when this workbench can measure its engine's cost curve.
+    pub fn can_measure_precision(&self) -> bool {
+        self.precision_measure.is_some()
+    }
+
+    /// PERF-011: measures the engine's cost curve now, when one can be measured.
+    ///
+    /// The measurement is the bounded runtime set ([`PrecisionCurve::measure_runtime`]): on the
+    /// reference engine it costs about 50 ms, once per session, on the explicit extreme request
+    /// that needs it. It runs on the thread that asked rather than a detached worker: the crate's
+    /// ARC-008 audit approves exactly two owned workers (the run worker and the plot raster
+    /// worker), and a precision estimate does not justify a third one. The result is logged with
+    /// its measured points, so the estimate's provenance is in the document's own log.
+    fn measure_precision_curve(&mut self) -> bool {
+        if self.precision_curve.is_some() {
+            return true;
+        }
+        let Some(factory) = self.precision_measure else {
+            return false;
+        };
+        let measured = PrecisionCurve::measure_runtime(factory);
+        match measured {
+            Some(curve) => {
+                let line = curve.measured_line();
+                self.precision_curve = Some(curve);
+                self.log(
+                    self.active,
+                    LogKind::Info,
+                    format!("Precision cost curve measured: {line}."),
+                );
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// PERF-011: the estimate a precision request is waiting for the user to confirm.
+    pub fn pending_precision(&self) -> Option<&PrecisionCost> {
+        self.precision_pending.as_ref()
+    }
+
+    /// PERF-011: requests a precision change from the toolbar text.
+    ///
+    /// Small changes stay frictionless: at or below [`WARN_DIGITS`] the value is applied exactly
+    /// as [`Workbench::set_active_precision_text`] did. Above it, the measured curve decides:
+    /// * inside the budget the request returns [`PrecisionRequest::Confirm`] with the estimate and
+    ///   changes nothing until [`Workbench::confirm_precision`] is called;
+    /// * past the budget it returns [`PrecisionRequest::Refused`] with the reason and changes
+    ///   nothing;
+    /// * if the curve has not been measured yet, the bounded measurement runs first and the same
+    ///   decision follows; an engine that cannot be measured is refused with the reason. The
+    ///   precision is *never* changed on an unmeasured engine.
+    ///
+    /// Every path logs what it did; nothing here panics or aborts.
+    pub fn request_active_precision(&mut self, text: &str) -> PrecisionRequest {
+        let digits = match parse_precision(text) {
+            Ok(digits) => digits,
+            Err(guidance) => {
+                self.log(self.active, LogKind::Info, guidance.clone());
+                return PrecisionRequest::Invalid(guidance);
+            }
+        };
+        if digits <= WARN_DIGITS {
+            self.set_precision(self.active, digits);
+            return PrecisionRequest::Applied(digits);
+        }
+        if self.precision_curve.is_none() && !self.measure_precision_curve() {
+            let reason = format!(
+                "Precision {digits} digits refused: this engine publishes no measurable cost \
+                 curve, so no estimate can be produced. The precision is unchanged."
+            );
+            self.log(self.active, LogKind::Diagnostic, reason.clone());
+            return PrecisionRequest::Refused { digits, reason };
+        }
+        let Some(curve) = self.precision_curve.clone() else {
+            // `measure_precision_curve` either installs a curve or reports failure; this branch
+            // is unreachable but is written as a refusal so a future change cannot fall through
+            // to an estimate that does not exist.
+            let reason = format!(
+                "Precision {digits} digits refused: no measured cost curve is available. The \
+                 precision is unchanged."
+            );
+            self.log(self.active, LogKind::Diagnostic, reason.clone());
+            return PrecisionRequest::Refused { digits, reason };
+        };
+        match CostDecision::of(&curve, digits) {
+            CostDecision::Free => {
+                self.set_precision(self.active, digits);
+                PrecisionRequest::Applied(digits)
+            }
+            CostDecision::Confirm(cost) => {
+                self.log(
+                    self.active,
+                    LogKind::Info,
+                    format!(
+                        "Precision request {}. Confirmation required: the precision is unchanged \
+                         until it is confirmed.",
+                        cost.line()
+                    ),
+                );
+                self.precision_pending = Some(cost.clone());
+                PrecisionRequest::Confirm(cost)
+            }
+            CostDecision::Refuse(cost, reason) => {
+                self.log(
+                    self.active,
+                    LogKind::Diagnostic,
+                    format!("Precision {} {reason}", cost.digits),
+                );
+                PrecisionRequest::Refused {
+                    digits: cost.digits,
+                    reason,
+                }
+            }
+        }
+    }
+
+    /// PERF-011: applies the estimate the user confirmed, logging the estimate with the change.
+    pub fn confirm_precision(&mut self) -> Option<usize> {
+        let cost = self.precision_pending.take()?;
+        let index = self.active;
+        let before = self.docs.get(index).map(|doc| doc.precision);
+        self.set_precision(index, cost.digits);
+        self.log(
+            index,
+            LogKind::Info,
+            format!(
+                "Precision {} digits confirmed ({}); it was {} before the change.",
+                cost.digits,
+                cost.estimate_text(),
+                before
+                    .map(|digits| digits.to_string())
+                    .unwrap_or_else(|| "unset".to_string())
+            ),
+        );
+        Some(cost.digits)
+    }
+
+    /// PERF-011: drops the pending estimate without changing anything, and says so in the log.
+    pub fn cancel_precision(&mut self) -> Option<PrecisionCost> {
+        let cost = self.precision_pending.take()?;
+        let index = self.active;
+        let current = self.docs.get(index).map(|doc| doc.precision).unwrap_or(0);
+        self.log(
+            index,
+            LogKind::Info,
+            format!(
+                "Precision change to {} digits cancelled; the precision stays {current} digits.",
+                cost.digits
+            ),
+        );
+        Some(cost)
     }
 
     /// DOC-009: sets one tab's ASCII/Unicode mathematical notation.
@@ -3208,6 +3405,38 @@ fn plot_scoped_factory(inner: EvaluatorFactory, root: PathBuf) -> EvaluatorFacto
         evaluator
     })
 }
+
+/// PERF-011: what the toolbar's precision control did with one typed value.
+///
+/// The window renders each outcome: an invalid value keeps its guidance beside the field, a
+/// confirmation opens the estimate dialog, and a refusal keeps its reason beside the field. No
+/// outcome is silent except [`PrecisionRequest::Applied`], which is the frictionless small-change
+/// path the control has always had.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PrecisionRequest {
+    /// The value is in range and small enough to apply without an estimate.
+    Applied(usize),
+    /// The text is not a precision; the sentence is the product's guidance.
+    Invalid(String),
+    /// Above the threshold: this estimate must be confirmed before anything changes.
+    Confirm(PrecisionCost),
+    /// Above the documented budget: the request is refused and nothing changes.
+    Refused {
+        /// The refused digit count.
+        digits: usize,
+        /// The product's explanation, naming the estimate and the budget.
+        reason: String,
+    },
+}
+
+/// PERF-011: the types the window renders for an extreme precision request.
+///
+/// Re-exported here so the presentation layer keeps importing one core module (the ARC-003 UI
+/// separation audit's rule): the UI never reaches into the budget module directly.
+pub use crate::precision_budget::{
+    PrecisionCurve as PrecisionCostCurve, SESSION_BUDGET_SECONDS,
+    WARN_DIGITS as PRECISION_WARN_DIGITS, WORKLOAD as PRECISION_WORKLOAD,
+};
 
 /// RUN-019: parses the toolbar's precision text, or names exactly what is acceptable.
 ///
@@ -8147,6 +8376,111 @@ mod tests {
             "status was {:?}",
             workbench.status_text(1, 1)
         );
+    }
+
+    /// PERF-011: the toolbar's precision request is frictionless at and below the documented
+    /// threshold, and above it the measured curve decides: confirmation with the estimate, a
+    /// refusal past the budget, or "measure first" when no curve exists yet. No path changes the
+    /// precision silently and no path panics.
+    #[test]
+    fn perf_011_a_small_precision_change_is_free_and_an_extreme_one_needs_the_estimate() {
+        let mut workbench = fake_workbench();
+        // A curve injected as the measurement would deliver it: 100x digits costs 10x time.
+        workbench.set_precision_curve(
+            PrecisionCurve::from_samples(vec![
+                (100, 0.001),
+                (1_000, 0.010),
+                (10_000, 0.100),
+            ])
+            .expect("the curve fits"),
+        );
+        // The threshold itself is still frictionless: no dialog, no estimate line.
+        assert_eq!(
+            workbench.request_active_precision("5000"),
+            PrecisionRequest::Applied(5000)
+        );
+        assert_eq!(workbench.documents()[0].precision, 5000);
+        assert!(workbench.pending_precision().is_none());
+
+        // One digit above it: nothing changes yet, and the log carries the estimate and the
+        // measured points it came from.
+        let request = workbench.request_active_precision("20000");
+        let PrecisionRequest::Confirm(cost) = &request else {
+            panic!("an extreme precision must ask for confirmation: {request:?}");
+        };
+        assert_eq!(cost.digits, 20_000);
+        assert!(
+            (cost.seconds - 0.2).abs() < 0.02,
+            "the estimate is the curve's own: {cost:?}"
+        );
+        assert_eq!(workbench.documents()[0].precision, 5000, "nothing changed yet");
+        let log = all_log_text(&workbench, 0);
+        assert!(
+            log.contains("Precision request 20000 digits: estimated"),
+            "the log must carry the estimate before the change: {log:?}"
+        );
+        assert!(log.contains("Confirmation required"), "{log:?}");
+        assert!(log.contains("100 digits"), "the measured points are named: {log:?}");
+
+        // Confirming applies the estimated value and logs the estimate with it.
+        assert_eq!(workbench.confirm_precision(), Some(20_000));
+        assert_eq!(workbench.documents()[0].precision, 20_000);
+        let log = all_log_text(&workbench, 0);
+        assert!(
+            log.contains("Precision 20000 digits confirmed (≈ 200 ms"),
+            "the confirmation names the estimate: {log:?}"
+        );
+
+        // Refusing to confirm leaves the document exactly as it was, and says so.
+        assert!(matches!(
+            workbench.request_active_precision("30000"),
+            PrecisionRequest::Confirm(_)
+        ));
+        assert!(workbench.cancel_precision().is_some());
+        assert_eq!(workbench.documents()[0].precision, 20_000);
+        let log = all_log_text(&workbench, 0);
+        assert!(
+            log.contains("Precision change to 30000 digits cancelled; the precision stays 20000"),
+            "{log:?}"
+        );
+
+        // The documented refusal class: an estimate past the session budget is refused, with the
+        // budget and the estimate in the sentence, and nothing changes.
+        workbench.set_precision_curve(
+            PrecisionCurve::from_samples(vec![(1_000, 0.5), (10_000, 50.0)])
+                .expect("the steeper curve fits"),
+        );
+        let request = workbench.request_active_precision("10000");
+        let PrecisionRequest::Refused { digits, reason } = &request else {
+            panic!("an estimate past the budget must be refused: {request:?}");
+        };
+        assert_eq!(*digits, 10_000);
+        assert!(reason.contains("30 s budget"), "{reason}");
+        assert_eq!(workbench.documents()[0].precision, 20_000);
+        assert!(workbench.pending_precision().is_none());
+        let log = all_log_text(&workbench, 0);
+        assert!(log.contains("Precision 10000 refused"), "{log:?}");
+    }
+
+    /// PERF-011: an engine with no measurable cost curve never gets an estimate and never gets
+    /// the extreme change; the request is refused with the reason instead of being guessed at.
+    #[test]
+    fn perf_011_an_unmeasurable_engine_refuses_the_extreme_request() {
+        let mut workbench = fake_workbench();
+        assert!(workbench.precision_curve().is_none());
+        assert!(!workbench.can_measure_precision(), "the fake engine has no factory measurement");
+        let request = workbench.request_active_precision("20000");
+        let PrecisionRequest::Refused { digits, reason } = request else {
+            panic!("an unmeasurable engine must refuse, not estimate: {request:?}");
+        };
+        assert_eq!(digits, 20_000);
+        assert!(reason.contains("no measurable cost curve"), "{reason}");
+        assert_eq!(
+            workbench.documents()[0].precision,
+            DEFAULT_PRECISION,
+            "the precision is unchanged"
+        );
+        assert!(workbench.pending_precision().is_none());
     }
 
     /// RUN-020: a script's `setprecision(n)` updates the document precision (the toolbar and

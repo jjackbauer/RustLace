@@ -778,12 +778,37 @@ pub struct WorkbenchApp {
     log_row_rects: Vec<(usize, Rect)>,
     /// The log length and discarded count the current selection was made against.
     log_seen: (usize, usize),
-    /// LOG-010: the record count the last painted pass showed, so a pass that appended lines can
-    /// follow the newest record instead of leaving the view where it was.
-    log_follow_len: usize,
-    /// LOG-010: true while the log view follows the newest record; a user scroll away ends it and
-    /// the next appended record restores it.
+    /// LOG-010: the total record count (`logs.len() + logs_dropped`) the last painted pass saw.
+    ///
+    /// The retained length alone cannot report growth: once the cap evicts an old record for
+    /// every new one, `logs.len()` is constant while the log keeps growing.
+    log_follow_total: usize,
+    /// LOG-010: true while the log view follows the newest record.
+    ///
+    /// It starts true (a launch paints the tail), stays true only while the viewport is at the
+    /// bottom, and is ended by a user scroll away. New records never re-arm it: a user reading
+    /// history is not yanked to the end. The [`Self::log_unseen`] counter and the footer's
+    /// *Jump to newest* control are the way back.
     log_follow: bool,
+    /// LOG-010: records appended since the view left the bottom, named by the jump affordance.
+    log_unseen: usize,
+    /// LOG-010: request the tail offset on this pass (launch, jump, growth, resize).
+    log_force_follow: bool,
+    /// LOG-010: how many consecutive passes have tried to reach the tail without getting there.
+    /// It bounds the retry so a pathological scroll-area measurement cannot loop.
+    log_follow_retries: u8,
+    /// LOG-010: the log body height of the last pass, so a resize re-requests the tail.
+    log_follow_body: f32,
+    /// LOG-010 acceptance seam: hold the view scrolled back for the first layout passes.
+    ///
+    /// `LOVELACE_LOG_START_SCROLLED=1` sets this at launch. It is cleared by the first pass that
+    /// has a real body and a scrollable list, so the state the capture sees is an ordinary
+    /// scrolled-back view (no per-pass override); off unless the switch is set.
+    log_force_scrolled: bool,
+    /// LOG-010: the *Jump to newest* control the pane painted this pass (the pointer-test seam,
+    /// the same pattern as `log_row_rects`). `None` when the view follows the tail, so a test can
+    /// assert both the control's presence and its absence.
+    log_jump_rect: Option<Rect>,
     /// LOG-004 / LOG-006: the pinned diagnostic/result rows the pane painted this pass, by index.
     ///
     /// The window never reads this list; pointer tests click the pinned row a user sees.
@@ -835,6 +860,13 @@ pub struct WorkbenchApp {
     precision_input: String,
     precision_error: Option<String>,
     precision_seen: usize,
+    /// PERF-011: the estimate dialog's buttons painted last pass (the pointer-test seam, keyed
+    /// `Set precision` and `Cancel`).
+    precision_confirm_rects: Vec<(String, Rect)>,
+    /// PERF-011: the toolbar precision field and Apply button painted last pass (the same
+    /// pointer-test seam as the dialog's buttons).
+    precision_field_rect: Option<Rect>,
+    precision_apply_rect: Option<Rect>,
     layout: Option<PaneLayout>,
     /// A11Y-001: the focus group the keyboard is in, for F6 / Ctrl+1..5 movement.
     focused_pane: Pane,
@@ -988,6 +1020,18 @@ impl WorkbenchApp {
         // The first frame writes the settings file, so the session is current from the moment the
         // window appears: a crash later in the run restores the tabs that were actually open.
         app.persisted_session = None;
+        // LOG-010 acceptance seam: `LOVELACE_LOG_START_SCROLLED=1` starts the log view away from
+        // the bottom, which is the state a wheel gesture normally produces. The locked
+        // workstation used for window captures accepts no wheel input at all, so without this
+        // switch the capture cannot exercise the jump-to-newest control; the switch only sets the
+        // starting state, and every control the user then presses is the real one. Off unless
+        // set, unreachable from a script, and the same pattern as `LOVELACE_LOG_FLOOD`.
+        if std::env::var("LOVELACE_LOG_START_SCROLLED").is_ok() {
+            app.log_follow = false;
+            app.log_force_follow = false;
+            app.log_follow_retries = 0;
+            app.log_force_scrolled = true;
+        }
         app
     }
 
@@ -1087,8 +1131,14 @@ impl WorkbenchApp {
             log_status: None,
             log_row_rects: Vec::new(),
             log_seen: (0, 0),
-            log_follow_len: 0,
+            log_follow_total: 0,
             log_follow: true,
+            log_unseen: 0,
+            log_force_follow: true,
+            log_follow_retries: 0,
+            log_follow_body: 0.0,
+            log_force_scrolled: false,
+            log_jump_rect: None,
             log_pinned_rects: Vec::new(),
             expansion: ExpansionState::new(),
             inspector_open: false,
@@ -1106,6 +1156,9 @@ impl WorkbenchApp {
             precision_input: workbench_precision.to_string(),
             precision_error: None,
             precision_seen: workbench_precision,
+            precision_confirm_rects: Vec::new(),
+            precision_field_rect: None,
+            precision_apply_rect: None,
             layout: None,
             // A11Y-001: the editor owns the keyboard at launch, as it always has.
             focused_pane: Pane::Editor,
@@ -3687,6 +3740,10 @@ impl WorkbenchApp {
         self.editor_settings_window(ui.ctx());
         // A11Y-007: Help > Keyboard Shortcuts, generated from the binding table.
         self.shortcuts_window(ui.ctx());
+        // PERF-011: the precision cost estimate, over the toolbar it belongs to. It is painted
+        // after every pane, like the other windows, so a click on it cannot also reach a control
+        // underneath.
+        self.precision_estimate_window(ui.ctx());
         // VIS-006: the control state matrix, a real window over every pane.
         let mut matrix_open = self.control_matrix_open;
         control::matrix_window(ui.ctx(), &mut matrix_open);
@@ -3943,30 +4000,72 @@ impl WorkbenchApp {
                 "Display precision for the active document: a whole number of digits from {MIN_PRECISION} to {MAX_PRECISION}"
             ));
         label_input(ui, &field, "Precision (digits)");
+        self.precision_field_rect = Some(field.rect);
         let apply = ui
             .add(egui::Button::new("Apply"))
             .on_hover_text("Apply the typed precision to the active document");
+        self.precision_apply_rect = Some(apply.rect);
         let submitted = apply.clicked()
             || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
         if submitted {
+            // PERF-011: above the documented threshold the workbench returns the measured
+            // estimate instead of applying the value. The dialog is opened by the pane's pass and
+            // the change happens only through its Set precision control.
             match self
                 .workbench
-                .set_active_precision_text(&self.precision_input)
+                .request_active_precision(&self.precision_input)
             {
-                Ok(decimals) => {
+                crate::workbench::PrecisionRequest::Applied(decimals) => {
                     self.precision_seen = decimals;
                     self.precision_input = decimals.to_string();
                     self.precision_error = None;
                 }
-                Err(guidance) => self.precision_error = Some(guidance),
+                crate::workbench::PrecisionRequest::Invalid(guidance) => {
+                    self.precision_error = Some(guidance);
+                }
+                crate::workbench::PrecisionRequest::Confirm(_) => {
+                    self.precision_error = None;
+                }
+                crate::workbench::PrecisionRequest::Refused { reason, .. } => {
+                    self.precision_error = Some(reason);
+                }
             }
         }
         ui.label(RichText::new(format!("{} digits", self.view.precision)).color(theme::dim()))
             .on_hover_text("The active document's applied display precision");
+        // PERF-011: the live estimate, painted before the change: a typed value above the
+        // threshold shows what the measured curve says it will cost.
+        if let Some(digits) = self.typed_precision_above_threshold() {
+            if let Some(curve) = self.workbench.precision_curve() {
+                let cost = curve.cost(digits);
+                ui.label(
+                    RichText::new(format!("estimate {}", cost.estimate_text()))
+                        .small()
+                        .color(theme::warning()),
+                )
+                .on_hover_text(format!("{}. {}", cost.line(), curve.measured_line()));
+            } else {
+                ui.label(
+                    RichText::new("measuring the engine's cost…")
+                        .small()
+                        .color(theme::dim()),
+                )
+                .on_hover_text(
+                    "No estimate is offered until the engine's digits-to-time curve has been \
+                     measured; the precision is not changed meanwhile.",
+                );
+            }
+        }
         if let Some(guidance) = &self.precision_error {
             ui.label(RichText::new(guidance).color(theme::error()))
                 .on_hover_text("The precision was not changed; the run uses the last valid value.");
         }
+    }
+
+    /// PERF-011: the typed precision when it is a valid value above the estimate threshold.
+    fn typed_precision_above_threshold(&self) -> Option<usize> {
+        let digits = crate::workbench::parse_precision(&self.precision_input).ok()?;
+        (digits > crate::workbench::PRECISION_WARN_DIGITS).then_some(digits)
     }
 
     /// LAY-011: the one-row toolbar used when the compact layout is in force.
@@ -5572,6 +5671,92 @@ impl WorkbenchApp {
         self.shortcuts_open = open && !close;
     }
 
+    /// PERF-011: the cost estimate an extreme precision request must be confirmed against.
+    ///
+    /// The estimate is the measured curve's own number, painted with the points it was fitted to
+    /// and the budget that would refuse it; nothing here re-derives a time. `Set precision`
+    /// applies the change and `Cancel` leaves the document exactly as it was — both are ordinary
+    /// buttons with stable accessible names, so the window capture can invoke them through UI
+    /// Automation and a keyboard user reaches them with Tab.
+    fn precision_estimate_window(&mut self, ctx: &egui::Context) {
+        self.precision_confirm_rects.clear();
+        let Some(cost) = self.workbench.pending_precision().cloned() else {
+            return;
+        };
+        let curve_line = self
+            .workbench
+            .precision_curve()
+            .map(|curve| curve.measured_line())
+            .unwrap_or_default();
+        let mut decision: Option<bool> = None;
+        egui::Window::new("Precision cost estimate")
+            .id(Id::unique("perf_precision_estimate"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} digits is an extreme precision request.",
+                        cost.digits
+                    ))
+                    .strong()
+                    .color(theme::text()),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "Estimated {} for one {} evaluation.",
+                        cost.estimate_text(),
+                        crate::workbench::PRECISION_WORKLOAD
+                    ))
+                    .color(theme::accent()),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "The estimate comes from the measured curve: {curve_line}. The product \
+                         budget is {} s for one precision change.",
+                        crate::workbench::SESSION_BUDGET_SECONDS
+                    ))
+                    .small()
+                    .color(theme::dim()),
+                );
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let set = ui
+                        .add(egui::Button::new("Set precision"))
+                        .on_hover_text(
+                            "Apply the precision. Every later evaluation runs at this precision.",
+                        );
+                    let cancel = ui
+                        .add(egui::Button::new("Cancel"))
+                        .on_hover_text("Leave the precision unchanged");
+                    self.precision_confirm_rects
+                        .push(("Set precision".to_string(), set.rect));
+                    self.precision_confirm_rects
+                        .push(("Cancel".to_string(), cancel.rect));
+                    if set.clicked() {
+                        decision = Some(true);
+                    }
+                    if cancel.clicked() {
+                        decision = Some(false);
+                    }
+                });
+            });
+        match decision {
+            Some(true) => {
+                if let Some(digits) = self.workbench.confirm_precision() {
+                    self.precision_seen = digits;
+                    self.precision_input = digits.to_string();
+                    self.precision_error = None;
+                }
+            }
+            Some(false) => {
+                self.workbench.cancel_precision();
+            }
+            None => {}
+        }
+    }
+
     fn workspace_pane(&mut self, ui: &mut Ui, rect: Rect, view: &DocumentView) {
         let has_snapshot = view.has_snapshot;
         // DOC-010: a restored tab's engine state is explicitly reported as reset until its next
@@ -6344,6 +6529,27 @@ impl WorkbenchApp {
                 );
                 ui.label(RichText::new(&header_line).color(theme::dim()))
                     .on_hover_text(format!("Log kinds: {legend}"));
+                // LOG-010: the list's own state, in the pane's words: whether it follows the
+                // newest record, or how far the log has moved on while the user reads history.
+                // `log_follow` is this frame's previous decision, which is what the list below
+                // shows (the control that changes it is painted over the list itself).
+                let (state_text, state_color, state_hint) = if self.log_follow {
+                    (
+                        "at newest record".to_string(),
+                        theme::dim(),
+                        "The list is at the newest record; new records keep it there while it \
+                         stays at the bottom.",
+                    )
+                } else {
+                    (
+                        format!("scrolled back · {} new", self.log_unseen),
+                        theme::warning(),
+                        "Records that arrive now are appended while the view stays where it was; \
+                         the Jump to newest control over the list returns to the tail.",
+                    )
+                };
+                ui.label(RichText::new(state_text).small().color(state_color))
+                    .on_hover_text(state_hint);
                 if let Some(status) = &status {
                     ui.label(RichText::new(status).small().color(theme::accent()));
                 }
@@ -6392,6 +6598,23 @@ impl WorkbenchApp {
                                 }
                                 if ui.add(egui::Button::new("Copy all")).clicked() {
                                     request = Some(LogRequest::CopyAll);
+                                    ui.close();
+                                }
+                                // LOG-010: the same "return to the tail" action as the footer's
+                                // button, reachable from the menu (and therefore from a narrow
+                                // pane whose footer is suppressed).
+                                if ui
+                                    .add_enabled(
+                                        !self.log_follow,
+                                        egui::Button::new("Jump to newest"),
+                                    )
+                                    .on_hover_text(
+                                        "Scroll to the newest record; the view follows new \
+                                         records again once it is at the bottom",
+                                    )
+                                    .clicked()
+                                {
+                                    request = Some(LogRequest::Jump);
                                     ui.close();
                                 }
                                 if ui
@@ -6543,23 +6766,57 @@ impl WorkbenchApp {
                     // 100 000-record log costs one viewport of widgets, not 100 000, and a live
                     // update adds rows without rebuilding the widget tree.
                     //
-                    // The view follows the newest record: a pass that appended lines scrolls the
-                    // viewport to the end (the terminal behaviour a log needs), so a run's fatal
-                    // diagnostic is on screen when the run ends. A user can still scroll back;
-                    // the next appended line brings the view to the tail again.
-                    let grew = logs.len() > self.log_follow_len;
-                    self.log_follow_len = logs.len();
-                    if grew {
-                        self.log_follow = true;
+                    // The view follows the newest record by default and stays there only while it
+                    // is at the bottom. Growth is measured on the *total* record count, because
+                    // once the storage cap starts evicting, `logs.len()` stays fixed while records
+                    // keep arriving. A pass that appended records while the user was reading
+                    // history counts them for the footer instead of moving the viewport: a user
+                    // is never yanked away from the line they are reading.
+                    // LOG-010 acceptance seam: a start-scrolled view is held scrolled back until
+                    // the user presses the jump control, so the capture of the affordance does not
+                    // race a first-layout pass. Off unless the launch switch set it.
+                    if self.log_force_scrolled {
+                        self.log_follow = false;
                     }
+                    let total = logs.len() + view.logs_dropped;
+                    let added = total.saturating_sub(self.log_follow_total);
+                    self.log_follow_total = total;
+                    let grew = added > 0;
+                    if grew && !self.log_follow {
+                        self.log_unseen = self.log_unseen.saturating_add(added);
+                    }
+                    let follow_was = self.log_follow;
+                    // A resize is detected from the body height the list is about to get. It
+                    // changes the viewport without the user touching the scroll position, so the
+                    // tail has to be re-requested instead of being read as "the user scrolled".
+                    let body_height = ui.available_height();
+                    let resized = (body_height - self.log_follow_body).abs() > 0.5;
+                    self.log_follow_body = body_height;
+                    // LOG-010: the state is painted in the pane header, and the way back to the
+                    // tail is an overlay control laid over the bottom-right of the list when the
+                    // user is scrolled back. It is an overlay rather than a footer on purpose: a
+                    // permanent footer would take a row of log space from every pane, and the
+                    // window's Logs strip is already the narrowest one.
+                    self.log_jump_rect = None;
+                    // LOG-010: the requested offset is set only on the pass that needs it (a
+                    // launch, a jump, a growth while following, a resize). Re-asserting it on
+                    // every pass would fight a wheel gesture whose delta egui applies later in
+                    // the same pass, which is what made an earlier version snap back to the tail.
+                    let request_offset = self.log_follow && (self.log_force_follow || grew || resized);
+                    self.log_force_follow = false;
                     let mut area = egui::ScrollArea::vertical()
                         .id_salt("logs_scroll")
-                        .auto_shrink([false, false]);
-                    if self.log_follow {
+                        .auto_shrink([false, false])
+                        // Belt and braces: egui keeps the view at the end while it is already
+                        // there, and never moves a view the user scrolled away from. The
+                        // start-scrolled acceptance seam disables it and pins the view to the top.
+                        .stick_to_bottom(!self.log_force_scrolled);
+                    if self.log_force_scrolled {
+                        area = area.vertical_scroll_offset(0.0).animated(false);
+                    }
+                    if request_offset {
                         // The exact content height of `show_rows` (rows plus their spacing), so
                         // the offset clamps to the end instead of overflowing egui's row math.
-                        // It is applied on every pass while the view follows the tail, so the
-                        // newest record stays on screen across repaints.
                         let advance = LOG_ROW_HEIGHT + ui.spacing().item_spacing.y;
                         area = area
                             .vertical_scroll_offset(logs.len() as f32 * advance)
@@ -6679,12 +6936,83 @@ impl WorkbenchApp {
                                 let _ = anchor;
                             }
                         });
-                    // LOG-010: a user who scrolls away from the tail leaves follow mode; the next
-                    // appended record turns it back on (the terminal behaviour a log needs).
+                    // LOG-010: the jump-to-newest affordance. It is painted over the bottom-right
+                    // of the list — the corner the newest rows occupy only when the view is scrolled
+                    // back anyway — so it costs no log rows and is reachable whenever a row is.
+                    // It is painted here, before the follow decision, so a click this pass is
+                    // decided with the same information the user had when pressing it.
+                    let mut jump_clicked = false;
+                    if !follow_was {
+                        let list = area_output.inner_rect;
+                        let size = vec2(178.0, 20.0);
+                        let rect = Rect::from_min_size(
+                            pos2(list.right() - size.x - 12.0, list.bottom() - size.y - 6.0),
+                            size,
+                        );
+                        let label = if self.log_unseen > 0 {
+                            format!("Jump to newest · {} new", self.log_unseen)
+                        } else {
+                            "Jump to newest".to_string()
+                        };
+                        let jump = ui
+                            .put(rect, egui::Button::new(RichText::new(label).small()))
+                            .on_hover_text(
+                                "Scroll the log to the newest record; it follows new records \
+                                 again once it is at the bottom",
+                            );
+                        let accessible = format!(
+                            "Jump to newest log record; {} record(s) arrived while scrolled back",
+                            self.log_unseen
+                        );
+                        jump.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, accessible.clone())
+                        });
+                        self.log_jump_rect = Some(jump.rect);
+                        // The control this pass painted has just been used: the next pass
+                        // follows the tail and offers no jump, so the seam must not keep the
+                        // rectangle the list no longer shows.
+                        jump_clicked = jump.clicked();
+                    }
+                    // LOG-010: follow mode is decided from where the viewport actually ended this
+                    // pass, not from whether the log grew. egui has already applied any wheel or
+                    // drag delta and clamped the offset to the content, so "at the bottom" is
+                    // `offset == max_offset`.
+                    //
+                    // The non-bottom cases are kept apart deliberately: a jump the user just
+                    // pressed wins; a pass that itself asked for the tail and could not reach it
+                    // (a first-paint measurement difference) retries — bounded by
+                    // `LOG_FOLLOW_RETRIES`; a pass whose only movement came from the user ends
+                    // follow mode and keeps it ended, so new records only raise the unseen count.
                     let max_offset = (area_output.content_size.y - area_output.inner_rect.height())
                         .max(0.0);
-                    if (area_output.state.offset().y - max_offset).abs() > 1.0 {
+                    let at_bottom = (area_output.state.offset().y - max_offset).abs() <= 1.0;
+                    if jump_clicked {
+                        self.log_force_scrolled = false;
+                        self.log_follow = true;
+                        self.log_unseen = 0;
+                        self.log_force_follow = true;
+                        self.log_follow_retries = 0;
+                        self.log_jump_rect = None;
+                        ui.ctx().request_repaint();
+                    } else if at_bottom {
+                        self.log_follow = true;
+                        self.log_unseen = 0;
+                        self.log_follow_retries = 0;
+                    } else if follow_was && (request_offset || resized) {
+                        let retry = self.log_follow_retries < LOG_FOLLOW_RETRIES;
+                        self.log_follow = retry;
+                        self.log_force_follow = retry;
+                        self.log_follow_retries = self.log_follow_retries.saturating_add(1);
+                    } else {
                         self.log_follow = false;
+                    }
+                    // LOG-010 acceptance seam: the start-scrolled view stays scrolled back until
+                    // the jump control is pressed. Off unless the launch switch set it.
+                    if self.log_force_scrolled && !jump_clicked {
+                        self.log_follow = false;
+                        self.log_force_follow = false;
+                        // Every retained record is newer than the first paint the user saw.
+                        self.log_unseen = total;
                     }
                 },
             );
@@ -6741,6 +7069,13 @@ impl WorkbenchApp {
             }
             Some(LogRequest::Save) => {
                 self.save_log();
+            }
+            Some(LogRequest::Jump) => {
+                // LOG-010: the requested jump is applied to the next pass's scroll position; the
+                // repaint request is what makes that pass happen without another input.
+                self.log_follow = true;
+                self.log_unseen = 0;
+                ui.ctx().request_repaint();
             }
             None => {}
         }
@@ -7014,6 +7349,11 @@ impl WorkbenchApp {
 /// its exact geometry rather than an approximation.
 const LOG_ROW_HEIGHT: f32 = 15.0;
 
+/// LOG-010: how many consecutive passes may ask for the tail without reaching it before follow
+/// mode gives up (a scroll-area measurement difference, never a user scroll: that path is
+/// detected separately and ends follow mode immediately).
+const LOG_FOLLOW_RETRIES: u8 = 3;
+
 /// LOG-005: one copy/clear/save request the Logs pane raises in a pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LogRequest {
@@ -7027,6 +7367,8 @@ enum LogRequest {
     CopyDetails(usize),
     /// Write the retained log to a file.
     Save,
+    /// LOG-010: return the viewport to the newest record and follow it again.
+    Jump,
 }
 
 /// LOG-005: which log lines a copy command covers.
@@ -17290,6 +17632,304 @@ mod tests {
         );
     }
 
+    /// LAY-009: Ctrl/Cmd+Tab switches documents, F6 / Shift+F6 rotate keyboard focus between the
+    /// pane groups, the focus visibly lands in the group it names (the status strip says so, a
+    /// real widget in that group owns the keyboard and the focus ring is painted around it), and
+    /// both chords are documented in the one binding table the Help reference renders.
+    #[test]
+    fn lay_009_ctrl_tab_switches_documents_and_f6_rotates_pane_focus_visibly() {
+        let ctx = egui::Context::default();
+        let plot_dir = scratch_dir("lay-009");
+        let mut app = a11y_app(plot_dir.clone());
+        // Three tabs, so "next" and "previous" are both observable and ordered.
+        let first = app.workbench.new_document();
+        let second = app.workbench.new_document();
+        app.sync_after_tab_change(second, &ctx);
+        pump_text(&ctx, &mut app, 2);
+        assert_eq!(app.workbench.active(), second, "the newest tab is active");
+
+        // The documented chords, from the same table the Help window paints (A11Y-007).
+        let rows = keyboard::reference_rows();
+        let row = |chord: &str| {
+            rows.iter()
+                .find(|row| row.chord == chord)
+                .unwrap_or_else(|| panic!("{chord} must be documented"))
+        };
+        assert_eq!(row("Ctrl+Tab").description, "Select the next document tab");
+        assert_eq!(
+            row("Ctrl+Shift+Tab").description,
+            "Select the previous document tab"
+        );
+        assert_eq!(
+            row("F6").description,
+            "Move keyboard focus to the next pane group"
+        );
+        assert_eq!(
+            row("Shift+F6").description,
+            "Move keyboard focus to the previous pane group"
+        );
+
+        // Ctrl+Tab switches documents from the keyboard; Ctrl+Shift+Tab goes back.
+        let ctrl = ctrl_modifiers();
+        let _ = a11y_frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::ModifiersChanged(ctrl), key(Key::Tab, ctrl)],
+        );
+        assert_eq!(app.workbench.active(), 0, "Ctrl+Tab wraps to the first tab");
+        let ctrl_shift = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            shift: true,
+            ..Default::default()
+        };
+        let _ = a11y_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(ctrl_shift),
+                key(Key::Tab, ctrl_shift),
+            ],
+        );
+        assert_eq!(
+            app.workbench.active(),
+            second,
+            "Ctrl+Shift+Tab returns to the previous tab"
+        );
+        let _ = first;
+
+        // F6 walks the groups; each landing is visible and real.
+        let ring = theme::tokens_for(theme::ThemeId::Dark).focus_ring;
+        assert_eq!(app.focused_pane, Pane::Editor);
+        for expected in [Pane::Plot, Pane::Workspace, Pane::Logs, Pane::Toolbar] {
+            let texts = press_action(&ctx, &mut app, Action::NextPane);
+            assert_eq!(app.focused_pane, expected, "F6 order");
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| text == &format!("focus: {}", expected.label())),
+                "the status strip names the focused pane: {texts:?}"
+            );
+            let output = a11y_frame(&ctx, &mut app, Vec::new());
+            let focus = ctx
+                .memory(|memory| memory.focused())
+                .unwrap_or_else(|| panic!("{} must own the keyboard", expected.label()));
+            let expected_id = match expected {
+                Pane::Toolbar => app.run_button_id,
+                Pane::Editor => Some(surface_id()),
+                Pane::Plot => app.plot_fit_id,
+                Pane::Workspace => app.workspace_tab_ids[0],
+                Pane::Logs => Some(quick_eval_id()),
+            };
+            assert_eq!(
+                Some(focus),
+                expected_id,
+                "the {} group's first control takes focus",
+                expected.label()
+            );
+            let rect = ctx
+                .read_response(focus)
+                .map(|response| response.rect)
+                .expect("the focused widget was painted");
+            let mut strokes = Vec::new();
+            for clipped in &output.shapes {
+                if clipped
+                    .clip_rect
+                    .intersects(rect.expand(a11y::FOCUS_RING_GAP + 4.0))
+                {
+                    rect_stroke_colors(&clipped.shape, &mut strokes);
+                }
+            }
+            assert!(
+                strokes.iter().any(|(color, _)| *color == ring),
+                "the focus ring is painted around the {} group's control: {strokes:?}",
+                expected.label()
+            );
+        }
+        // Shift+F6 steps back one group.
+        press_action(&ctx, &mut app, Action::PreviousPane);
+        assert_eq!(app.focused_pane, Pane::Logs, "Shift+F6 goes back one pane");
+        let _ = std::fs::remove_dir_all(&plot_dir);
+    }
+
+    /// ARC-010: every typed projection the engine publishes reaches the panes — numeric, array,
+    /// record and symbolic here, with the typed diagnostic fields checked on a failing run — and
+    /// the *display* string is only ever painted as text.
+    #[test]
+    #[cfg(feature = "real-engine")]
+    fn arc_010_the_panes_render_every_typed_projection() {
+        let mut app = WorkbenchApp::with_workbench(Workbench::new());
+        let ctx = egui::Context::default();
+        let screen = vec2(2500.0, 1380.0);
+        let cases = [
+            // (source, projection kind, a field the pane must paint from the projection)
+            ("m = [[1, 2], [3, 4]]\nm", "Array", "2 x 2"),
+            ("divrem(7, 2)", "Record", "DivRemResult"),
+            (
+                "x = symbol(\"x\")\n3*x^2 + 4*x + 5",
+                "Symbolic",
+                "3*x^2 + 4*x + 5",
+            ),
+            ("evalf(1/3, 1500)", "Real", "truncated: digit-cap"),
+        ];
+        for (source, kind, needle) in cases {
+            app.workbench.set_source(0, source.to_string());
+            assert!(app.workbench.run_active(), "the {kind} run must start");
+            assert!(
+                app.workbench.wait_until_idle(Duration::from_secs(30)),
+                "the {kind} run must finish"
+            );
+            let texts = painted_texts(&ctx, &mut app, screen);
+            assert!(
+                app.view.result_structured.is_some(),
+                "the engine published a structured projection for {kind}"
+            );
+            assert!(
+                texts.iter().any(|text| text.contains(kind)),
+                "the Workspace result paints the projection kind {kind}: {texts:?}"
+            );
+            assert!(
+                texts.iter().any(|text| text.contains(needle)),
+                "the {kind} pane paints {needle:?} from the projection: {texts:?}"
+            );
+        }
+
+        // The diagnostic projection is typed too: a failing run paints the engine's code,
+        // category and position, not a string reconstructed from the message.
+        app.workbench.set_source(0, "1 / 0".to_string());
+        assert!(app.workbench.run_active());
+        assert!(app.workbench.wait_until_idle(Duration::from_secs(30)));
+        let texts = painted_texts(&ctx, &mut app, screen);
+        let diagnostic = app
+            .view
+            .diagnostic
+            .clone()
+            .expect("the failing run published a typed diagnostic");
+        assert_eq!(diagnostic.code.as_deref(), Some("DivisionByZero"));
+        assert_eq!(diagnostic.category.as_deref(), Some("DomainError"));
+        assert_eq!((diagnostic.line, diagnostic.column), (1, 1));
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("DivisionByZero") && text.contains("DomainError")),
+            "the diagnostic's own code and category are painted: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("error at Ln 1, Col 1")),
+            "the diagnostic's typed position is painted: {texts:?}"
+        );
+    }
+
+    /// ARC-010: a display string that *looks* like a record cannot make the pane render a record
+    /// when the engine's projection says 2x2 array. The same value painted twice with two
+    /// contradictory display strings yields the same structure: the display is a label, never a
+    /// source of structure.
+    #[test]
+    fn arc_010_a_misleading_display_string_cannot_change_the_painted_result() {
+        struct MisleadingEngine {
+            display: String,
+        }
+        impl crate::engine::Evaluator for MisleadingEngine {
+            fn eval(&mut self, _src: &str) -> Result<String, String> {
+                Ok(self.display.clone())
+            }
+            fn last_structured(&self) -> Option<lovelace_json::Json> {
+                use lovelace_json::Json;
+                Some(Json::obj([
+                    ("kind", Json::Str("Array".to_string())),
+                    ("type", Json::Str("Array".to_string())),
+                    ("rank", Json::Num("2".to_string())),
+                    ("shape", Json::str_array(["2", "2"])),
+                    (
+                        "elements",
+                        Json::Arr(vec![
+                            Json::obj([
+                                ("kind", Json::Str("Natural".to_string())),
+                                ("value", Json::Str("1".to_string())),
+                            ]),
+                            Json::obj([
+                                ("kind", Json::Str("Natural".to_string())),
+                                ("value", Json::Str("2".to_string())),
+                            ]),
+                            Json::obj([
+                                ("kind", Json::Str("Natural".to_string())),
+                                ("value", Json::Str("3".to_string())),
+                            ]),
+                            Json::obj([
+                                ("kind", Json::Str("Natural".to_string())),
+                                ("value", Json::Str("4".to_string())),
+                            ]),
+                        ]),
+                    ),
+                ]))
+            }
+        }
+
+        let mut painted = Vec::new();
+        for display in [
+            "DivRemResult { quotient: 9, remainder: 9 }",
+            "[[9, 9], [9, 9]]",
+        ] {
+            let display = display.to_string();
+            let workbench = Workbench::with_factory(Box::new(move || {
+                Box::new(MisleadingEngine {
+                    display: display.clone(),
+                })
+            }));
+            let mut app = WorkbenchApp::with_workbench(workbench);
+            assert!(app.workbench.run_active());
+            assert!(app.workbench.wait_until_idle(Duration::from_secs(10)));
+            let ctx = egui::Context::default();
+            let texts = painted_texts(&ctx, &mut app, vec2(2500.0, 1380.0));
+            painted.push(texts);
+        }
+        let [array_display, record_display] = &painted[..] else {
+            unreachable!("two paints")
+        };
+        // The tree rows (the projection's kinds and element values) must be identical whatever the
+        // display says. Timing and status texts are excluded: they are not structure.
+        let structure = |texts: &Vec<String>| -> std::collections::BTreeSet<String> {
+            texts
+                .iter()
+                .filter(|text| {
+                    text.contains("Array") || text.contains("Natural") || text.contains("2 x 2")
+                })
+                .cloned()
+                .collect()
+        };
+        let from_array_display = structure(array_display);
+        let from_record_display = structure(record_display);
+        assert_eq!(
+            from_array_display, from_record_display,
+            "two contradictory display strings must paint the identical structure"
+        );
+        assert!(
+            from_array_display
+                .iter()
+                .any(|text| text.contains("Array")),
+            "the projection's array kind is painted: {from_array_display:?}"
+        );
+        assert!(
+            from_array_display.iter().any(|text| text.contains("2 x 2")),
+            "the projection's shape is painted: {from_array_display:?}"
+        );
+        assert!(
+            !from_array_display
+                .iter()
+                .any(|text| text.contains("quotient") || text.contains("remainder")),
+            "no record field row is created from the display: {from_array_display:?}"
+        );
+        // The display string is still painted as text — as the log's result line, not as a tree.
+        assert!(
+            array_display
+                .iter()
+                .any(|text| text.starts_with("[result] = DivRemResult { quotient: 9")),
+            "the display text is painted as the log's result line: {array_display:?}"
+        );
+    }
+
     /// LAY-004: pane sizes and the compact drawer's visible pane are written to the settings file
     /// when the user changes them and restored by a fresh launch from that file.
     #[test]
@@ -18295,6 +18935,255 @@ mod tests {
             "a live update repaint stays bounded"
         );
         assert_eq!(app.view.logs.len(), crate::workbench::LOG_CAP);
+    }
+
+    /// LOG-010: the live window follows the tail by default and keeps following only while the
+    /// view is at the bottom. A wheel scroll back ends follow mode; the records that arrive
+    /// afterwards do not move the view, they raise the footer's count, and the footer's
+    /// *Jump to newest* control returns to the tail.
+    ///
+    /// Every event below is a real egui input: a pointer over the list and a wheel delta, then a
+    /// pointer press/release on the control the pane painted. No field is set to fake the
+    /// scroll-away; `log_follow` is read to report, never assigned by the test.
+    #[test]
+    fn log_010_the_live_list_follows_the_tail_only_at_the_bottom_and_offers_a_jump_back() {
+        let mut app = fake_app_with_source("alpha = 1\n");
+        let boot = app.workbench.documents()[0].logs.len();
+        app.workbench
+            .flood_log_active(crate::workbench::LOG_CAP - boot - 1);
+        let ctx = egui::Context::default();
+        let screen = vec2(1600.0, 1000.0);
+
+        // A launch paints the newest records, without any scroll request from the user.
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        assert!(app.log_follow, "a fresh log view follows the newest record");
+        assert!(
+            app.log_row_rects
+                .iter()
+                .any(|(index, _)| *index + 1 == app.view.logs.len()),
+            "the newest record is painted: rows {:?}",
+            app.log_row_rects.iter().map(|(i, _)| *i).collect::<Vec<_>>()
+        );
+        assert_eq!(app.log_unseen, 0);
+        assert_eq!(app.log_jump_rect, None, "no jump control while following");
+
+        // Live lines keep the view at the tail while it is already there.
+        app.workbench.flood_log_active(25);
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        assert!(app.log_follow, "appending at the bottom keeps following");
+        assert_eq!(app.log_unseen, 0, "nothing is unseen while following");
+        assert!(
+            app.log_row_rects
+                .iter()
+                .any(|(index, _)| *index + 1 == app.view.logs.len()),
+            "the newly appended record is painted"
+        );
+        let rows_before_scroll: Vec<usize> =
+            app.log_row_rects.iter().map(|(index, _)| *index).collect();
+
+        // A real wheel scroll over the list moves the view away from the bottom. egui applies the
+        // delta at the end of the pass, so the next pass paints the scrolled window. The pointer
+        // must be over the rows this pass paints: a previous pass's rectangle can name a row that
+        // has since moved out of the list, and then the wheel is not over the scroll area at all.
+        let over_rows = app.log_row_rects[app.log_row_rects.len() / 2].1.center();
+        let _ = frame_capturing(
+            &ctx,
+            &mut app,
+            screen,
+            vec![egui::Event::PointerMoved(over_rows)],
+            Default::default(),
+        );
+        let over_rows = app.log_row_rects[app.log_row_rects.len() / 2].1.center();
+        let _ = frame_capturing(
+            &ctx,
+            &mut app,
+            screen,
+            vec![
+                egui::Event::PointerMoved(over_rows),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 420.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+            Default::default(),
+        );
+        assert!(
+            !app.log_follow,
+            "scrolling away from the bottom ends follow mode; painted before: {rows_before_scroll:?}"
+        );
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        let scrolled_rows: Vec<usize> =
+            app.log_row_rects.iter().map(|(index, _)| *index).collect();
+        assert!(
+            scrolled_rows.iter().all(|index| index + 1 < app.view.logs.len()),
+            "the scrolled window is above the tail: {scrolled_rows:?}"
+        );
+        assert!(
+            app.log_jump_rect.is_some(),
+            "a scrolled-away view paints the jump-to-newest control"
+        );
+
+        // Records arriving while the user is reading history must not move the viewport.
+        app.workbench.flood_log_active(40);
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        assert!(!app.log_follow, "new records never re-arm follow mode");
+        assert_eq!(
+            app.log_unseen, 41,
+            "the footer counts every record that arrived while scrolled back"
+        );
+        let after_rows: Vec<usize> = app.log_row_rects.iter().map(|(index, _)| *index).collect();
+        assert!(
+            after_rows.iter().all(|index| index + 1 < app.view.logs.len()),
+            "the viewport stayed where the user left it: {after_rows:?}"
+        );
+        let jump = app
+            .log_jump_rect
+            .expect("the jump control is still painted after the append");
+        let texts = painted_texts(&ctx, &mut app, screen);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "scrolled back · 41 new"),
+            "the header states how many records arrived: {texts:?}"
+        );
+
+        // The control the pane painted is what a user presses.
+        pointer_click_sized(&ctx, &mut app, screen, jump.center());
+        // The request is carried out by the next painted pass (that is what the repaint request
+        // is for); this is the pass the user sees after the click.
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        assert!(
+            app.log_follow,
+            "Jump to newest returns the view to the tail and re-arms follow mode"
+        );
+        assert_eq!(app.log_unseen, 0, "the unseen count is cleared by the jump");
+        assert_eq!(app.log_jump_rect, None, "the control is gone at the tail");
+        assert!(
+            app.log_row_rects
+                .iter()
+                .any(|(index, _)| *index + 1 == app.view.logs.len()),
+            "the newest record is painted after the jump: rows {:?}",
+            app.log_row_rects.iter().map(|(i, _)| *i).collect::<Vec<_>>()
+        );
+        let texts = painted_texts(&ctx, &mut app, screen);
+        assert!(
+            texts.iter().any(|text| text == "at newest record"),
+            "the pane says the view follows the newest record again: {texts:?}"
+        );
+    }
+
+    /// PERF-011: the window shows the measured estimate before an extreme precision change, and
+    /// the change happens only when the dialog's *Set precision* control is pressed. Cancel keeps
+    /// the document's precision; the log names the estimate on the confirm path.
+    #[test]
+    fn perf_011_the_window_shows_the_estimate_and_applies_only_after_confirmation() {
+        let mut app = fake_app_with_source("alpha = 1\n");
+        app.workbench.set_precision_curve(
+            crate::workbench::PrecisionCostCurve::from_samples(vec![
+                (100, 0.001),
+                (1_000, 0.010),
+                (10_000, 0.100),
+            ])
+            .expect("the injected curve fits"),
+        );
+        let ctx = egui::Context::default();
+        let screen = vec2(1600.0, 1000.0);
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        let apply = app
+            .precision_apply_rect
+            .expect("the toolbar paints its Apply control");
+        assert_eq!(app.view.precision, 30, "the document starts at the default");
+
+        // The typed value is above the threshold: the toolbar itself states the estimate before
+        // any click, with no dialog.
+        app.precision_input = "20000".to_string();
+        let texts = painted_texts(&ctx, &mut app, screen);
+        assert!(
+            texts.iter().any(|text| text == "estimate ≈ 200 ms and ≈ 312.8 KB"),
+            "the live estimate is painted beside the field: {texts:?}"
+        );
+
+        // Pressing Apply opens the estimate and changes nothing.
+        pointer_click_sized(&ctx, &mut app, screen, apply.center());
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        assert_eq!(
+            app.view.precision, 30,
+            "an extreme precision must not be applied before it is confirmed"
+        );
+        let cost = app
+            .workbench
+            .pending_precision()
+            .cloned()
+            .expect("the window holds the pending estimate");
+        assert_eq!(cost.digits, 20_000);
+        assert!((cost.seconds - 0.2).abs() < 0.02, "{cost:?}");
+        let keys: Vec<&str> = app
+            .precision_confirm_rects
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+        assert!(
+            keys.contains(&"Set precision") && keys.contains(&"Cancel"),
+            "the dialog paints both decisions: {keys:?}"
+        );
+        let texts = painted_texts(&ctx, &mut app, screen);
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "Estimated ≈ 200 ms and ≈ 312.8 KB for one sqrt(2) evaluation."),
+            "the dialog states the estimate in the tool's words: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("measured sqrt(2): 100 digits")),
+            "the dialog names the measurements the estimate came from: {texts:?}"
+        );
+
+        // Cancel leaves the document exactly as it was and closes the dialog.
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        let cancel = app
+            .precision_confirm_rects
+            .iter()
+            .find(|(key, _)| key == "Cancel")
+            .map(|(_, rect)| *rect)
+            .expect("the dialog paints Cancel");
+        pointer_click_sized(&ctx, &mut app, screen, cancel.center());
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        assert_eq!(app.view.precision, 30, "Cancel keeps the precision");
+        assert!(app.workbench.pending_precision().is_none());
+        assert!(app.precision_confirm_rects.is_empty(), "the dialog is gone");
+        assert!(
+            app.view
+                .logs
+                .iter()
+                .any(|line| line.text.contains("cancelled; the precision stays 30")),
+            "the log says the change was cancelled"
+        );
+
+        // Confirm applies the value and logs the estimate it was confirmed against.
+        app.precision_input = "20000".to_string();
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        pointer_click_sized(&ctx, &mut app, screen, apply.center());
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        let set = app
+            .precision_confirm_rects
+            .iter()
+            .find(|(key, _)| key == "Set precision")
+            .map(|(_, rect)| *rect)
+            .expect("the dialog paints Set precision");
+        pointer_click_sized(&ctx, &mut app, screen, set.center());
+        let _ = frame_capturing(&ctx, &mut app, screen, Vec::new(), Default::default());
+        assert_eq!(app.view.precision, 20_000, "Set precision applies the value");
+        assert!(app.workbench.pending_precision().is_none());
+        assert!(
+            app.view
+                .logs
+                .iter()
+                .any(|line| line.text.contains("Precision 20000 digits confirmed (≈ 200 ms")),
+            "the log carries the estimate with the confirmed change"
+        );
     }
 }
 

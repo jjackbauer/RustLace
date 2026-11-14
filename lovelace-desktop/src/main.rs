@@ -56,6 +56,7 @@ mod log_kind;
 mod netcheck;
 #[cfg(windows)]
 mod perf_probe;
+mod precision_budget;
 #[cfg(test)]
 mod precision_default;
 mod platform_claims;
