@@ -33,8 +33,8 @@ pub fn runner_path() -> PathBuf {
         }
     }
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    candidates.push(manifest.join("../../target/debug").join(name));
-    candidates.push(manifest.join("../../target/release").join(name));
+    candidates.push(manifest.join("../target/debug").join(name));
+    candidates.push(manifest.join("../target/release").join(name));
     for candidate in candidates {
         if candidate.is_file() {
             return candidate;
@@ -47,17 +47,9 @@ pub fn runner_path() -> PathBuf {
 
 /// Resolves the lovelace-know CLI executable under test.
 pub fn cli_binary() -> PathBuf {
-    let name = if cfg!(windows) {
-        "lovelace-know.exe"
-    } else {
-        "lovelace-know"
-    };
-    let executable = std::env::current_exe().expect("the test binary has a path");
-    let profile = executable
-        .parent()
-        .and_then(Path::parent)
-        .expect("target/<profile>/deps");
-    let candidate = profile.join(name);
+    // Cargo points integration tests at the binary it actually built, whatever the target
+    // layout is (cargo 1.100 keeps unit-test executables under target/debug/build/<pkg>/).
+    let candidate = PathBuf::from(env!("CARGO_BIN_EXE_lovelace-know"));
     assert!(
         candidate.is_file(),
         "the lovelace-know binary is missing at {}",

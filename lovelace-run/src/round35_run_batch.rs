@@ -62,11 +62,26 @@ fn text(value: &Json) -> &str {
 
 fn runner_binary() -> std::path::PathBuf {
     let test_exe = std::env::current_exe().expect("test binary path");
+    let name = format!("lovelace-run{}", std::env::consts::EXE_SUFFIX);
+    // Cargo 1.100 keeps test executables under target/<profile>/build/<pkg>/<hash>/out,
+    // while the real binary stays at target/<profile>/. Walk up to the profile directory
+    // instead of assuming the test lives in target/<profile>/deps.
+    for ancestor in test_exe.ancestors() {
+        if ancestor
+            .file_name()
+            .is_some_and(|name| name == "debug" || name == "release")
+        {
+            let candidate = ancestor.join(&name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
     let profile_dir = test_exe
         .parent()
         .and_then(std::path::Path::parent)
         .expect("target profile directory");
-    profile_dir.join(format!("lovelace-run{}", std::env::consts::EXE_SUFFIX))
+    profile_dir.join(name)
 }
 
 struct Run {
