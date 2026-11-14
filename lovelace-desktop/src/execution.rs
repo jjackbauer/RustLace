@@ -8,6 +8,9 @@
 //! Guarantees this module owns:
 //!
 //! - one active run per document, while other documents remain runnable ([SubmitError::Busy]);
+//! - a run's final state — the published snapshot and the document's incremental cache — is settled
+//!   *before* its terminal event is observable, so a client that submits the next run the moment it
+//!   sees `Finished`/`Failed`/`Cancelled` cannot race the cache hand-back;
 //! - one engine instance per run, created on the worker thread from the host's factory, evaluated
 //!   once per sliced statement so definitions made earlier persist and `take_output` is drained;
 //! - a cooperative cancellation token checked at every statement boundary;
@@ -553,9 +556,10 @@ pub struct ExecutionHost {
     /// INC-001: one incremental cache per document, alive for the host's lifetime.
     ///
     /// A run takes its document's cache for the duration of the run (runs of one document are
-    /// exclusive, so no other worker can want it) and puts it back when it terminates. A
-    /// [`ExecutionHost::clear_cache`] during a run installs a fresh empty slot instead; the
-    /// finishing worker then leaves that slot alone, so "Run All Fresh" always wins.
+    /// exclusive, so no other worker can want it) and puts it back *before* its terminal event is
+    /// published, so that event never describes a state in which the cache is still out with the
+    /// worker. A [`ExecutionHost::clear_cache`] during a run installs a fresh empty slot instead;
+    /// the finishing worker then leaves that slot alone, so "Run All Fresh" always wins.
     caches: Arc<Mutex<HashMap<DocumentId, DocumentCache>>>,
     /// ARC-008: every worker `JoinHandle`, keyed by run. `next_event` joins handles that have
     /// already finished; [`ExecutionHost::shutdown`] joins all remaining ones after cancelling
@@ -912,8 +916,9 @@ impl RunWorker {
             format!("document={} run={}", self.document.0, self.run.0),
         );
         // The document's incremental cache is owned by this run for its duration. Runs of one
-        // document are exclusive (`SubmitError::Busy`), and the cache goes back afterwards on
-        // every exit path so the next run reuses across runs.
+        // document are exclusive (`SubmitError::Busy`), and the cache goes back before the
+        // terminal event on every exit path, so the next run reuses across runs and no observer
+        // of the terminal event can catch the cache still out with this worker.
         let mut cache = self.take_cache();
         let mut progress = Progress::default();
         progress.precision = self.precision;
@@ -924,6 +929,9 @@ impl RunWorker {
                     let diagnostic = self.diagnostic_for(progress.current, panic_text(payload));
                     let snapshot = self.snapshot(&progress, Some(diagnostic.render_fully()));
                     self.publish(snapshot.clone());
+                    // Same order as every other terminal path: the settled state first, the event
+                    // last.
+                    self.return_cache(&mut cache);
                     self.retire();
                     self.emit(DesktopEvent::Failed {
                         document: self.document,
@@ -934,7 +942,9 @@ impl RunWorker {
                 }
             }
         }
-        self.return_cache(cache);
+        // Idempotent: a terminal path already handed the cache back, so this is only the fallback
+        // for the paths above that never reached one.
+        self.return_cache(&mut cache);
     }
 
     /// Takes this document's cache out of the host table for the run.
@@ -947,12 +957,25 @@ impl RunWorker {
     }
 
     /// Puts the cache back unless a Clear/`clear_cache` installed a fresh slot meanwhile.
-    fn return_cache(&self, cache: DocumentCache) {
+    ///
+    /// Idempotent, because every terminal path calls it and the worker's exit calls it again: the
+    /// first call moves the entries out, and a slot that already exists is a fresh slot installed
+    /// by "Run All Fresh" (or a previous call) and is left untouched.
+    ///
+    /// It is called *before* the terminal event is emitted. The document's cache is part of the
+    /// run's settled state, so a client that reads it — or, far more importantly, submits the next
+    /// run — the moment it observes `Finished`/`Failed`/`Cancelled` must find it already back.
+    /// Returning it after the terminal event left the submitter racing the hand-back: the next run
+    /// took the removed slot as an empty cache and silently re-evaluated every statement instead
+    /// of reusing, which is what the release suite's `left: 0, right: 4` cache-entry failures were.
+    fn return_cache(&self, cache: &mut DocumentCache) {
         let mut caches = self
             .caches
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        caches.entry(self.document).or_insert(cache);
+        if !caches.contains_key(&self.document) {
+            caches.insert(self.document, std::mem::take(cache));
+        }
     }
 
     /// True when either cancellation seam has been signalled for this run.
@@ -960,11 +983,15 @@ impl RunWorker {
         self.control.is_cancelled() || self.cancel_flag.load(Ordering::Acquire)
     }
 
-    /// Ends the run as cancelled: publishes the committed snapshot, retires the document and
-    /// emits exactly one terminal `Cancelled` event.
-    fn finish_cancelled(&self, progress: &mut Progress) {
+    /// Ends the run as cancelled: publishes the committed snapshot, hands the cache back, retires
+    /// the document and emits exactly one terminal `Cancelled` event.
+    ///
+    /// The cache goes back before the event (see [`RunWorker::return_cache`]): the event is the
+    /// signal a client acts on, so everything the run leaves behind must be settled by then.
+    fn finish_cancelled(&self, progress: &mut Progress, cache: &mut DocumentCache) {
         let snapshot = self.snapshot(progress, None);
         self.publish(snapshot.clone());
+        self.return_cache(cache);
         self.retire();
         self.emit(DesktopEvent::Cancelled {
             document: self.document,
@@ -982,7 +1009,7 @@ impl RunWorker {
             Ok(engine) => engine,
             Err(payload) => {
                 let diagnostic = self.diagnostic_for(progress.current, panic_text(payload));
-                self.fail(progress, diagnostic);
+                self.fail(progress, diagnostic, cache);
                 return;
             }
         };
@@ -1021,7 +1048,7 @@ impl RunWorker {
         for (index, statement) in self.statements.iter().enumerate() {
             progress.current = index;
             if self.cancel_requested() {
-                self.finish_cancelled(progress);
+                self.finish_cancelled(progress, cache);
                 return;
             }
             self.emit(DesktopEvent::StepStarted {
@@ -1115,7 +1142,7 @@ impl RunWorker {
                     // statement error; the host knows the run was cancelled, so publish the
                     // terminal `Cancelled` the caller requested instead of a failure.
                     if self.cancel_requested() {
-                        self.finish_cancelled(progress);
+                        self.finish_cancelled(progress, cache);
                         return;
                     }
                     let mut diagnostic = Diagnostic::for_statement(statement, &self.source, message);
@@ -1126,13 +1153,13 @@ impl RunWorker {
                             .ok()
                             .flatten();
                     diagnostic.classify(classification);
-                    self.fail(progress, diagnostic);
+                    self.fail(progress, diagnostic, cache);
                     return;
                 }
                 Err(payload) => {
                     let diagnostic =
                         Diagnostic::for_statement(statement, &self.source, panic_text(payload));
-                    self.fail(progress, diagnostic);
+                    self.fail(progress, diagnostic, cache);
                     return;
                 }
             }
@@ -1140,6 +1167,10 @@ impl RunWorker {
 
         let snapshot = self.snapshot(progress, None);
         self.publish(snapshot.clone());
+        // INC-001: the cache is part of the snapshot of settled state the terminal event reports,
+        // so it goes back before that event can be observed. A client that submits the next run on
+        // `Finished` must not be able to take an empty cache and re-evaluate every statement.
+        self.return_cache(cache);
         self.retire();
         self.emit(DesktopEvent::Finished {
             document: self.document,
@@ -1300,10 +1331,14 @@ impl RunWorker {
     }
 
     /// Publishes a final snapshot and the single Failed event for the run.
-    fn fail(&self, progress: &mut Progress, diagnostic: Diagnostic) {
+    ///
+    /// The cache goes back before the event (see [`RunWorker::return_cache`]), so even a failed
+    /// run leaves its document's settled state behind the signal rather than in front of it.
+    fn fail(&self, progress: &mut Progress, diagnostic: Diagnostic, cache: &mut DocumentCache) {
         // RUN-014: the committed snapshot carries every diagnostic field, not just the message.
         let snapshot = self.snapshot(progress, Some(diagnostic.render_fully()));
         self.publish(snapshot.clone());
+        self.return_cache(cache);
         self.retire();
         self.emit(DesktopEvent::Failed {
             document: self.document,
@@ -1530,6 +1565,43 @@ mod tests {
 
     fn counting_factory() -> EvaluatorFactory {
         Box::new(|| Box::new(CountingEngine::default()))
+    }
+
+    /// An engine that publishes a cacheable typed value, so every committed statement leaves one
+    /// entry in the document's incremental cache (INC-001).
+    ///
+    /// It exists to make the cache observable from the outside: `cached_entries` only tells "the
+    /// cache is back" apart from "the cache is still out with the worker" when there is an entry
+    /// in it, so a minimal evaluator with no reuse seam would make the ordering assertion below
+    /// vacuous.
+    #[derive(Default)]
+    struct CacheableEngine {
+        calls: usize,
+    }
+
+    impl Evaluator for CacheableEngine {
+        fn eval(&mut self, _src: &str) -> Result<String, String> {
+            self.calls += 1;
+            Ok(self.calls.to_string())
+        }
+
+        fn supports_cached_values(&self) -> bool {
+            true
+        }
+
+        fn last_value(&self) -> Option<CachedValue> {
+            Some(CachedValue::Fake(crate::engine::FakeValue::Int(
+                self.calls as i64,
+            )))
+        }
+
+        fn apply_cached_value(&mut self, _name: &str, _value: &CachedValue) -> bool {
+            true
+        }
+    }
+
+    fn cacheable_factory() -> EvaluatorFactory {
+        Box::new(|| Box::new(CacheableEngine::default()))
     }
 
     fn event_summary(event: &DesktopEvent) -> String {
@@ -2226,6 +2298,64 @@ mod tests {
                 finished.output,
                 vec!["first".to_string(), "second".to_string()],
                 "run {run_number} snapshot output"
+            );
+        }
+    }
+
+    /// INC-001: the run's final state is settled *before* its terminal event is observable.
+    ///
+    /// The document's incremental cache is part of that state. A client may legitimately do
+    /// either of the two things this test does the moment it sees `Finished` — read the cache, or
+    /// submit the next run — so the worker must have handed the cache back already. When it had
+    /// not (the hand-back ran after the terminal emit), the read below saw the removed slot as an
+    /// empty cache and the next run started with nothing to reuse, silently re-evaluating every
+    /// statement: the full release suite reproduced exactly that as `left: 0, right: 4` in
+    /// `incremental::engine_tests::reuse_counts_are_exactly_the_cache_hits`.
+    ///
+    /// The loop is the falsifier, not decoration: the bug was a lost race, so one iteration would
+    /// only expose it when the worker happened to lose the CPU between the emit and the hand-back.
+    /// After the fix the assertion is ordered after the hand-back by the cache mutex, so it can
+    /// never observe the slot missing, however the threads are scheduled.
+    #[test]
+    fn the_documents_cache_is_settled_before_the_terminal_event_is_observable() {
+        let host = ExecutionHost::new(cacheable_factory());
+        let document = DocumentId(1);
+        for run in 1..=64u64 {
+            let _handle = host
+                .submit(document, SourceRevision(run), "x = 1".to_string(), 1000)
+                .expect("an idle document accepts the run");
+            let events = drain_until_terminal(&host, Duration::from_secs(30));
+            assert!(
+                matches!(
+                    events.last().map(|event| &event.event),
+                    Some(DesktopEvent::Finished { .. })
+                ),
+                "run {run}: terminal event was {:?}",
+                summaries(&events)
+            );
+            assert_eq!(
+                host.cached_entries(document),
+                1,
+                "run {run}: the document's cache is back in the host table by the time its \
+                 terminal event is observable"
+            );
+            // The second way a client reads the settled state: the run submitted straight after
+            // the previous terminal event must be served from the cache that run filled. Only the
+            // first run evaluates, so a lost hand-back shows up here as zero reused commits.
+            let reused = events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        &event.event,
+                        DesktopEvent::StepCommitted { reused: true, .. }
+                    )
+                })
+                .count();
+            assert_eq!(
+                reused,
+                usize::from(run > 1),
+                "run {run}: a run submitted on the previous terminal event is served from the \
+                 cache"
             );
         }
     }
