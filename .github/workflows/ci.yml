@@ -1,0 +1,81 @@
+name: CI
+
+# Two jobs:
+#   windows - the full workspace: format, clippy, every test, and the release desktop build.
+#   linux   - the portable engine crates only. The desktop crate is a Windows-only product
+#             (its eframe/egui dependencies are declared under cfg(windows)), so it must
+#             NOT be built or tested on Linux; the engine is platform-independent and is.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows (full workspace)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # -D warnings is deliberately NOT used: the workspace has pre-existing warnings
+      # (dead code, deprecated egui API, missing_docs), recorded in docs; making them
+      # fatal would be a separate cleanup, not a CI prerequisite.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build release desktop
+        run: cargo build --release -p lovelace-desktop
+
+      - name: Upload desktop executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: lovelace-desktop-windows-x86_64
+          path: target/release/lovelace-desktop.exe
+          if-no-files-found: error
+
+  linux:
+    name: Linux (engine crates)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy engine crates
+        run: cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets
+
+      - name: Test engine crates
+        run: cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics
