@@ -111,6 +111,8 @@ overflows its main-thread stack at `lang/061`, while the release build of the sa
 
 | Page | What it covers |
 |---|---|
+| [AGENTS.md](AGENTS.md) | portable contributor guide: entry points, commands, layout, conventions and guardrails |
+| [docs/skills.md](docs/skills.md) | the eight task skills for extending the application, with when-to-use guidance |
 | [docs/README.md](docs/README.md) | the index of everything below |
 | [docs/architecture.md](docs/architecture.md) | the five layers, threading, cancellation, the cache, the data flow of a run |
 | [docs/build-and-run.md](docs/build-and-run.md) | prerequisites, profiles, the CLI and the GUI, environment variables, troubleshooting |
