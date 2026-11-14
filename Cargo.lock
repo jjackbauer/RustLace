@@ -1881,6 +1881,7 @@ dependencies = [
  "lovelace-json",
  "lovelace-lang",
  "lovelace-symbolics",
+ "raw-window-handle",
  "resvg",
 ]
 
