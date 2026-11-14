@@ -2,12 +2,95 @@
 
 ## Versioning
 
-One version governs the workspace: `[workspace.package] version = "0.1.0"` in `Cargo.toml`, and every
-member inherits it with `version.workspace = true`. There are no per-crate versions and no published
-crates: the release artifact is a Windows executable.
+One version governs the workspace: `[workspace.package] version` in `Cargo.toml`, and every member
+inherits it with `version.workspace = true`. There are no per-crate versions and no published
+Rust crates: the release artifact is a Windows executable, and the desktop binary prints the version
+compiled into it from its package metadata (`--version` -> `lovelace-desktop <compiled version>`).
 
-Bump the version in one place (`Cargo.toml`), and let `Cargo.lock` update in the same commit. The
-desktop binary prints it from the package metadata (`--version` → `lovelace-desktop 0.1.0`).
+The version is derived from the commit history, not chosen by hand. `tools/next-version.ps1` reads
+the current workspace version and the commits since the last `vX.Y.Z` tag (every commit when no tag
+exists yet) and prints the next version:
+
+```console
+$ ./tools/next-version.ps1 -CurrentVersion 0.1.0 -Commits 'feat: publish the RustLace workspace'
+previous=0.1.0 next=0.2.0 bump=minor reason="feat: publish the RustLace workspace" policy=0.x
+range=supplied -Commits
+commits=1
+deciding commits:
+  synthetic-1 feat: publish the RustLace workspace
+```
+
+On the real tree with no tag and only freeform, `docs:`, `test:`, `ci:` and `style:` history it
+prints `bump=none`, which is why the first release needed an explicit `feat:` commit.
+
+The `previous=...` line is the machine-readable verdict the workflow consumes; `bump=none` means
+the range warrants no release and nothing is tagged. `-Json` emits the same verdict as one object,
+`-Commits` supplies a synthetic range so the rules are testable without rewriting history, and
+`-FailOnNoBump` turns "no bump" into exit code 2 for scripting.
+
+### The bump rules
+
+| Commit | 0.x (major version 0) | 1.x and later |
+|---|---|---|
+| `type!:` or a `BREAKING CHANGE:` footer | **minor** | **major** |
+| `feat:` (any scope) | **minor** | **minor** |
+| `fix:` / `perf:` | **patch** | **patch** |
+| `docs:`, `test:`, `ci:`, `chore:`, `style:`, `refactor:`, `build:`, unknown prefixes, freeform | none | none |
+
+A `!` before the colon (`feat!:`, `fix(api)!:`) and a body line beginning `BREAKING CHANGE:` (or
+`BREAKING-CHANGE:`) are both a breaking change. The subject of the newest commit that decides the
+bump is the verdict's `reason`.
+
+**0.x is deliberate.** While the major version is 0 the project makes no stability promise, so a
+breaking change ships as a minor bump: `0.1.0 -> 0.2.0`, and never `1.0.0`. A `feat:` on 0.x is
+also a minor bump, and a `fix:`/`perf:` is a patch. The first automated release of this tree is
+therefore `v0.2.0` (0.1.0 plus a `feat:` range), not `v1.0.0`.
+
+**Reaching 1.0.0 is an explicit act.** The only ways to move the major version are:
+
+- a commit whose subject contains `release: 1.0.0`, or
+- a `BREAKING CHANGE:` footer whose first line carries `major: 1`.
+
+Nothing else moves the major version. Once the major version is 1 or later the promotion token is
+ignored: the ordinary semver table applies, and a breaking change raises the major
+(`1.2.3 -> 2.0.0`).
+
+## Automatic releases
+
+`.github/workflows/release.yml` runs on the `workflow_run` event for the `CI` workflow. It starts
+only when a CI run triggered by a push to `main` finishes with `conclusion == 'success'`, so a red
+or unvalidated tree can never be tagged. The job:
+
+1. checks out the triggering run's head SHA with full history and tags;
+2. runs `tools/next-version.ps1`; when it prints `bump=none` the reason is logged and the job stops
+   without a tag;
+3. stops when `vX.Y.Z` already exists, so a re-run or a replayed event can never release the same
+   version twice;
+4. stops when `main` has moved past the validated commit, so a stale run cannot resurrect an older
+   tree;
+5. bumps `[workspace.package] version` in `Cargo.toml` and lets `cargo metadata` rewrite the twelve
+   member versions in `Cargo.lock`, then commits `chore(release): vX.Y.Z [skip ci]`;
+6. creates the tag and pushes the commit and the tag atomically (`git push --atomic`): a rejected
+   push leaves neither behind;
+7. downloads the `lovelace-desktop-windows-x86_64` artifact from the triggering CI run (the exact
+   executable CI built and tested, not a local rebuild), writes `SHA256SUMS`, generates the notes
+   with `tools/release-notes.ps1`, and creates the GitHub Release with `gh release create`.
+
+The release commit carries `[skip ci]`, so the version bump cannot start CI again. The `concurrency`
+group `release-${{ github.ref }}` queues overlapping runs instead of racing them, and the tag check
+turns the queued run into a no-op. The workflow asks for `contents: write` (push and release) and
+`actions: read` (download an artifact from a different run).
+
+Every release carries two assets:
+
+```text
+lovelace-desktop.exe     the executable built by the successful CI run
+SHA256SUMS               "<sha256>  lovelace-desktop.exe"
+```
+
+To retry a release, re-run the release workflow that belongs to the triggering CI run
+(`gh run rerun <release-run-id>`). If the tag was already pushed the guard stops, so a retry cannot
+double-publish; if the job failed before the push, the same re-run is safe and does the work.
 
 ## The release build
 
@@ -20,13 +103,19 @@ The release profile is `opt-level = 3`, `lto = "thin"`, `codegen-units = 1` (`Ca
 artifact is:
 
 ```text
-target/release/lovelace-desktop.exe        24 169 472 bytes for the 0.1.0 tree
-sha256 0135514eb6bf5e66ba6cfbe250ee636655014954288e3967e44bec78d3eb79b8
+target/release/lovelace-desktop.exe
 ```
+
+Its size and SHA-256 change with every build, so the authoritative values are the ones in the
+published release note and `SHA256SUMS`, not a number copied into this page. For the historical
+0.1.0 tree the file was 24 169 472 bytes with SHA-256
+`0135514eb6bf5e66ba6cfbe250ee636655014954288e3967e44bec78d3eb79b8`.
 
 CI performs the same build in its Windows job and uploads exactly that file as the artifact
 `lovelace-desktop-windows-x86_64` (`.github/workflows/ci.yml`), with `if-no-files-found: error` so a
-silent build failure cannot produce an empty release.
+silent build failure cannot produce an empty release. The release workflow downloads that artifact
+from the successful run instead of building again, so the published executable is the one the
+Windows job tested.
 
 ## Artifact layout
 
@@ -38,10 +127,10 @@ lovelace-desktop-windows-x86_64/
 ```
 
 There is no installer, no MSIX, no side-by-side DLL set and no packaging script in the tree (a
-`git ls-files` search for release/dist/package/xtask tooling finds none). The binary needs the Microsoft
-Visual C++ runtime, like any MSVC-linked Rust executable. The engine, the CLI (`lovelace-run`), the
-corpus gate and the knowledge graph are built from source by consumers who need them; they are not
-shipped in this artifact.
+`git ls-files` search for release/dist/package/xtask tooling finds none). The binary needs the
+Microsoft Visual C++ runtime, like any MSVC-linked Rust executable. The engine, the CLI
+(`lovelace-run`), the corpus gate and the knowledge graph are built from source by consumers who
+need them; they are not shipped in this artifact.
 
 ## Signing caveat
 
@@ -66,6 +155,9 @@ The honest release note is therefore: unsigned build, hash published, SmartScree
 
 ## Release checklist
 
+The automatic workflow runs the gate below in CI. A manual release is the fallback, and it must
+prove the same things on the release commit:
+
 1. `cargo fmt --all -- --check` — the workspace is formatted.
 2. `cargo clippy --workspace --all-targets` — read the warnings; the workspace has pre-existing ones
    and CI does not use `-D warnings`.
@@ -79,5 +171,6 @@ The honest release note is therefore: unsigned build, hash published, SmartScree
    journeys match their expected observables.
 9. `cargo build --release -p lovelace-desktop` — the artifact above.
 10. Record the artifact's size and SHA-256 in the release note, along with the unsigned/SmartScreen
-    caveat.
-11. Update the version in `Cargo.toml` and commit `Cargo.lock` with it.
+    caveat. The automatic workflow does this from the downloaded artifact.
+11. Update `[workspace.package] version` in `Cargo.toml`, commit `Cargo.lock` with it, and tag
+    `vX.Y.Z`. The automatic workflow does this; do not tag by hand while it is green.

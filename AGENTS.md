@@ -176,6 +176,15 @@ style: apply cargo fmt across the workspace
 One logical change per commit. "All tests pass" is not evidence; "716 tests, release x2 + debug
 green" is.
 
+Conventional prefixes drive the release version, so the prefix is not cosmetic: `feat:` is a minor
+bump, `fix:`/`perf:` a patch, and `type!:` or a `BREAKING CHANGE:` footer a minor bump while the
+major version is 0 (`0.1.0 -> 0.2.0`, deliberately not `1.0.0`) and a major bump once it is 1 or
+later. `docs:`, `test:`, `ci:`, `chore:`, `style:`, `refactor:`, `build:`, unknown prefixes and
+freeform subjects do not release on their own. 1.0.0 is reached only by a commit whose subject
+contains `release: 1.0.0` (or a `BREAKING CHANGE:` footer carrying `major: 1` on its first line);
+nothing else moves the major version. `.github/workflows/release.yml` releases automatically after a
+green CI run on `main`, so do not tag by hand. The full table is [docs/release.md](docs/release.md).
+
 ## Guardrails
 
 - Never weaken a test to make a change pass: do not delete it, `#[ignore]` it, relax an assertion,

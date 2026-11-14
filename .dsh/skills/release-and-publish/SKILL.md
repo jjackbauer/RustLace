@@ -11,6 +11,11 @@ installer, no MSIX, no side-by-side DLL set and no packaging script. The version
 (`[workspace.package] version` in `Cargo.toml`), CI builds and uploads the same file, and the
 honest release note is an unsigned build with a published hash unless someone signs it.
 
+**The normal path is automatic.** `.github/workflows/release.yml` runs after a green CI run on
+`main`, derives the version from conventional commits with `tools/next-version.ps1`, tags it,
+and publishes the executable plus `SHA256SUMS`. The manual procedure below is the fallback for when
+that workflow cannot run; do not hand-tag while the workflow is available.
+
 ## Files you will touch
 
 - `Cargo.toml` - the single workspace version.
@@ -81,8 +86,8 @@ honest release note is an unsigned build with a published hash unless someone si
    administrator to install one, publish the unsigned build and say so; a self-signed file that users
    still see as "Unknown publisher" is not more trustworthy than an honest unsigned one.
 
-5. **Tag the release commit.** The repository has no tags yet; use the version with a `v` prefix
-   (`v0.1.0` for the current `0.1.0`). An annotated tag carries the release note's first line:
+5. **Tag the release commit.** Use the version `tools/next-version.ps1` printed, with a `v` prefix.
+   An annotated tag carries the release note's first line:
 
    ```console
    git tag -a v0.1.0 -m "RustLace 0.1.0"
@@ -133,5 +138,6 @@ git ls-remote --tags origin
 
 Observable success: every command exits 0; the corpus prints `214 passed, 0 failed, 214 total`; the
 desktop suite reports 716 passed; the release binary exists and its SHA-256 is the hash in the
-release note; `git ls-remote --tags origin` lists `v0.1.0` at the release commit; the CI run for that
-commit has both jobs green and the uploaded artifact's hash matches the published one.
+release note; `git ls-remote --tags origin` lists the new `v<version>` tag at the release commit;
+the CI run for that commit has both jobs green and the uploaded artifact's hash matches the
+published one.
