@@ -820,6 +820,27 @@ impl DocumentCache {
         self.entries.clear();
     }
 
+    /// Drops the cached statements one removed global affects (WKS-003).
+    ///
+    /// A workspace deletion changes what the document's engine state is without changing the
+    /// source, so every memoised statement whose key names that global — as a read dependency or
+    /// as the assignment target — must be recomputed: a hit would either replay a value derived
+    /// from the deleted binding or re-apply the deleted binding itself. Unrelated statements keep
+    /// their entries, so the next run's reuse report stays honest. Returns how many entries were
+    /// dropped.
+    pub fn invalidate_variable(&mut self, name: &str) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|key, entry| {
+            let reads = key
+                .dependencies
+                .iter()
+                .any(|(dependency, _)| dependency == name);
+            let writes = entry.write.as_deref() == Some(name);
+            !(reads || writes)
+        });
+        before - self.entries.len()
+    }
+
     /// Decides whether one statement may be served from the cache and, if so, builds its key.
     ///
     /// Building the key reads the *current* typed value of every global the statement reads, so
@@ -1149,6 +1170,61 @@ mod tests {
         );
         cache.clear_entries();
         assert!(cache.is_empty());
+    }
+
+    /// WKS-003: deleting one variable from the workspace drops exactly the memoised statements
+    /// that read it or re-create it, and leaves every unrelated statement reusable.
+    ///
+    /// A hit on a reader would replay a value derived from the deleted binding; a hit on the
+    /// writer would re-apply the binding the user just deleted. Neither may survive the delete.
+    #[test]
+    fn invalidating_one_variable_drops_its_readers_and_writer_only() {
+        let mut cache = DocumentCache::new();
+        let entry = |write: &str, display: &str| CachedEntry {
+            write: Some(write.to_string()),
+            display: display.to_string(),
+            structured: None,
+            inspection: None,
+            value: CachedValue::Fake(crate::engine::FakeValue::Int(1)),
+        };
+        let key = |source: &str, dependencies: &[&str]| StatementKey {
+            source: source.to_string(),
+            document_precision: 1000,
+            effective_precision: 1000,
+            dependencies: dependencies
+                .iter()
+                .map(|name| (name.to_string(), "N:1".to_string()))
+                .collect(),
+            functions: Vec::new(),
+        };
+        // a = 1 (writes a), b = a + 1 (reads a), c = b + 1 (reads b), z = 9 (reads nothing).
+        cache.insert(key("a=1", &[]), entry("a", "1"));
+        cache.insert(key("b=a+1", &["a"]), entry("b", "2"));
+        cache.insert(key("c=b+1", &["b"]), entry("c", "3"));
+        cache.insert(key("z=9", &[]), entry("z", "9"));
+        assert_eq!(cache.len(), 4);
+
+        let dropped = cache.invalidate_variable("a");
+        assert_eq!(
+            dropped, 2,
+            "the writer of a and the statement reading a are both affected"
+        );
+        assert_eq!(cache.len(), 2);
+        // The unrelated entry is still present under its exact key.
+        assert!(
+            cache
+                .get(&key("z=9", &[]))
+                .is_some_and(|entry| entry.display == "9"),
+            "z's cached outcome must survive an unrelated variable's deletion"
+        );
+        assert!(
+            cache.get(&key("b=a+1", &["a"])).is_none(),
+            "the reader of the deleted variable must be recomputed"
+        );
+        assert!(
+            cache.get(&key("a=1", &[])).is_none(),
+            "the writer of the deleted variable must not re-create it from the cache"
+        );
     }
 
     /// A minimal evaluator with no engine behind it: canonical values are a map, there is no

@@ -3,10 +3,13 @@
 //! It scans every **production** Rust source file in the crate (comments and `#[cfg(test)]`
 //! modules stripped) and enforces:
 //!
-//! - exactly one thread-spawn site exists, and it is `execution.rs`'s named run worker;
-//! - that worker's `JoinHandle` is stored on the `ExecutionHost` and joined by
-//!   `ExecutionHost::shutdown`, which `Drop for ExecutionHost` calls — no detached or daemon-like
-//!   worker survives the host;
+//! - exactly two thread-spawn sites exist, each with a reviewed owner: `execution.rs`'s named run
+//!   worker and `ui/plot.rs`'s named canvas raster worker (PLT-012);
+//! - each worker's `JoinHandle` is stored on its owner and joined by that owner's shutdown path
+//!   (`ExecutionHost::shutdown` and `Drop for RasterWorker`, which `Drop for Plot` reaches) — no
+//!   detached or daemon-like worker survives its owner;
+//! - the canvas worker's cancellation protocol is present (an atomic generation compared by the
+//!   worker, and a `Shutdown` message that ends its receive loop);
 //! - no production code sleeps, parks or spins to synchronise (`thread::sleep`, `thread::park`,
 //!   `spin_loop`);
 //! - the execution core synchronises with the native primitives it imports (`mpsc` channel,
@@ -14,9 +17,11 @@
 //!
 //! The runtime half of the proof lives beside the construction: `execution::tests` asserts the
 //! recorded engine thread differs from the UI thread and that `shutdown` joins every spawned
-//! worker (`shutdown_joins_every_spawned_worker`). This audit is the static half: it fails when a
-//! new spawn site, a sleep or a lost join path appears in the source, and its negative tests feed
-//! those exact violations through the same scanner.
+//! worker (`shutdown_joins_every_spawned_worker`), and `ui::plot::tests` asserts that the raster
+//! thread is not the UI thread, that a superseded raster is cancelled, and that dropping the pane
+//! joins the worker. This audit is the static half: it fails when an unapproved spawn site, a
+//! sleep or a lost join path appears in the source, and its negative tests feed those exact
+//! violations through the same scanner.
 
 use std::path::{Path, PathBuf};
 
@@ -74,6 +79,8 @@ pub fn audit_src(src: &Path) -> ThreadReport {
     let mut execution_source = String::new();
     let mut execution_source_text = String::new();
     let mut workbench_source = String::new();
+    let mut plot_source = String::new();
+    let mut plot_source_text = String::new();
     for path in files {
         let relative = path
             .strip_prefix(src)
@@ -96,6 +103,10 @@ pub fn audit_src(src: &Path) -> ThreadReport {
         }
         if relative == "workbench.rs" {
             workbench_source = code_only.clone();
+        }
+        if relative == "ui/plot.rs" {
+            plot_source = code_only.clone();
+            plot_source_text = production.clone();
         }
         scan_sites(&relative, &production, &mut spawn_sites, &mut blocking_sites);
     }
@@ -129,27 +140,50 @@ pub fn audit_src(src: &Path) -> ThreadReport {
     } else {
         failures.push("Drop for ExecutionHost is missing".to_string());
     }
+    if plot_source.contains("JoinHandle") && plot_source.contains("fn drop") && plot_source.contains(".join()") {
+        join_path.push("RasterWorker stores the worker's JoinHandle and Drop joins it".to_string());
+    } else {
+        failures.push("ui/plot.rs has no JoinHandle/Drop/join path for the canvas worker".to_string());
+    }
+    if plot_source.contains("Shutdown") && plot_source.contains("fetch_add") {
+        join_path.push(
+            "the canvas worker stops on a Shutdown message and cancels through an atomic generation"
+                .to_string(),
+        );
+    } else {
+        failures.push("ui/plot.rs has no Shutdown/cancellation protocol".to_string());
+    }
     if workbench_source.contains("next_event") && !workbench_source.contains("thread::sleep") {
         join_path.push("Workbench wait path blocks on ExecutionHost::next_event, not sleep".to_string());
     } else {
         failures.push("Workbench wait path does not block on the event channel".to_string());
     }
 
-    if spawn_sites.len() != 1 {
+    // ARC-008: exactly two reviewed spawn sites, each in its approved file and named thread.
+    if spawn_sites.len() != 2 {
         failures.push(format!(
-            "expected exactly one production thread-spawn site, found {}",
+            "expected exactly two production thread-spawn sites (execution.rs run worker and ui/plot.rs canvas worker), found {}",
             spawn_sites.len()
         ));
-    } else {
-        let site = &spawn_sites[0];
-        if site.file != "execution.rs" {
+    }
+    let run_site = spawn_sites.iter().find(|site| site.file == "execution.rs");
+    let plot_site = spawn_sites.iter().find(|site| site.file == "ui/plot.rs");
+    match run_site {
+        Some(_) if execution_source_text.contains("lovelace-run-") => {}
+        Some(_) => failures.push("the run worker is not named lovelace-run-<doc>-<run>".to_string()),
+        None => failures.push("the run worker's spawn site in execution.rs is missing".to_string()),
+    }
+    match plot_site {
+        Some(_) if plot_source_text.contains("lovelace-plot-raster") => {}
+        Some(_) => failures.push("the canvas worker is not named lovelace-plot-raster".to_string()),
+        None => failures.push("the canvas worker's spawn site in ui/plot.rs is missing".to_string()),
+    }
+    for site in &spawn_sites {
+        if site.file != "execution.rs" && site.file != "ui/plot.rs" {
             failures.push(format!(
-                "the only spawn site must be execution.rs, found {}:{}",
+                "unapproved thread-spawn site at {}:{}",
                 site.file, site.line
             ));
-        }
-        if !execution_source_text.contains("lovelace-run-") {
-            failures.push("the worker thread is not named lovelace-run-<doc>-<run>".to_string());
         }
     }
     if !blocking_sites.is_empty() {
@@ -224,10 +258,12 @@ pub fn run() -> i32 {
     println!("== thread spawn sites ==");
     println!("file:line | construction | join/stop path");
     for site in &report.spawn_sites {
-        println!(
-            "{}:{} | {} | ExecutionHost.workers[run] = JoinHandle; ExecutionHost::shutdown sets cancel flags and joins every handle; Drop for ExecutionHost calls shutdown",
-            site.file, site.line, site.text
-        );
+        let path = if site.file == "execution.rs" {
+            "ExecutionHost.workers[run] = JoinHandle; ExecutionHost::shutdown sets cancel flags and joins every handle; Drop for ExecutionHost calls shutdown"
+        } else {
+            "RasterWorker.handle = JoinHandle; RasterWorker::drop sends Shutdown and joins; Drop for Plot drops the worker"
+        };
+        println!("{}:{} | {} | {path}", site.file, site.line, site.text);
     }
     println!();
     println!("== production sleep/park/spin sites ==");
@@ -274,17 +310,27 @@ mod tests {
             "ARC-008 violations: {:#?}",
             report.failures
         );
-        assert_eq!(report.spawn_sites.len(), 1);
-        assert_eq!(report.spawn_sites[0].file, "execution.rs");
+        assert_eq!(report.spawn_sites.len(), 2);
+        let files: Vec<&str> = report
+            .spawn_sites
+            .iter()
+            .map(|site| site.file.as_str())
+            .collect();
+        assert_eq!(files, vec!["execution.rs", "ui/plot.rs"]);
         let execution = std::fs::read_to_string(src.join("execution.rs")).expect("execution.rs");
         assert!(
             execution.contains("lovelace-run-"),
             "the worker thread name is not lovelace-run-<doc>-<run>"
         );
+        let plot = std::fs::read_to_string(src.join("ui").join("plot.rs")).expect("ui/plot.rs");
+        assert!(
+            plot.contains("lovelace-plot-raster"),
+            "the canvas worker thread name is not lovelace-plot-raster"
+        );
     }
 
     #[test]
-    fn the_scan_finds_every_spawn_site_and_rejects_a_second_one() {
+    fn the_scan_finds_every_spawn_site_and_rejects_an_unapproved_one() {
         let mut spawn_sites = Vec::new();
         let mut blocking = Vec::new();
         scan_sites(
@@ -296,32 +342,21 @@ mod tests {
         assert_eq!(spawn_sites.len(), 1);
         assert_eq!(spawn_sites[0].file, "ui/paint.rs");
 
-        // The shipped rule: exactly one production spawn site, in execution.rs. A second file
-        // that spawns fails the audit even if it is otherwise clean.
-        let synthetic = ThreadReport {
-            spawn_sites: vec![
-                SpawnSite {
-                    file: "execution.rs".to_string(),
-                    line: 1,
-                    text: "thread::Builder::new().name(\"lovelace-run\")".to_string(),
-                },
-                SpawnSite {
-                    file: "ui/paint.rs".to_string(),
-                    line: 2,
-                    text: "std::thread::spawn(|| work())".to_string(),
-                },
-            ],
-            blocking_sites: Vec::new(),
-            primitives: vec![
-                "mpsc".to_string(),
-                "Mutex".to_string(),
-                "AtomicBool".to_string(),
-                "AtomicU64".to_string(),
-            ],
-            join_path: vec!["join".to_string()],
-            failures: Vec::new(),
-        };
-        assert_eq!(synthetic.spawn_sites.len(), 2);
+        // The shipped rule: the only production spawn sites are execution.rs's run worker and
+        // ui/plot.rs's canvas worker. A third file that spawns fails the audit even if it is
+        // otherwise clean.
+        let mut third = Vec::new();
+        let mut third_blocking = Vec::new();
+        for file in ["execution.rs", "ui/plot.rs", "ui/paint.rs"] {
+            scan_sites(
+                file,
+                "fn start(){ std::thread::Builder::new().name(\"worker\").spawn(work); }",
+                &mut third,
+                &mut third_blocking,
+            );
+        }
+        assert_eq!(third.len(), 3);
+        assert!(third.iter().any(|site| site.file == "ui/paint.rs"));
     }
 
     #[test]

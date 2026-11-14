@@ -542,6 +542,8 @@ mod tests {
                 LogLine::new(LogKind::Stdout, "sqrt(2)*pi").at_statement(0),
                 LogLine::new(LogKind::Result, "sqrt(2)*pi"),
             ],
+            logs_dropped: 0,
+            workspace_revision: 1,
             diagnostic: Some(diagnostic()),
             run_state: RunState::Finished,
             buffer_revision: SourceRevision(1),

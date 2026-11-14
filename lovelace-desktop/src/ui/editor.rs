@@ -377,6 +377,30 @@ impl TextEditor {
         true
     }
 
+    /// LOG-004: opens the source at a 1-based line and column and selects the named span.
+    ///
+    /// A Logs-pane diagnostic line carries the position its run reported, which may no longer be
+    /// the editor's *current* diagnostic (the buffer may have been edited since). The position is
+    /// resolved against the buffer as it is now: the caret goes to the exact line and column, and
+    /// the selection covers the span from there to the end of the line, so the source the click
+    /// named is highlighted rather than merely visible. Returns the resolved range, or `None`
+    /// when the position is outside the buffer (nothing is moved in that case).
+    pub fn jump_to_position(
+        &mut self,
+        line: usize,
+        column: usize,
+    ) -> Option<crate::diagnostic_map::DiagnosticRange> {
+        let range = crate::diagnostic_map::range_for(&self.lines, line, column)?;
+        let row = range.line - 1;
+        self.caret_row = row;
+        self.caret_col = range.start_char;
+        let limit = range.end_char.max(range.start_char);
+        // The editor stores the selection's other endpoint; the caret is the anchor.
+        self.selection = Some((row, limit));
+        self.history.break_burst();
+        Some(range)
+    }
+
     /// Moves the caret, clamping row and column into the buffer and clearing any selection.
     #[allow(dead_code)] // part of the editor surface; the window reads the caret instead of setting it
     pub fn set_caret(&mut self, row: usize, col: usize) {

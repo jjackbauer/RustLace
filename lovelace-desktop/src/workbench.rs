@@ -39,7 +39,18 @@ use crate::run_state::{RunState, RunStateMachine, RunStateTransition};
 use crate::settings::{MAX_PRECISION, MIN_PRECISION, SessionState, SessionTab};
 
 /// Maximum number of log entries retained per document; the oldest are evicted first.
-pub const LOG_CAP: usize = 500;
+///
+/// LOG-006 / LOG-010: the cap is large enough that a 100k-record run is retained in full and the
+/// Logs pane can scroll it (the pane paints only the visible rows), so "truncated history" is the
+/// exceptional state it is meant to be rather than the normal one. When the cap *is* reached the
+/// discarded count is recorded ([`WorkbenchDocument::logs_dropped`]) and the pane says so.
+pub const LOG_CAP: usize = 100_000;
+
+/// How many records are discarded at once when [`LOG_CAP`] is reached.
+///
+/// Evicting one record per push would make every append O(cap); dropping a tenth of the log at a
+/// time keeps the amortised cost of an append O(1) while never letting the log grow past the cap.
+const LOG_EVICT_BATCH: usize = LOG_CAP / 10;
 
 /// The source of the first document, so the window opens on a real runnable script instead of a
 /// blank buffer. It is ordinary editable text, not precomputed pane data.
@@ -383,6 +394,18 @@ pub struct WorkbenchDocument {
     /// order and the commit snapshot is published in the same branch: no pane can show a line
     /// from a statement whose effects the workspace does not have yet.
     pending_logs: Vec<LogLine>,
+    /// WKS-003: the workspace's own revision.
+    ///
+    /// The source revision cannot describe a workspace edit (deleting a variable or clearing the
+    /// variables changes the engine state, not the text), so every such operation moves this
+    /// counter. It is what the pane shows beside the committed revision and what a test can
+    /// compare to prove the deletion was recorded, not merely repainted.
+    pub workspace_revision: u64,
+    /// LOG-006: how many records the log cap has discarded from the front of the log.
+    ///
+    /// A log that reached the cap is no longer complete; the pane states that with this count and
+    /// the retained records stay exportable, so no history disappears without saying so.
+    pub logs_dropped: usize,
     /// The 0-based statement the in-flight statement-scoped events belong to.
     current_statement: Option<usize>,
     /// The structured diagnostic of the last failed run, with its source revision.
@@ -616,6 +639,15 @@ pub struct DocumentView {
     /// The log as the pane paints it: only lines whose statement committed (plus run-level and
     /// terminal lines).
     pub logs: Vec<LogLine>,
+    /// LOG-006: records the log cap discarded from the front of [`Self::logs`] this session.
+    ///
+    /// Zero means the visible log is complete; a positive count is what the pane's truncated
+    /// history indicator states, so the user is never shown a partial log as if it were whole.
+    pub logs_dropped: usize,
+    /// WKS-003: the workspace's own revision, moved by every workspace edit (delete one variable,
+    /// clear the variables). It is separate from [`Self::revision`], which describes the source
+    /// text, because a workspace edit changes no text at all.
+    pub workspace_revision: u64,
     /// The failure diagnostic that still describes the buffer, with its revision already checked.
     pub diagnostic: Option<Diagnostic>,
     /// The document's visible run state.
@@ -1996,22 +2028,159 @@ impl Workbench {
             return None;
         };
         let removed = snapshot.variables.len();
+        let names: Vec<String> = snapshot
+            .state
+            .variables
+            .iter()
+            .map(|variable| variable.name.clone())
+            .chain(snapshot.variables.iter().map(|(name, _)| name.clone()))
+            .collect();
         snapshot.variables.clear();
         snapshot.state.variables.clear();
+        doc.workspace_revision += 1;
+        let document = doc.id;
         let functions = snapshot.functions.len();
+        // WKS-004: every memoised statement that read or re-created one of the removed globals is
+        // dropped, so the next run recomputes it instead of replaying state the workspace no
+        // longer has. Functions are untouched, and so is their cache (their revisions stay).
+        let mut invalidated = 0;
+        for name in names {
+            invalidated += self.host.invalidate_variable(document, &name);
+        }
+        let doc = self.docs.get_mut(index).expect("the document was just borrowed");
         Self::push_line(
             doc,
             LogLine::new(
                 LogKind::Info,
-                format!("Variables cleared: {removed} removed; {functions} functions retained."),
+                format!(
+                    "Variables cleared: {removed} removed; {functions} functions retained; \
+                     {invalidated} cached statement(s) invalidated."
+                ),
             ),
         );
         Some(removed)
     }
 
+    /// WKS-003: deletes exactly one variable from the published workspace.
+    ///
+    /// The engine that produced the workspace is gone once its run terminated (every run builds a
+    /// fresh engine), so the product's operation is on the committed workspace the tables show.
+    /// It removes the named entry from both variable projections, leaves every function row alone,
+    /// moves the document's workspace revision, drops the memoised statements that read or
+    /// re-create that global (so the next run recomputes rather than replaying the deleted
+    /// binding) and lets the completion catalogue follow, because
+    /// [`Workbench::completion_state`] overlays exactly this snapshot.
+    ///
+    /// Returns the removed value's display text, or `None` (logged) when a run is in flight, no
+    /// run has published a workspace, or the name is not a published variable.
+    pub fn delete_variable(&mut self, index: usize, name: &str) -> Option<String> {
+        let doc = self.docs.get_mut(index)?;
+        if doc.state().is_in_flight() {
+            Self::push_line(
+                doc,
+                LogLine::new(
+                    LogKind::Info,
+                    format!("Delete variable refused: a run is in flight ({name})."),
+                ),
+            );
+            return None;
+        }
+        if doc.snapshot.is_none() {
+            Self::push_line(
+                doc,
+                LogLine::new(
+                    LogKind::Info,
+                    format!("Delete variable: no committed workspace yet ({name})."),
+                ),
+            );
+            return None;
+        }
+        let document = doc.id;
+        let snapshot = doc.snapshot.as_mut().expect("the snapshot was checked above");
+        let published = snapshot
+            .state
+            .variables
+            .iter()
+            .any(|variable| variable.name == name)
+            || snapshot.variables.iter().any(|(existing, _)| existing == name);
+        if !published {
+            Self::push_line(
+                doc,
+                LogLine::new(
+                    LogKind::Info,
+                    format!("Delete variable: {name} is not a published variable."),
+                ),
+            );
+            return None;
+        }
+        let display = snapshot
+            .variables
+            .iter()
+            .find(|(existing, _)| existing == name)
+            .map(|(_, display)| display.clone())
+            .unwrap_or_else(|| "deleted".to_string());
+        snapshot.state.variables.retain(|variable| variable.name != name);
+        snapshot.variables.retain(|(existing, _)| existing != name);
+        doc.workspace_revision += 1;
+        let functions = snapshot.functions.len();
+        let revision = doc.workspace_revision;
+        let invalidated = self.host.invalidate_variable(document, name);
+        let doc = self.docs.get_mut(index).expect("the document was just borrowed");
+        Self::push_line(
+            doc,
+            LogLine::new(
+                LogKind::Info,
+                format!(
+                    "Variable deleted: {name} ({display}); {functions} functions retained; \
+                     {invalidated} cached statement(s) invalidated; workspace revision {revision}."
+                ),
+            ),
+        );
+        Some(display)
+    }
+
+    /// Deletes one variable from the active document (see [`Workbench::delete_variable`]).
+    pub fn delete_variable_active(&mut self, name: &str) -> Option<String> {
+        let active = self.active;
+        self.delete_variable(active, name)
+    }
+
     /// Clears the active document's variables (see [`Workbench::clear_variables`]).
     pub fn clear_variables_active(&mut self) -> Option<usize> {
         self.clear_variables(self.active)
+    }
+
+    /// LOG-010 acceptance seam: appends `count` stdout records and one fatal diagnostic.
+    ///
+    /// The Logs pane's virtualisation and the storage cap need a real 100 000-record document to
+    /// be captured, which no script can produce in reasonable time through the engine. This
+    /// method appends through [`Self::push_line`] — the same path every run's `print` line takes,
+    /// including the cap and its discarded-record accounting — and then appends one diagnostic
+    /// line, so the capture can prove the current fatal error is still the newest record. It is
+    /// called only by the `LOVELACE_LOG_FLOOD` acceptance switch (off unless set) and is
+    /// unreachable from a script.
+    pub fn flood_log_active(&mut self, count: usize) {
+        let Some(doc) = self.docs.get_mut(self.active) else {
+            return;
+        };
+        for index in 0..count {
+            Self::push_line(
+                doc,
+                LogLine::new(
+                    LogKind::Stdout,
+                    format!("flood record {index}: the engine printed this line during the run"),
+                )
+                .at_statement(index % 7),
+            );
+        }
+        Self::push_line(
+            doc,
+            LogLine::new(
+                LogKind::Diagnostic,
+                "Diagnostic: LOGCAP-900 fatal: the run failed after the flood.",
+            )
+            .at_location(2, 1),
+        );
     }
 
     /// LAY-002: empties the active document's visible log and its in-flight pending lines.
@@ -2028,6 +2197,9 @@ impl Workbench {
         let removed = doc.logs.len() + doc.pending_logs.len();
         doc.logs.clear();
         doc.pending_logs.clear();
+        // The truncation count describes the retained history; an explicitly emptied view has
+        // none, so the next run starts a complete log again (LOG-006).
+        doc.logs_dropped = 0;
         removed
     }
 
@@ -2643,13 +2815,18 @@ impl Workbench {
                     debug_assert!(transitioned, "a terminal event must end the in-flight run");
                 }
                 let elapsed = self.close_run(index);
-                self.log(
-                    index,
+                // LOG-004: the line carries the diagnostic's own source position, so the Logs
+                // pane can open the editor at exactly that line and column when it is clicked.
+                let line = LogLine::new(
                     LogKind::Diagnostic,
                     // RUN-014: code, category, message, line, column and the engine's
                     // suggestions, in one self-describing line.
                     format!("Diagnostic: {}", diagnostic.render_fully()),
-                );
+                )
+                .at_location(diagnostic.line, diagnostic.column);
+                if let Some(doc) = self.docs.get_mut(index) {
+                    Self::push_line(doc, line);
+                }
                 let text = if quick_eval {
                     format!(
                         "Run failed after {} committed statements in {} ms.",
@@ -2793,9 +2970,16 @@ impl Workbench {
     }
 
     /// Appends one already-built line, enforcing [`LOG_CAP`].
+    ///
+    /// LOG-006: the records dropped to stay under the cap are counted, so the pane can state that
+    /// its history is truncated instead of silently losing the start of the log. Only the oldest
+    /// records are ever dropped, so the newest line — including the run's fatal diagnostic — is
+    /// never the one evicted.
     fn push_line(doc: &mut WorkbenchDocument, line: LogLine) {
         if doc.logs.len() >= LOG_CAP {
-            doc.logs.remove(0);
+            let batch = LOG_EVICT_BATCH.min(doc.logs.len()).max(1);
+            doc.logs.drain(0..batch);
+            doc.logs_dropped += batch;
         }
         doc.logs.push(line);
     }
@@ -2922,6 +3106,8 @@ impl Workbench {
                 .map(|snapshot| snapshot.output.clone())
                 .unwrap_or_default(),
             logs: document.logs.clone(),
+            logs_dropped: document.logs_dropped,
+            workspace_revision: document.workspace_revision,
             diagnostic: self.diagnostic(index).cloned(),
             run_state: document.state(),
             buffer_revision: SourceRevision(document.revision),
@@ -2982,6 +3168,8 @@ impl WorkbenchDocument {
             last_plot: None,
             logs: Vec::new(),
             pending_logs: Vec::new(),
+            workspace_revision: 1,
+            logs_dropped: 0,
             current_statement: None,
             diagnostic: None,
             diagnostic_revision: None,
@@ -3490,6 +3678,190 @@ mod tests {
                 .iter()
                 .any(|line| line.text.starts_with("Variables cleared")),
             "the clear is in the log"
+        );
+    }
+
+    /// WKS-003: deleting one variable removes exactly that variable, leaves every function row
+    /// and the result alone, moves the workspace revision and updates the completion catalogue;
+    /// an unknown name and a clear-then-delete are refused without changing anything.
+    #[test]
+    fn deleting_one_variable_is_selective_and_moves_the_workspace_revision() {
+        let mut workbench = real_workbench();
+        workbench.set_source(
+            0,
+            "func twice(x) = x * 2\nalpha = 21\nbeta = alpha + 1\ntwice(beta)\n".to_string(),
+        );
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(10)));
+        assert_eq!(workbench.documents()[0].state(), RunState::Finished);
+        let before = workbench.active_view();
+        assert!(
+            before
+                .state
+                .variables
+                .iter()
+                .any(|variable| variable.name == "alpha"),
+            "the run defined alpha: {:?}",
+            before.state.variables
+        );
+
+        let display = workbench
+            .delete_variable_active("alpha")
+            .expect("alpha is a published variable");
+        assert!(
+            display.contains("21"),
+            "the deleted value is reported: {display}"
+        );
+        let after = workbench.active_view();
+        assert!(
+            !after
+                .state
+                .variables
+                .iter()
+                .any(|variable| variable.name == "alpha"),
+            "only the selected variable is gone: {:?}",
+            after.state.variables
+        );
+        assert!(
+            after
+                .state
+                .variables
+                .iter()
+                .any(|variable| variable.name == "beta"),
+            "the other variable survives: {:?}",
+            after.state.variables
+        );
+        assert!(
+            !after.variables.iter().any(|(name, _)| name == "alpha"),
+            "the legacy display projection drops it too: {:?}",
+            after.variables
+        );
+        assert!(
+            after
+                .state
+                .functions
+                .iter()
+                .any(|function| function.name == "twice" && !function.is_builtin),
+            "the user function is unchanged"
+        );
+        assert_eq!(
+            after.functions.len(),
+            before.functions.len(),
+            "the function table is untouched"
+        );
+        assert_eq!(after.result, before.result, "the result is untouched");
+        assert_eq!(
+            after.workspace_revision,
+            before.workspace_revision + 1,
+            "the workspace revision moved by exactly one"
+        );
+
+        // Completions follow the same snapshot: alpha is no longer offered, twice still is.
+        let completions = workbench.completion_state();
+        assert!(
+            !completions
+                .variables
+                .iter()
+                .any(|variable| variable.name == "alpha"),
+            "the completion catalogue must not offer a deleted variable"
+        );
+        let catalogue = workbench.completion_catalogue();
+        assert!(
+            !catalogue.iter().any(|item| item.label == "alpha"),
+            "the built catalogue must not offer alpha"
+        );
+        assert!(
+            catalogue.iter().any(|item| item.label == "twice"),
+            "the user function stays in the catalogue"
+        );
+
+        // An unknown name changes nothing and is logged.
+        let revision = workbench.active_view().workspace_revision;
+        assert!(workbench.delete_variable_active("missing").is_none());
+        assert_eq!(
+            workbench.active_view().workspace_revision,
+            revision,
+            "a refused delete does not move the revision"
+        );
+        assert!(
+            workbench.documents()[0]
+                .logs
+                .iter()
+                .any(|line| line.text.contains("missing is not a published variable")),
+            "the refusal is in the log"
+        );
+
+        // Clearing and deleting an already-cleared name is refused too.
+        assert!(workbench.clear_variables_active().is_some());
+        assert!(workbench.delete_variable_active("beta").is_none());
+        assert!(
+            workbench.active_view().state.variables.is_empty(),
+            "a refused delete cannot re-add anything"
+        );
+    }
+
+    /// LOG-006 / LOG-010: the log retains 100 000 records — the pane can scroll a full-size run —
+    /// and the cap is only reached by a larger flood, where the discarded count is stated and the
+    /// newest record (the run's fatal diagnostic) is never the one dropped.
+    #[test]
+    fn a_hundred_thousand_log_records_are_retained_and_the_cap_is_stated() {
+        let mut workbench = fake_workbench();
+        // The boot lines are part of the document's log; the flood fills the cap exactly, plus
+        // the fatal diagnostic it appends, so nothing has to be evicted.
+        let boot = workbench.documents()[0].logs.len();
+        workbench.flood_log_active(LOG_CAP - boot - 1);
+        {
+            let doc = &workbench.documents()[0];
+            assert_eq!(doc.logs.len(), LOG_CAP);
+            assert_eq!(doc.logs_dropped, 0, "nothing is dropped below the cap");
+            assert_eq!(
+                doc.logs.last().map(|line| line.kind),
+                Some(LogKind::Diagnostic),
+                "the at-cap log ends with the fatal diagnostic"
+            );
+        }
+
+        // Past the cap: the oldest records go, the count is kept and the newest line stays.
+        // The fill appends 25 records plus its own diagnostic, after one batch eviction.
+        workbench.flood_log_active(25);
+        let doc = &workbench.documents()[0];
+        assert_eq!(doc.logs.len(), LOG_CAP - LOG_EVICT_BATCH + 26);
+        assert_eq!(doc.logs_dropped, LOG_EVICT_BATCH);
+        let newest = doc.logs.last().expect("the log is never empty");
+        assert_eq!(
+            newest.kind,
+            LogKind::Diagnostic,
+            "the newest record is the fatal diagnostic: {newest:?}"
+        );
+        assert!(
+            newest.text.contains("LOGCAP-900 fatal"),
+            "the current fatal error is retained verbatim: {}",
+            newest.text
+        );
+        assert!(
+            !doc.logs[0].text.starts_with("Lovelace Desktop ready"),
+            "the evicted prefix includes the boot history: {:?}",
+            doc.logs[0]
+        );
+    }
+
+    /// LOG-004: the diagnostic line carries the source position its run reported, so the Logs
+    /// pane can open and focus exactly that position.
+    #[test]
+    fn a_failed_run_logs_its_diagnostic_with_the_source_position() {
+        let mut workbench = fake_workbench();
+        workbench.set_source(0, "a = 1\nb = 1 / 0\n".to_string());
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(5)));
+        let line = workbench.documents()[0]
+            .logs
+            .iter()
+            .find(|line| line.kind == LogKind::Diagnostic && line.text.starts_with("Diagnostic:"))
+            .expect("the failed run logs its diagnostic");
+        assert_eq!(
+            line.location,
+            Some((2, 1)),
+            "the diagnostic line names the failing statement's position"
         );
     }
 
@@ -7584,10 +7956,17 @@ mod tests {
             applied >= 10_000,
             "only {applied} events were applied; the flood must reach the consumer"
         );
-        assert_eq!(
+        // LOG-006 / LOG-010: the cap is large enough now that a 10 000-line flood is retained in
+        // full; the cap itself is exercised by the 100 000-record test.
+        assert!(
+            document.logs.len() <= LOG_CAP,
+            "the log never exceeds its cap: {} > {}",
             document.logs.len(),
-            LOG_CAP,
-            "the log keeps its cap, not 10 000 lines"
+            LOG_CAP
+        );
+        assert_eq!(
+            document.logs_dropped, 0,
+            "a flood below the cap discards no history"
         );
         let flood: Vec<usize> = document
             .logs
@@ -7598,10 +7977,10 @@ mod tests {
                     .and_then(|rest| rest.parse::<usize>().ok())
             })
             .collect();
-        assert!(
-            flood.len() >= LOG_CAP - 5,
-            "the retained log must be the flood tail, found {} flood lines",
-            flood.len()
+        assert_eq!(
+            flood.len(),
+            10_000,
+            "every flood line is retained below the cap, in order"
         );
         for pair in flood.windows(2) {
             assert_eq!(

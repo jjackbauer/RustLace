@@ -24,7 +24,10 @@
 //! used by the legacy shell.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 // resvg 0.50 pins tiny-skia 0.11.4 and re-exports it. A direct `tiny-skia` 0.12 crate would be
 // a different, type-incompatible version.
@@ -45,6 +48,13 @@ pub const FIT_MARGIN: f32 = 8.0;
 pub const MAX_EXPORT_SIDE: u32 = 16_384;
 /// One wheel notch of zoom change, as a multiplier applied around the pointer.
 pub const WHEEL_STEP: f32 = 1.25;
+/// PLT-008: the largest SVG document the pane will accept, in bytes.
+///
+/// The engine's own figure for a large chart is a few megabytes; 16 MiB is far above any plot the
+/// engine publishes and far below the size at which parsing or rasterising an untrusted capture
+/// would stop being bounded. A capture above the cap is refused *before* `usvg` sees it, so the
+/// failure costs one length comparison and the error names both sizes.
+pub const MAX_SVG_BYTES: usize = 16 * 1024 * 1024;
 
 /// A background choice for a PNG export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -338,6 +348,171 @@ fn parse_hex_colour(text: &str) -> Option<egui::Color32> {
     )
 }
 
+/// PLT-005: which document and which run the displayed chart belongs to.
+///
+/// The pane stores this beside the SVG rather than deriving it at paint time, so a chart can
+/// never be painted with the identity of a document that did not produce it: the window copies
+/// the identity in the same call that loads the capture, and a tab switch either loads the other
+/// document's capture with its own identity or clears the pane.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlotProvenance {
+    /// The active document's stable id.
+    pub document_id: u64,
+    /// The active document's tab title.
+    pub document: String,
+    /// The run whose capture is displayed, when the document has run.
+    pub run: Option<u64>,
+}
+
+impl PlotProvenance {
+    /// The one-line form the header and the accessibility description publish.
+    pub fn label(&self) -> String {
+        match self.run {
+            Some(run) => format!("{} · run {run}", self.document),
+            None => format!("{} · no run yet", self.document),
+        }
+    }
+}
+
+/// PLT-012: one rasterisation handed to the canvas worker.
+struct RasterRequest {
+    /// The generation this request belongs to; a request whose generation is no longer current is
+    /// cancelled before or after rendering.
+    generation: u64,
+    tree: usvg::Tree,
+    svg_w: f32,
+    svg_h: f32,
+    scale: f32,
+    max_side: f32,
+}
+
+/// PLT-012: one finished (or cancelled) rasterisation coming back to the UI thread.
+struct RasterDone {
+    generation: u64,
+    scale: f32,
+    /// True when the request was superseded; no pixels are carried and nothing is uploaded.
+    cancelled: bool,
+    raster_ms: f64,
+    px: [u32; 2],
+    data: Vec<u8>,
+    /// The worker thread's identity, recorded by the worker itself.
+    thread: String,
+}
+
+/// PLT-012: the messages the canvas worker accepts.
+enum RasterMessage {
+    /// Rasterise this request.
+    Request(Box<RasterRequest>),
+    /// Stop the worker; `Drop for Plot` sends it and joins.
+    Shutdown,
+}
+
+/// PLT-012: the long-lived rasterisation worker.
+///
+/// One thread is started lazily by the first request and lives until the pane is dropped. The
+/// generation counter is the cancellation protocol: the UI increments it for every request and
+/// the worker compares before and after `resvg::render`, so a request that a zoom or a document
+/// switch superseded is never uploaded. The completion channel is unbounded, which keeps the
+/// worker from ever blocking on a UI thread that is painting.
+struct RasterWorker {
+    tx: mpsc::Sender<RasterMessage>,
+    rx: mpsc::Receiver<RasterDone>,
+    generation: Arc<AtomicU64>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RasterWorker {
+    /// Starts the one canvas raster thread.
+    fn spawn() -> RasterWorker {
+        let (request_tx, request_rx) = mpsc::channel::<RasterMessage>();
+        let (done_tx, done_rx) = mpsc::channel::<RasterDone>();
+        let generation = Arc::new(AtomicU64::new(0));
+        let worker_generation = Arc::clone(&generation);
+        let handle = std::thread::Builder::new()
+            .name("lovelace-plot-raster".to_string())
+            .spawn(move || {
+                let thread = format!("{:?}", std::thread::current().id());
+                while let Ok(message) = request_rx.recv() {
+                    match message {
+                        RasterMessage::Shutdown => break,
+                        RasterMessage::Request(request) => {
+                            let RasterRequest {
+                                generation: request_generation,
+                                tree,
+                                svg_w,
+                                svg_h,
+                                scale,
+                                max_side,
+                            } = *request;
+                            // Cancellation before rendering: the request was already superseded
+                            // while it waited in the queue, so the expensive call never runs.
+                            if worker_generation.load(Ordering::Acquire) != request_generation {
+                                let _ = done_tx.send(RasterDone {
+                                    generation: request_generation,
+                                    scale,
+                                    cancelled: true,
+                                    raster_ms: 0.0,
+                                    px: [0, 0],
+                                    data: Vec::new(),
+                                    thread: thread.clone(),
+                                });
+                                continue;
+                            }
+                            let Some((pixmap, raster_ms)) =
+                                render_to_pixmap(&tree, svg_w, svg_h, scale, max_side)
+                            else {
+                                let _ = done_tx.send(RasterDone {
+                                    generation: request_generation,
+                                    scale,
+                                    cancelled: true,
+                                    raster_ms: 0.0,
+                                    px: [0, 0],
+                                    data: Vec::new(),
+                                    thread: thread.clone(),
+                                });
+                                continue;
+                            };
+                            // Cancellation after rendering: the user zoomed or switched document
+                            // while this raster was in flight. The pixels are dropped here and the
+                            // UI counts one cancelled raster.
+                            let cancelled =
+                                worker_generation.load(Ordering::Acquire) != request_generation;
+                            let _ = done_tx.send(RasterDone {
+                                generation: request_generation,
+                                scale,
+                                cancelled,
+                                raster_ms,
+                                px: [pixmap.width(), pixmap.height()],
+                                data: if cancelled {
+                                    Vec::new()
+                                } else {
+                                    pixmap.data().to_vec()
+                                },
+                                thread: thread.clone(),
+                            });
+                        }
+                    }
+                }
+            })
+            .expect("the canvas raster worker thread");
+        RasterWorker {
+            tx: request_tx,
+            rx: done_rx,
+            generation,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for RasterWorker {
+    fn drop(&mut self) {
+        let _ = self.tx.send(RasterMessage::Shutdown);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 /// The plot pane's state: current SVG tree, texture, view, export source and last raster timings.
 pub struct Plot {
     options: usvg::Options<'static>,
@@ -378,6 +553,31 @@ pub struct Plot {
     pub last_screen: Rect,
     /// Pointer position on the last pass.
     pub last_pointer: Option<Pos2>,
+    /// Last rasterisation request handed to the canvas worker, for a test or a report.
+    pub pending_scale: Option<f32>,
+    /// PLT-012: number of rasterisation requests the pane queued.
+    pub raster_requests: u64,
+    /// PLT-012: number of queued or finished rasters the generation check cancelled.
+    pub raster_cancelled: u64,
+    /// PLT-012: frames painted while the last raster was in flight on the worker.
+    ///
+    /// This is the product's own responsiveness observation: the pane counts every pass it
+    /// completed between queueing a raster and collecting it, and publishes the count in the
+    /// raster diagnostics line. A synchronous raster would leave the count at zero.
+    pub frames_during_raster: u64,
+    /// Frames painted since the current request was queued.
+    pending_frames: u64,
+    /// PLT-012: the worker thread that produced the current texture, as `ThreadId(...)`.
+    pub raster_thread: Option<String>,
+    /// PLT-012: the thread that paints the pane, recorded when the pane was created.
+    #[allow(dead_code)] // read by the PLT-012 evidence test, not by the paint path
+    pub ui_thread: String,
+    /// PLT-012: how many times the SVG source was parsed (zoom must never re-parse).
+    pub parse_count: usize,
+    /// PLT-005: the document and run the displayed chart belongs to.
+    pub provenance: Option<PlotProvenance>,
+    /// PLT-012: the canvas raster worker, started lazily by the first request.
+    worker: Option<RasterWorker>,
     /// VIS-007: the engine SVG's polyline series, in document order.
     pub series: Vec<PlotSeries>,
 }
@@ -424,13 +624,23 @@ impl Plot {
             canvas: Rect::NOTHING,
             last_screen: Rect::NOTHING,
             last_pointer: None,
+            pending_scale: None,
+            raster_requests: 0,
+            raster_cancelled: 0,
+            frames_during_raster: 0,
+            pending_frames: 0,
+            raster_thread: None,
+            ui_thread: format!("{:?}", std::thread::current().id()),
+            parse_count: 0,
+            provenance: None,
+            worker: None,
             series: Vec::new(),
         }
     }
 
-    /// True when no plot has ever been loaded, i.e. the pane should show its empty state.
+    /// True when the pane has nothing to paint: no capture and no error to show.
     pub fn is_empty(&self) -> bool {
-        self.svg_source.is_empty()
+        self.svg_source.is_empty() && self.error.is_none()
     }
 
     /// The document's size, in SVG points.
@@ -477,6 +687,7 @@ impl Plot {
 
     /// Returns the pane to its empty state.
     pub fn clear(&mut self) {
+        self.cancel_pending();
         self.tree = None;
         self.texture = None;
         self.error = None;
@@ -487,15 +698,55 @@ impl Plot {
         self.fit_scale = 1.0;
         self.last_raster_ms = 0.0;
         self.last_upload_ms = 0.0;
+        self.pending_scale = None;
+        self.pending_frames = 0;
+        self.provenance = None;
+        self.title = None;
         self.series.clear();
+    }
+
+    /// PLT-012: cancels every queued or in-flight raster.
+    ///
+    /// The generation is advanced past the newest request, so the worker drops what it has: a
+    /// request still in its queue is skipped before `resvg` runs and one already rendering is
+    /// discarded when it finishes. `pending_scale` is cleared so the next pass can request again.
+    pub fn cancel_pending(&mut self) {
+        if let Some(worker) = &self.worker {
+            worker.generation.fetch_add(1, Ordering::SeqCst);
+        }
+        self.pending_scale = None;
+        self.pending_frames = 0;
     }
 
     /// Loads an SVG document (the engine's `PlotCapture.svg`). Returns false when resvg rejects
     /// it; the parse error is kept and rendered inline.
+    ///
+    /// PLT-008: a capture larger than [`MAX_SVG_BYTES`] is refused before `usvg` parses it. The
+    /// refusal keeps the pane in its error state (never the empty state, which would hide the
+    /// reason) and does not retain the oversized bytes a second time.
     pub fn set_svg(&mut self, source: &str) -> bool {
+        if source.len() > MAX_SVG_BYTES {
+            self.cancel_pending();
+            self.tree = None;
+            self.texture = None;
+            self.raster_scale = 0.0;
+            self.raster_px = [0, 0];
+            self.svg_source.clear();
+            self.error = Some(format!(
+                "SVG capture is {} bytes; the pane accepts at most {} bytes. The chart was not parsed, so nothing was drawn.",
+                source.len(),
+                MAX_SVG_BYTES
+            ));
+            self.view = PlotView::IDENTITY;
+            self.pending_scale = None;
+            self.pending_frames = 0;
+            self.series.clear();
+            return false;
+        }
         let started = Instant::now();
         match usvg::Tree::from_str(source, &self.options) {
             Ok(tree) => {
+                self.cancel_pending();
                 self.svg_w = tree.size().width();
                 self.svg_h = tree.size().height();
                 self.tree = Some(tree);
@@ -505,10 +756,12 @@ impl Plot {
                 self.svg_source = source.to_string();
                 self.view = PlotView::IDENTITY;
                 self.series = parse_series(source);
+                self.parse_count += 1;
                 self.parse_ms = started.elapsed().as_secs_f64() * 1000.0;
                 true
             }
             Err(error) => {
+                self.cancel_pending();
                 self.tree = None;
                 self.texture = None;
                 self.raster_scale = 0.0;
@@ -516,6 +769,7 @@ impl Plot {
                 self.error = Some(format!("{error}"));
                 self.view = PlotView::IDENTITY;
                 self.series = parse_series(source);
+                self.parse_count += 1;
                 self.parse_ms = started.elapsed().as_secs_f64() * 1000.0;
                 false
             }
@@ -565,20 +819,136 @@ impl Plot {
         self.view.percent(self.fit_scale.max(1e-6))
     }
 
-    /// Re-rasterises when the current texture is too coarse for the requested scale.
+    /// Makes sure a texture at least as sharp as `desired_scale` is on its way, without blocking.
+    ///
+    /// PLT-012: this is the only rasterisation entry point the pane's paint uses. It queues the
+    /// request on the canvas worker and returns at once, so the pass that a zoom or a new capture
+    /// triggers does no `resvg` work. While a request is outstanding the pane keeps painting the
+    /// previous texture (the cached bitmap) and asks egui for another pass, which is what makes
+    /// the result appear without a blocking wait on the UI thread.
     pub fn ensure(&mut self, ctx: &egui::Context, desired_scale: f32) {
         if self.tree.is_none() {
             return;
         }
+        self.poll_worker(ctx);
         let desired = desired_scale.clamp(0.25, 8.0);
-        let stale =
-            self.texture.is_none() || (desired / self.raster_scale.max(0.01) - 1.0).abs() > 0.12;
+        let max_side = ctx.input(|input| input.max_texture_side).max(512) as f32;
+        // The scale the renderer can actually produce for this document. Asking for a texture
+        // larger than the side cap would leave every frame "stale" against an unreachable
+        // target and re-rasterise the whole plot forever, so the request and the staleness test
+        // both use the achievable scale.
+        let achievable = self.achievable_scale(desired, max_side);
+        let stale = self.texture.is_none()
+            || (achievable / self.raster_scale.max(0.01) - 1.0).abs() > 0.12;
         if stale {
-            self.rasterize(ctx, desired);
+            let already_queued = self
+                .pending_scale
+                .map(|pending| (achievable / pending.max(0.01) - 1.0).abs() <= 0.02)
+                .unwrap_or(false);
+            if !already_queued {
+                self.request_raster(ctx, achievable, max_side);
+            }
+        }
+        if self.pending_scale.is_some() {
+            // The worker cannot wake egui directly without another shared handle; a short repaint
+            // timer is enough for the pane to collect the finished raster on the next pass.
+            ctx.request_repaint_after(Duration::from_millis(4));
         }
     }
 
-    /// Rasterises the current tree at `scale` and uploads it as a texture.
+    /// The largest scale the renderer can produce for this document under the texture side cap.
+    ///
+    /// `render_to_pixmap` clamps the requested scale to `MAX_SIDE` on the longer axis; this is the
+    /// same computation, so the pane can compare a finished texture with the scale it can really
+    /// reach instead of with a request that will always be shortened.
+    pub fn achievable_scale(&self, desired: f32, max_side: f32) -> f32 {
+        let scale = desired.clamp(0.25, 8.0);
+        let cap = max_side.clamp(64.0, MAX_SIDE);
+        let width = (self.svg_w.max(1.0) * scale).round().max(1.0);
+        let height = (self.svg_h.max(1.0) * scale).round().max(1.0);
+        let longest = width.max(height);
+        if longest > cap {
+            scale * cap / longest
+        } else {
+            scale
+        }
+    }
+
+    /// PLT-012: queues one rasterisation on the canvas worker.
+    fn request_raster(&mut self, _ctx: &egui::Context, scale: f32, max_side: f32) {
+        let Some(tree) = self.tree.clone() else {
+            return;
+        };
+        let worker = self
+            .worker
+            .get_or_insert_with(RasterWorker::spawn);
+        let generation = worker.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let request = RasterRequest {
+            generation,
+            tree,
+            svg_w: self.svg_w,
+            svg_h: self.svg_h,
+            scale,
+            max_side,
+        };
+        if worker
+            .tx
+            .send(RasterMessage::Request(Box::new(request)))
+            .is_err()
+        {
+            self.error = Some("the canvas raster worker stopped".to_string());
+            return;
+        }
+        self.pending_scale = Some(scale);
+        self.pending_frames = 0;
+        self.raster_requests += 1;
+    }
+
+    /// PLT-012: collects every finished raster, uploading the current one and dropping stale ones.
+    ///
+    /// A result whose generation is no longer current is counted as cancelled and never uploaded,
+    /// which is the observable half of the worker's cancellation check.
+    fn poll_worker(&mut self, ctx: &egui::Context) {
+        let Some(worker) = self.worker.as_ref() else {
+            return;
+        };
+        let current = worker.generation.load(Ordering::SeqCst);
+        let mut done = Vec::new();
+        while let Ok(result) = worker.rx.try_recv() {
+            done.push(result);
+        }
+        for result in done {
+            if result.cancelled || result.generation != current {
+                self.raster_cancelled += 1;
+                if self.pending_scale == Some(result.scale) {
+                    self.pending_scale = None;
+                }
+                continue;
+            }
+            if self.pending_scale == Some(result.scale) {
+                self.pending_scale = None;
+            }
+            self.frames_during_raster = self.pending_frames;
+            self.pending_frames = 0;
+            let started = Instant::now();
+            let image = egui::ColorImage::from_rgba_premultiplied(
+                [result.px[0] as usize, result.px[1] as usize],
+                &result.data,
+            );
+            self.texture = Some(ctx.load_texture("svg_plot", image, TextureOptions::LINEAR));
+            self.last_upload_ms = started.elapsed().as_secs_f64() * 1000.0;
+            self.last_raster_ms = result.raster_ms;
+            self.raster_px = result.px;
+            self.raster_scale = (result.px[0] as f32 / self.svg_w.max(1.0)).max(0.01);
+            self.raster_thread = Some(result.thread);
+        }
+    }
+
+    /// Rasterises the current tree at `scale` synchronously and uploads it as a texture.
+    ///
+    /// The pane's paint path never calls this; it exists for the headless probes and tests that
+    /// need one deterministic raster without driving the worker.
+    #[allow(dead_code)] // the PLT-012 tests use it as the synchronous control path
     pub fn rasterize(&mut self, ctx: &egui::Context, scale: f32) -> bool {
         let Some(tree) = &self.tree else {
             return false;
@@ -600,6 +970,7 @@ impl Plot {
         self.last_raster_ms = raster_ms;
         self.raster_px = [pixmap.width(), pixmap.height()];
         self.raster_scale = (pixmap.width() as f32 / self.svg_w.max(1.0)).max(0.01);
+        self.raster_thread = Some(format!("{:?}", std::thread::current().id()));
         true
     }
 
@@ -711,12 +1082,14 @@ impl Plot {
                 theme::texture_tint(),
             );
         } else {
+            // PLT-012: the first raster is on the worker. The pane stays interactive and paints
+            // its own frame while it waits instead of blocking this pass on resvg.
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "raster unavailable",
+                "rendering plot…",
                 super::type_scale::Role::Body.font(),
-                theme::error(),
+                theme::dim(),
             );
         }
         painter.rect_stroke(
@@ -738,8 +1111,15 @@ impl Plot {
                 self.series.len()
             )
         };
+        // PLT-005: the provenance is painted with the plot and named in the accessible label, so
+        // a chart can never announce itself without the document and run that produced it.
+        let provenance = self
+            .provenance
+            .as_ref()
+            .map(|provenance| format!(", {}", provenance.label()))
+            .unwrap_or_default();
         let label = format!(
-            "SVG plot canvas, {:.0} by {:.0} points, zoom {:.2}, {:.0}%{series}",
+            "SVG plot canvas, {:.0} by {:.0} points, zoom {:.2}, {:.0}%{series}{provenance}",
             self.svg_w,
             self.svg_h,
             self.view.zoom,
@@ -752,14 +1132,24 @@ impl Plot {
         if response.ctx.has_accesskit_node(response.id) {
             let title = self.title.clone().unwrap_or_default();
             let zoom = self.view.percent(fit);
+            let provenance = self
+                .provenance
+                .as_ref()
+                .map(|provenance| provenance.label())
+                .unwrap_or_else(|| "no document".to_string());
             response.ctx.accesskit_node_builder(response.id, |node| {
                 node.set_value(title.clone());
-                node.set_description(format!("Engine plot · zoom {zoom:.0}%"));
+                node.set_description(format!("Engine plot · {provenance} · zoom {zoom:.0}%"));
             });
         }
 
         self.last_screen = screen;
         self.last_pointer = pointer;
+        // PLT-012: this pass completed while the worker was still rasterising, which is the
+        // observation the diagnostics line publishes as "frames painted meanwhile".
+        if self.pending_scale.is_some() {
+            self.pending_frames += 1;
+        }
         PlotMetrics {
             screen,
             zoom: self.view.zoom,
@@ -830,6 +1220,16 @@ impl Plot {
             .save_png(path)
             .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
         Ok([pixmap.width(), pixmap.height()])
+    }
+}
+
+/// PLT-012: the canvas worker is owned by the pane, so dropping the pane stops and joins it.
+///
+/// This is the join half of ARC-008 for the second (non-execution) worker: no raster thread
+/// outlives the `Plot` that started it, and there is no detached or daemon-like thread.
+impl Drop for Plot {
+    fn drop(&mut self) {
+        self.worker = None;
     }
 }
 
@@ -1615,5 +2015,447 @@ mod tests {
         assert_eq!(dimensions, [1600, 1200]);
         assert!(tiny_skia::Pixmap::load_png(directory.join("exported.png")).is_ok());
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // PLT-012: the canvas worker
+    // -----------------------------------------------------------------------------------------
+
+    /// Runs one paint pass of the pane. The output is dropped so the headless pass needs no
+    /// painter to upload textures to.
+    fn pass(ctx: &egui::Context, plot: &mut Plot, pane: Rect) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(
+                pos2(0.0, 0.0),
+                pane.size() + vec2(64.0, 64.0),
+            )),
+            // A headless context reports egui's small default; the shipped GPU backend reports
+            // thousands. The canvas caps at the pane's own `MAX_SIDE`, so this only stops the
+            // default from shrinking the zoom rasters the tests ask for.
+            max_texture_side: Some(16_384),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            plot.ui(ui, pane);
+        });
+        output.textures_delta.clear();
+    }
+
+    /// Paints passes until the canvas worker's texture arrives, failing after `limit` passes.
+    fn wait_for_texture(ctx: &egui::Context, plot: &mut Plot, pane: Rect, limit: usize) {
+        for _ in 0..limit {
+            if plot.texture.is_some() {
+                return;
+            }
+            pass(ctx, plot, pane);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!(
+            "the canvas worker produced no texture (requests={} cancelled={} pending={:?} error={:?})",
+            plot.raster_requests, plot.raster_cancelled, plot.pending_scale, plot.error
+        );
+    }
+
+    /// Paints passes until a texture at `expected` texels per SVG point has arrived.
+    fn wait_for_scale(
+        ctx: &egui::Context,
+        plot: &mut Plot,
+        pane: Rect,
+        expected: f32,
+        limit: usize,
+    ) {
+        for _ in 0..limit {
+            if plot.texture.is_some()
+                && plot.pending_scale.is_none()
+                && (plot.raster_scale - expected).abs() <= expected * 0.13
+            {
+                return;
+            }
+            pass(ctx, plot, pane);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        panic!(
+            "no texture at {expected:.3}x (raster {:.3}x, requests={} cancelled={} pending={:?})",
+            plot.raster_scale, plot.raster_requests, plot.raster_cancelled, plot.pending_scale
+        );
+    }
+
+    /// A deliberately heavy engine-style document: `lines` polylines of `points` points each.
+    fn heavy_svg(lines: usize, points: usize) -> String {
+        let mut svg = String::from(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\">\
+             <rect width=\"800\" height=\"600\" fill=\"#ffffff\"/>",
+        );
+        for line in 0..lines {
+            svg.push_str("<polyline fill=\"none\" stroke=\"#1f4e79\" stroke-width=\"1\" points=\"");
+            for point in 0..points {
+                let x = (point * 797 / points.max(1)) as f32;
+                let y = 300.0
+                    + 200.0
+                        * ((point as f32 * 0.13) + (line as f32 * 0.37))
+                            .sin();
+                svg.push_str(&format!("{x:.1},{y:.1} "));
+            }
+            svg.push_str("\"/>");
+        }
+        svg.push_str("</svg>");
+        svg
+    }
+
+    /// PLT-012: the pass that triggers a raster queues it and returns; the pixels are produced on
+    /// a different thread, the parsed vector scene is reused across zoom levels, and the texture
+    /// that arrives is the one the current view asked for.
+    #[test]
+    fn plt_012_rasterisation_runs_on_the_canvas_worker_and_the_ui_pass_never_blocks() {
+        let ctx = egui::Context::default();
+        let pane = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        // Warm the context's font and layout caches so the measured pass is the paint path, not
+        // the one-time font setup.
+        pass(&ctx, &mut Plot::new(), pane);
+        let mut plot = Plot::new();
+        let svg = heavy_svg(300, 12);
+        assert!(plot.set_svg(&svg), "heavy SVG rejected: {:?}", plot.error);
+        let ui_thread = plot.ui_thread.clone();
+
+        // The pass that sees a plot with no texture must queue, not rasterise.
+        pass(&ctx, &mut plot, pane);
+        assert_eq!(plot.raster_requests, 1, "the pass queued no raster request");
+        assert_eq!(
+            plot.last_raster_ms, 0.0,
+            "the UI pass rasterised synchronously"
+        );
+        assert!(
+            plot.texture.is_none(),
+            "the texture arrived inside the queueing pass"
+        );
+
+        // The UI keeps painting while the worker rasterises: count the passes that complete
+        // before the texture arrives, and the total time they took.
+        let started = Instant::now();
+        let mut passes = 0usize;
+        while plot.texture.is_none() && passes < 20_000 {
+            pass(&ctx, &mut plot, pane);
+            passes += 1;
+        }
+        let ui_ms = started.elapsed().as_secs_f64() * 1000.0;
+        assert!(plot.texture.is_some(), "the canvas worker produced no texture");
+        assert!(
+            passes >= 5,
+            "the UI painted only {passes} pass(es) while one raster was in flight"
+        );
+        assert!(
+            plot.raster_thread.is_some(),
+            "the worker did not record its thread"
+        );
+        assert_ne!(
+            plot.raster_thread.as_deref(),
+            Some(ui_thread.as_str()),
+            "the raster ran on the UI thread ({}), not on the canvas worker",
+            plot.raster_thread.as_deref().unwrap_or("-")
+        );
+        assert!(
+            plot.last_raster_ms > 0.0,
+            "the worker reported no raster time"
+        );
+        println!(
+            "PLT-012 observed: {passes} UI passes ({ui_ms:.1} ms total) completed during one {:.1} ms worker raster on {} (UI is {}), texture {}x{}, pane counted {} frames meanwhile",
+            plot.last_raster_ms,
+            plot.raster_thread.as_deref().unwrap_or("-"),
+            plot.ui_thread,
+            plot.raster_px[0],
+            plot.raster_px[1],
+            plot.frames_during_raster
+        );
+        assert!(
+            plot.frames_during_raster >= 5,
+            "the pane counted only {} passes while the raster was in flight",
+            plot.frames_during_raster
+        );
+
+        // The vector scene is cached: zooming in and out re-rasterises but never re-parses.
+        let parses = plot.parse_count;
+        let requests = plot.raster_requests;
+        let fit = plot.fit_scale;
+        plot.view.zoom = 2.0;
+        wait_for_scale(&ctx, &mut plot, pane, 2.0 * fit, 8_000);
+        plot.view.zoom = 1.0;
+        wait_for_scale(&ctx, &mut plot, pane, fit, 8_000);
+        assert_eq!(
+            plot.parse_count, parses,
+            "a zoom re-parsed the SVG instead of reusing the cached vector scene"
+        );
+        assert!(
+            plot.raster_requests >= requests + 2,
+            "the zoom levels shared one raster: {} -> {}",
+            requests,
+            plot.raster_requests
+        );
+    }
+
+    /// PLT-012: a raster superseded before it finishes is cancelled and never uploaded.
+    #[test]
+    fn plt_012_a_superseded_raster_is_cancelled_and_never_uploaded() {
+        let ctx = egui::Context::default();
+        let pane = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        let mut plot = Plot::new();
+        // Heavy enough that the first raster cannot finish before the second request is queued.
+        assert!(plot.set_svg(&heavy_svg(300, 12)));
+        pass(&ctx, &mut plot, pane);
+        assert_eq!(plot.raster_requests, 1);
+        // A zoom inside the same frame's next pass: the desired scale changes, so a new
+        // generation supersedes the one still on the worker.
+        plot.view.zoom = 1.5;
+        pass(&ctx, &mut plot, pane);
+        assert_eq!(plot.raster_requests, 2, "the zoom did not queue a new raster");
+
+        let started = Instant::now();
+        while plot.texture.is_none() && started.elapsed() < Duration::from_secs(60) {
+            pass(&ctx, &mut plot, pane);
+        }
+        assert!(plot.texture.is_some(), "the canvas worker produced no texture");
+        assert!(
+            plot.raster_cancelled >= 1,
+            "the superseded raster was uploaded instead of cancelled (requests={} cancelled={})",
+            plot.raster_requests,
+            plot.raster_cancelled
+        );
+        // The texture is the current view's, not the cancelled one's.
+        let fit = plot.fit_scale;
+        let expected = 1.0 * plot.view.scale(fit);
+        assert!(
+            (plot.raster_scale - expected).abs() <= expected * 0.13,
+            "the uploaded texture is at {:.3}x, the current view needs {expected:.3}x",
+            plot.raster_scale
+        );
+        println!(
+            "PLT-012 cancellation observed: requests={} cancelled={} texture {}x{} at {:.3}x on {}",
+            plot.raster_requests,
+            plot.raster_cancelled,
+            plot.raster_px[0],
+            plot.raster_px[1],
+            plot.raster_scale,
+            plot.raster_thread.as_deref().unwrap_or("-")
+        );
+    }
+
+    /// PLT-012: when the view asks for more than the texture side cap can hold, the pane must
+    /// stop asking after the largest achievable raster instead of re-rasterising every frame.
+    #[test]
+    fn plt_012_a_capped_zoom_settles_instead_of_re_rasterising_every_frame() {
+        let ctx = egui::Context::default();
+        let pane = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0));
+        pass(&ctx, &mut Plot::new(), pane);
+        let mut plot = Plot::new();
+        assert!(plot.set_svg(&heavy_svg(60, 12)));
+        plot.view.zoom = 64.0;
+        let fit = PlotView::fit_scale(pane, plot.svg_size());
+        let achievable = plot.achievable_scale(64.0 * fit, MAX_SIDE);
+        wait_for_scale(&ctx, &mut plot, pane, achievable, 8_000);
+        let requests = plot.raster_requests;
+        for _ in 0..12 {
+            pass(&ctx, &mut plot, pane);
+        }
+        assert_eq!(
+            plot.raster_requests, requests,
+            "the capped view queued {} more rasters after reaching {achievable:.2}x",
+            plot.raster_requests - requests
+        );
+        assert_eq!(
+            plot.raster_px[0].max(plot.raster_px[1]),
+            MAX_SIDE as u32,
+            "the capped raster is not at the side cap"
+        );    }
+
+    /// PLT-012: dropping the pane joins the canvas worker (the ARC-008 half of the row).
+    #[test]
+    fn plt_012_dropping_the_pane_joins_the_canvas_worker() {
+        let ctx = egui::Context::default();
+        let pane = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut plot = Plot::new();
+        assert!(plot.set_svg(&heavy_svg(60, 20)));
+        pass(&ctx, &mut plot, pane);
+        assert!(plot.worker.is_some(), "the worker was never started");
+        // Dropping must not hang and must not panic; the join happens inside `Drop for Plot`.
+        drop(plot);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // PLT-003: HiDPI
+    // -----------------------------------------------------------------------------------------
+
+    /// The physical extent of a text label's ink, in a pixmap rendered at `scale`.
+    fn ink_bounds(pixmap: &tiny_skia::Pixmap, region: (u32, u32, u32, u32)) -> (f32, f32, f32, f32) {
+        let (x0, y0, x1, y1) = region;
+        let mut bounds = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for y in y0..y1.min(pixmap.height()) {
+            for x in x0..x1.min(pixmap.width()) {
+                let (r, g, b) = rgb(pixmap, x, y);
+                if r < 128 && g < 128 && b < 128 {
+                    bounds.0 = bounds.0.min(x as f32);
+                    bounds.1 = bounds.1.min(y as f32);
+                    bounds.2 = bounds.2.max(x as f32);
+                    bounds.3 = bounds.3.max(y as f32);
+                }
+            }
+        }
+        bounds
+    }
+
+    /// PLT-003: at 100, 150 and 200% the canvas raster is rendered at the physical pixel density,
+    /// so strokes and text are native-resolution rather than an upscaled fit bitmap, the fitted
+    /// scene stays inside the pane (no clipping), and a label's ink lands at the same scene
+    /// position at every scale.
+    #[test]
+    fn plt_003_hidpi_raster_density_and_label_position_at_100_150_and_200_percent() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="#ffffff"/>
+  <path d="M60 540 L740 540" stroke="#000000" stroke-width="2"/>
+  <path d="M60 540 L60 40" stroke="#000000" stroke-width="2"/>
+  <text x="330" y="580" font-family="sans-serif" font-size="18" fill="#000000">x axis</text>
+  <text x="70" y="60" font-family="sans-serif" font-size="18" fill="#000000">y = sqrt(2) · π ≤ 5</text>
+  <polyline points="60,500 200,420 340,460 480,300 620,240 740,120" fill="none" stroke="#1f4e79" stroke-width="2"/>
+</svg>"##;
+        let physical = vec2(1200.0, 800.0);
+        for percent in [100u32, 150, 200] {
+            let ctx = egui::Context::default();
+            // egui applies a new zoom factor at the start of the following pass.
+            ctx.set_zoom_factor(percent as f32 / 100.0);
+            pass(&ctx, &mut Plot::new(), Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0)));
+            let ppp = ctx.pixels_per_point();
+            assert!(
+                (ppp - percent as f32 / 100.0).abs() < 1e-4,
+                "{percent}%: pixels_per_point is {ppp}"
+            );
+            // The window's physical client is fixed; the logical pane shrinks as the scale grows.
+            let pane = Rect::from_min_size(pos2(0.0, 0.0), physical / ppp);
+            let mut plot = Plot::new();
+            assert!(plot.set_svg(svg), "{percent}%: SVG rejected");
+            wait_for_texture(&ctx, &mut plot, pane, 8_000);
+
+            let fit = plot.fit_scale;
+            let expected = ppp * fit;
+            assert!(
+                (plot.raster_scale - expected).abs() <= expected * 0.13,
+                "{percent}%: the raster is at {:.3} texels per SVG point, the screen needs {expected:.3}",
+                plot.raster_scale
+            );
+            // The texture carries at least the physical pixels the fitted scene covers, which is
+            // what "sharp" means here: one texel per physical pixel, never a stretched bitmap.
+            let scene_texels = plot.svg_size() * plot.raster_scale;
+            let scene_physical = plot.svg_size() * fit * ppp;
+            assert!(
+                scene_texels.x + 2.0 >= scene_physical.x
+                    && scene_texels.y + 2.0 >= scene_physical.y,
+                "{percent}%: {scene_texels:?} texels for {scene_physical:?} physical pixels"
+            );
+            // No clipping: at Fit the whole document is inside the canvas rectangle.
+            assert!(
+                plot.canvas.contains_rect(plot.last_screen),
+                "{percent}%: the fitted scene {:?} leaves the canvas {:?}",
+                plot.last_screen,
+                plot.canvas
+            );
+            assert!(
+                plot.last_screen.width() > 0.0 && plot.last_screen.height() > 0.0,
+                "{percent}%: the scene has no extent"
+            );
+            println!(
+                "PLT-003 observed {percent}%: ppp={ppp:.2} pane {:.0}x{:.0} pt, raster {}x{} at {:.3} texels/pt (screen needs {expected:.3}), scene {:.0}x{:.0} pt inside {:.0}x{:.0} pt canvas",
+                pane.width(),
+                pane.height(),
+                plot.raster_px[0],
+                plot.raster_px[1],
+                plot.raster_scale,
+                plot.last_screen.width(),
+                plot.last_screen.height(),
+                plot.canvas.width(),
+                plot.canvas.height()
+            );
+        }
+
+        // Label geometry: the same label's ink box scales with the raster scale, so it is
+        // positioned on the same scene coordinates at every density.
+        let mut plot = Plot::new();
+        assert!(plot.set_svg(svg));
+        let one = plot.raster_pixmap(1.0, MAX_SIDE).expect("1x").0;
+        let two = plot.raster_pixmap(2.0, MAX_SIDE).expect("2x").0;
+        // The "x axis" label sits around x=330..420, y=560..590 in SVG points.
+        let one_ink = ink_bounds(&one, (300, 545, 460, 600));
+        let two_ink = ink_bounds(&two, (600, 1090, 920, 1200));
+        assert!(
+            one_ink.0 < one_ink.2 && one_ink.1 < one_ink.3,
+            "the 1x label painted no ink: {one_ink:?}"
+        );
+        assert!(
+            two_ink.0 < two_ink.2 && two_ink.1 < two_ink.3,
+            "the 2x label painted no ink: {two_ink:?}"
+        );
+        for (one_edge, two_edge, axis) in [
+            (one_ink.0, two_ink.0, "left"),
+            (one_ink.1, two_ink.1, "top"),
+            (one_ink.2, two_ink.2, "right"),
+            (one_ink.3, two_ink.3, "bottom"),
+        ] {
+            let expected = one_edge * 2.0;
+            assert!(
+                (two_edge - expected).abs() <= 2.0,
+                "the label's {axis} edge is at {two_edge} at 2x, expected {expected} from 1x ({one_edge})"
+            );
+        }
+        // The mathematical text is ink at both densities, not tofu or a blank label.
+        let one_label = ink_bounds(&one, (60, 40, 400, 75));
+        let two_label = ink_bounds(&two, (120, 80, 800, 150));
+        assert!(one_label.0 < one_label.2, "1x math label painted nothing");
+        assert!(two_label.0 < two_label.2, "2x math label painted nothing");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // PLT-008: oversized input
+    // -----------------------------------------------------------------------------------------
+
+    /// PLT-008: a capture above the pane's cap is refused before parsing, with an error that
+    /// names both sizes, and the pane stays in its error state rather than the empty state.
+    #[test]
+    fn plt_008_an_oversized_capture_is_refused_before_parsing_with_a_bounded_error() {
+        let mut plot = Plot::new();
+        let oversized = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\"><desc>{}</desc></svg>",
+            "x".repeat(MAX_SVG_BYTES + 1)
+        );
+        assert!(oversized.len() > MAX_SVG_BYTES);
+        let started = Instant::now();
+        assert!(
+            !plot.set_svg(&oversized),
+            "an oversized capture was accepted"
+        );
+        let refusal_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let error = plot.error.clone().expect("the refusal sets an error");
+        assert!(
+            error.contains(&oversized.len().to_string())
+                && error.contains(&MAX_SVG_BYTES.to_string())
+                && error.contains("at most"),
+            "the error does not name both sizes: {error}"
+        );
+        assert!(plot.tree.is_none(), "the oversized document was parsed");
+        assert_eq!(plot.parse_count, 0, "usvg saw the oversized document");
+        assert!(
+            !plot.is_empty(),
+            "the refusal must paint the reason, not the empty state"
+        );
+        assert!(
+            refusal_ms < 100.0,
+            "the refusal took {refusal_ms:.1} ms for a length comparison"
+        );
+
+        // The inline error is what the pane paints: a headless pass draws it and stays alive.
+        let ctx = egui::Context::default();
+        let pane = Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0));
+        pass(&ctx, &mut plot, pane);
+
+        // And the pane recovers: a valid capture clears the refusal.
+        assert!(plot.set_svg(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"><rect width="100" height="80" fill="#ffffff"/></svg>"##
+        ));
+        assert!(plot.error.is_none(), "the valid capture kept the refusal");
     }
 }

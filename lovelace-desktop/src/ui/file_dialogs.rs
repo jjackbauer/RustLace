@@ -25,6 +25,15 @@ pub const SAVE_FILTERS: &[(&str, &str)] = &[
     ("All files (*.*)", "*.*"),
 ];
 
+/// The filter pairs the Save log dialog offers, in order (LOG-005 / LOG-006).
+pub const LOG_FILTERS: &[(&str, &str)] = &[
+    ("Log files (*.log;*.txt)", "*.log;*.txt"),
+    ("All files (*.*)", "*.*"),
+];
+
+/// The extension a saved log is written with.
+pub const LOG_EXTENSION: &str = "log";
+
 /// The two native dialogs the file lifecycle needs.
 pub trait FileDialogs {
     /// Shows the Open dialog and returns the chosen path, or `None` when the user cancels.
@@ -34,6 +43,12 @@ pub trait FileDialogs {
     /// user cancels. `suggested` is the file name the field starts with; `initial_dir` is the
     /// folder the dialog opens in (the document's own folder, when it has one).
     fn save_as(&mut self, suggested: &str, initial_dir: Option<&Path>) -> Option<PathBuf>;
+
+    /// LOG-005: shows the Save dialog for the Logs pane's export and returns the chosen path.
+    ///
+    /// It is a separate method because the filter and extension are the log's, not a script's:
+    /// asking a user to save a log as a `.lv` script would be a silent mislabel.
+    fn save_log(&mut self, suggested: &str, initial_dir: Option<&Path>) -> Option<PathBuf>;
 }
 
 /// The shipped dialogs: the Windows common file dialogs, owned by the workbench window.
@@ -51,6 +66,16 @@ impl FileDialogs for NativeFileDialogs {
             "Save Lovelace script",
             SAVE_FILTERS,
             DOCUMENT_EXTENSION,
+            initial_dir,
+        )
+    }
+
+    fn save_log(&mut self, suggested: &str, initial_dir: Option<&Path>) -> Option<PathBuf> {
+        crate::platform_dialogs::save_file_dialog(
+            suggested,
+            "Save log",
+            LOG_FILTERS,
+            LOG_EXTENSION,
             initial_dir,
         )
     }

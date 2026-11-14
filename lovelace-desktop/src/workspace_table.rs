@@ -16,6 +16,7 @@
 //! engine's order in both directions: a repeated sort is a permutation of exactly the same set.
 
 use crate::engine::{EngineFunction, EngineState, FunctionOrigin};
+use lovelace_json::Json;
 
 /// Longest text a cell paints; a longer value is cut with an ellipsis and its full text stays
 /// available to the caller for the hover tooltip.
@@ -117,6 +118,13 @@ pub struct VariableRow {
     pub kind: String,
     /// The untyped display rendering the engine produced.
     pub display: String,
+    /// WKS-006: the type-aware preview derived from the engine's structured projection.
+    pub preview: ValuePreview,
+    /// WKS-006: the engine's structured projection itself, for the detail view.
+    ///
+    /// Carried so the detail view can show the published structure (shape, fields, pretty and
+    /// canonical renderings, exactness) without asking the engine again or re-parsing the display.
+    pub structured: Option<Json>,
     /// The position in the committed capture; every sort breaks ties by this value.
     pub ordinal: usize,
 }
@@ -125,6 +133,272 @@ impl VariableRow {
     /// The display cell, cut for the pane and paired with the full text as its tooltip.
     pub fn display_cell(&self) -> String {
         cell_text(&self.display)
+    }
+
+    /// WKS-006: the preview cell, cut for the pane.
+    pub fn preview_cell(&self) -> String {
+        cell_text(&self.preview.text)
+    }
+}
+
+/// WKS-006: a readable, type-aware one-line preview of one variable value.
+///
+/// The preview is derived from the engine's structured projection, never by re-parsing the
+/// display text (the RES-001 rule): a 2-D array is published as rows and columns, a record as its
+/// type and first fields, a complex number as `re + im i`, and a symbolic value as its pretty
+/// rendering. Values the engine published no projection for keep the display text, labelled with
+/// the published kind, so a preview can never invent structure the engine did not publish.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValuePreview {
+    /// The type/shape summary (`2 x 2 matrix`, `record DivRemResult`, `symbolic`, `real`, ...).
+    pub type_label: String,
+    /// The one-line readable preview.
+    pub text: String,
+    /// True when [`Self::text`] was shortened; the full value stays in the row and the detail view.
+    pub shortened: bool,
+}
+
+/// Longest preview text: a table cell shows one short line, the detail view shows the full value.
+pub const MAX_PREVIEW_CHARS: usize = 64;
+
+/// The maximum number of elements/fields one preview names before it is shortened.
+const PREVIEW_ITEMS: usize = 6;
+
+impl ValuePreview {
+    /// Builds the preview for one published variable.
+    pub fn of(variable: &crate::engine::EngineVariable) -> ValuePreview {
+        let Some(structured) = variable.structured.as_ref() else {
+            return ValuePreview {
+                type_label: variable.kind.to_lowercase(),
+                text: cut_preview(&variable.display),
+                shortened: variable.display.chars().count() > MAX_PREVIEW_CHARS,
+            };
+        };
+        let kind = structured
+            .get("kind")
+            .and_then(|kind| kind.as_str())
+            .unwrap_or(variable.kind.as_str())
+            .to_string();
+        match kind.as_str() {
+            "Array" => preview_array(structured),
+            "Record" => preview_record(structured),
+            "Symbolic" => {
+                let pretty = text_field(structured, "pretty")
+                    .unwrap_or_else(|| variable.display.clone());
+                let shortened = pretty.chars().count() > MAX_PREVIEW_CHARS;
+                ValuePreview {
+                    type_label: "symbolic".to_string(),
+                    text: cut_preview(&pretty),
+                    shortened,
+                }
+            }
+            "Complex" => {
+                let re = text_field(structured, "re").unwrap_or_else(|| "0".to_string());
+                let im = text_field(structured, "im").unwrap_or_else(|| "0".to_string());
+                let text = complex_text(&re, &im);
+                ValuePreview {
+                    type_label: "complex".to_string(),
+                    shortened: text.chars().count() > MAX_PREVIEW_CHARS,
+                    text: cut_preview(&text),
+                }
+            }
+            "Null" => ValuePreview {
+                type_label: "null".to_string(),
+                text: "no value".to_string(),
+                shortened: false,
+            },
+            other => ValuePreview {
+                type_label: other.to_lowercase(),
+                text: cut_preview(&variable.display),
+                shortened: variable.display.chars().count() > MAX_PREVIEW_CHARS,
+            },
+        }
+    }
+}
+
+/// A 2-D array previews as rows (`[1, 2; 3, 4]`), a vector as a flat list, and a higher-rank array
+/// as its shape plus the first elements — never as one unreadable run of every cell.
+fn preview_array(structured: &Json) -> ValuePreview {
+    let type_name = text_field(structured, "type").unwrap_or_else(|| "Array".to_string());
+    let shape: Vec<usize> = structured
+        .get("shape")
+        .and_then(|shape| shape.as_arr())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    Json::Num(number) => number.parse().ok(),
+                    Json::Str(text) => text.parse().ok(),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let elements: Vec<String> = structured
+        .get("elements")
+        .and_then(|elements| elements.as_arr())
+        .map(|items| items.iter().map(scrub).collect())
+        .unwrap_or_default();
+    let mut shortened = false;
+    let (type_label, text) = if shape.len() == 2 && !elements.is_empty() {
+        let columns = shape[1].max(1);
+        let rows = elements.len() / columns;
+        let mut lines: Vec<String> = Vec::new();
+        for row in 0..rows.min(PREVIEW_ITEMS) {
+            let cells: Vec<String> = elements[row * columns..(row + 1) * columns]
+                .iter()
+                .map(|cell| cut_preview(cell))
+                .collect();
+            lines.push(format!("[{}]", cells.join(", ")));
+        }
+        if rows > PREVIEW_ITEMS {
+            shortened = true;
+            lines.push(format!("… {} more rows", rows - PREVIEW_ITEMS));
+        }
+        let body = lines.join("; ");
+        shortened |= body.chars().count() > MAX_PREVIEW_CHARS;
+        (
+            format!("{} x {} matrix", shape[0], shape[1]),
+            cut_preview(&body),
+        )
+    } else {
+        let shown: Vec<String> = elements
+            .iter()
+            .take(PREVIEW_ITEMS)
+            .map(|element| cut_preview(element))
+            .collect();
+        if elements.len() > PREVIEW_ITEMS {
+            shortened = true;
+        }
+        let mut body = format!("[{}]", shown.join(", "));
+        if elements.len() > PREVIEW_ITEMS {
+            body.push_str(&format!(" … {} more", elements.len() - PREVIEW_ITEMS));
+        }
+        shortened |= body.chars().count() > MAX_PREVIEW_CHARS;
+        let label = if shape.is_empty() {
+            type_name.to_lowercase()
+        } else {
+            format!(
+                "{} {}",
+                type_name.to_lowercase(),
+                shape
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<String>>()
+                    .join(" x ")
+            )
+        };
+        (label, cut_preview(&body))
+    };
+    ValuePreview {
+        type_label,
+        text,
+        shortened,
+    }
+}
+
+/// A record previews as its published type and first named fields.
+fn preview_record(structured: &Json) -> ValuePreview {
+    let type_name = text_field(structured, "type").unwrap_or_else(|| "Record".to_string());
+    let fields: Vec<(String, String)> = structured
+        .get("fields")
+        .and_then(|fields| fields.as_arr())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|field| {
+                    let name = text_field(field, "name")?;
+                    let value = field.get("value").map(scrub).unwrap_or_default();
+                    Some((name, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut shortened = false;
+    let shown: Vec<String> = fields
+        .iter()
+        .take(PREVIEW_ITEMS)
+        .map(|(name, value)| format!("{name}={}", cut_preview(value)))
+        .collect();
+    if fields.len() > PREVIEW_ITEMS {
+        shortened = true;
+    }
+    let mut body = format!("{} {{{}}}", type_name, shown.join(", "));
+    if fields.len() > PREVIEW_ITEMS {
+        body.push_str(&format!(" … {} more field(s)", fields.len() - PREVIEW_ITEMS));
+    }
+    if fields.is_empty() {
+        body = format!("{type_name} {{}}");
+    }
+    shortened |= body.chars().count() > MAX_PREVIEW_CHARS;
+    ValuePreview {
+        type_label: format!("record {type_name}"),
+        text: cut_preview(&body),
+        shortened,
+    }
+}
+
+/// `3 + 4i`, `-2 - 1i`, `4i` — the engine's published real and imaginary parts.
+fn complex_text(re: &str, im: &str) -> String {
+    let re_zero = re.trim() == "0";
+    let im_zero = im.trim() == "0";
+    if im_zero {
+        return re.to_string();
+    }
+    if re_zero {
+        return format!("{im}i");
+    }
+    if let Some(rest) = im.strip_prefix('-') {
+        format!("{re} - {rest}i")
+    } else {
+        format!("{re} + {im}i")
+    }
+}
+
+/// One projected node as short text: the projection's `value`, `pretty` or `kind`.
+fn scrub(json: &Json) -> String {
+    match json {
+        Json::Str(text) => text.clone(),
+        Json::Num(text) => text.clone(),
+        other => {
+            let kind = other
+                .get("kind")
+                .and_then(|kind| kind.as_str())
+                .unwrap_or("value");
+            match kind {
+                "Array" => {
+                    let count = other
+                        .get("elements")
+                        .and_then(|elements| elements.as_arr())
+                        .map(|items| items.len())
+                        .unwrap_or(0);
+                    format!("[{count} elements]")
+                }
+                "Record" => "record".to_string(),
+                "Null" => "null".to_string(),
+                _ => text_field(other, "value")
+                    .or_else(|| text_field(other, "pretty"))
+                    .unwrap_or_else(|| kind.to_string()),
+            }
+        }
+    }
+}
+
+/// Cuts a preview to [`MAX_PREVIEW_CHARS`], ending in an ellipsis when it was cut.
+fn cut_preview(text: &str) -> String {
+    if text.chars().count() <= MAX_PREVIEW_CHARS {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(MAX_PREVIEW_CHARS - 1).collect();
+    format!("{head}{ELLIPSIS}")
+}
+
+fn text_field(json: &Json, key: &str) -> Option<String> {
+    match json.get(key) {
+        Some(Json::Str(text)) => Some(text.clone()),
+        Some(Json::Num(text)) => Some(text.clone()),
+        Some(Json::Bool(flag)) => Some(flag.to_string()),
+        _ => None,
     }
 }
 
@@ -264,6 +538,8 @@ pub fn variable_rows(state: &EngineState) -> Vec<VariableRow> {
             name: variable.name.clone(),
             kind: variable.kind.clone(),
             display: variable.display.clone(),
+            preview: ValuePreview::of(variable),
+            structured: variable.structured.clone(),
             ordinal,
         })
         .collect()
@@ -689,6 +965,172 @@ mod tests {
         );
     }
 
+    /// WKS-006: numbers, matrices, complex, record and symbolic values each render a readable,
+    /// type-aware preview derived from the engine's projection — never by re-parsing the display.
+    #[test]
+    fn value_previews_name_the_type_and_read_the_published_structure() {
+        let json = |fields: Vec<(&str, Json)>| Json::obj(fields.into_iter().collect::<Vec<_>>());
+        let scalar = |kind: &str, value: &str| {
+            json(vec![
+                ("kind", Json::Str(kind.to_string())),
+                ("value", Json::Str(value.to_string())),
+            ])
+        };
+
+        // A number: the published kind and value, not the display string.
+        let number = EngineVariable {
+            name: "n".to_string(),
+            kind: "Natural".to_string(),
+            display: "42".to_string(),
+            structured: Some(scalar("Natural", "42")),
+        };
+        let preview = ValuePreview::of(&number);
+        assert_eq!(preview.type_label, "natural");
+        assert_eq!(preview.text, "42");
+        assert!(!preview.shortened);
+
+        // A 2x2 matrix: rows and columns from the published shape, element values row-major.
+        let matrix = EngineVariable {
+            name: "m".to_string(),
+            kind: "Array".to_string(),
+            display: "[[1, 2], [3, 4]]".to_string(),
+            structured: Some(json(vec![
+                ("kind", Json::Str("Array".to_string())),
+                ("type", Json::Str("Array".to_string())),
+                ("shape", Json::num_array(vec![2, 2])),
+                (
+                    "elements",
+                    Json::Arr(vec![
+                        scalar("Natural", "1"),
+                        scalar("Natural", "2"),
+                        scalar("Natural", "3"),
+                        scalar("Natural", "4"),
+                    ]),
+                ),
+            ])),
+        };
+        let preview = ValuePreview::of(&matrix);
+        assert_eq!(preview.type_label, "2 x 2 matrix");
+        assert_eq!(preview.text, "[1, 2]; [3, 4]");
+
+        // A complex number: the published real and imaginary parts.
+        let complex = EngineVariable {
+            name: "c".to_string(),
+            kind: "Complex".to_string(),
+            display: "3 + 4i".to_string(),
+            structured: Some(json(vec![
+                ("kind", Json::Str("Complex".to_string())),
+                ("re", Json::Str("3".to_string())),
+                ("im", Json::Str("-4".to_string())),
+                ("exact", Json::Bool(true)),
+            ])),
+        };
+        let preview = ValuePreview::of(&complex);
+        assert_eq!(preview.type_label, "complex");
+        assert_eq!(preview.text, "3 - 4i");
+
+        // A record: the published type and its first field names and values.
+        let record = EngineVariable {
+            name: "r".to_string(),
+            kind: "Record".to_string(),
+            display: "DivRemResult(quotient: 9, remainder: 1)".to_string(),
+            structured: Some(json(vec![
+                ("kind", Json::Str("Record".to_string())),
+                ("type", Json::Str("DivRemResult".to_string())),
+                (
+                    "fields",
+                    Json::Arr(vec![
+                        json(vec![
+                            ("name", Json::Str("quotient".to_string())),
+                            ("value", scalar("Integer", "9")),
+                        ]),
+                        json(vec![
+                            ("name", Json::Str("remainder".to_string())),
+                            ("value", scalar("Integer", "1")),
+                        ]),
+                    ]),
+                ),
+            ])),
+        };
+        let preview = ValuePreview::of(&record);
+        assert_eq!(preview.type_label, "record DivRemResult");
+        assert_eq!(preview.text, "DivRemResult {quotient=9, remainder=1}");
+
+        // A symbolic expression: the published pretty rendering.
+        let symbolic = EngineVariable {
+            name: "s".to_string(),
+            kind: "Symbolic".to_string(),
+            display: "3*x^2 + 4*x + 5".to_string(),
+            structured: Some(json(vec![
+                ("kind", Json::Str("Symbolic".to_string())),
+                ("pretty", Json::Str("3*x^2 + 4*x + 5".to_string())),
+                ("canonical", Json::Str("(add ...)".to_string())),
+            ])),
+        };
+        let preview = ValuePreview::of(&symbolic);
+        assert_eq!(preview.type_label, "symbolic");
+        assert_eq!(preview.text, "3*x^2 + 4*x + 5");
+
+        // No projection: the kind and the display text, with no invented structure.
+        let bare = EngineVariable {
+            name: "t".to_string(),
+            kind: "Text".to_string(),
+            display: "\"hi\"".to_string(),
+            structured: None,
+        };
+        let preview = ValuePreview::of(&bare);
+        assert_eq!(preview.type_label, "text");
+        assert_eq!(preview.text, "\"hi\"");
+    }
+
+    /// WKS-006: a huge matrix previews a bounded window of rows and says it was shortened, while
+    /// the row keeps the full display and the full projection for the detail view.
+    #[test]
+    fn a_huge_matrix_preview_is_bounded_and_the_full_value_stays_in_the_model() {
+        let cell = |value: usize| {
+            Json::obj(vec![
+                ("kind", Json::Str("Natural".to_string())),
+                ("value", Json::Str(value.to_string())),
+            ])
+        };
+        let elements: Vec<Json> = (0..10_000).map(cell).collect();
+        let display = "[[… 10000 elements …]]".to_string();
+        let variable = EngineVariable {
+            name: "big".to_string(),
+            kind: "Array".to_string(),
+            display: display.clone(),
+            structured: Some(Json::obj(vec![
+                ("kind", Json::Str("Array".to_string())),
+                ("type", Json::Str("Array".to_string())),
+                ("shape", Json::num_array(vec![100, 100])),
+                ("elements", Json::Arr(elements)),
+            ])),
+        };
+        let state = EngineState {
+            variables: vec![variable],
+            functions: Vec::new(),
+        };
+        let table = VariableTable::new(&state);
+        let row = &table.rows[0];
+        assert_eq!(row.preview.type_label, "100 x 100 matrix");
+        assert!(row.preview.shortened, "a 10 000-cell preview is shortened");
+        assert!(
+            row.preview.text.chars().count() <= MAX_PREVIEW_CHARS,
+            "the preview stays one bounded cell: {} chars",
+            row.preview.text.chars().count()
+        );
+        assert_eq!(row.display, display, "the full display is not truncated");
+        assert_eq!(
+            row.structured
+                .as_ref()
+                .and_then(|structured| structured.get("elements"))
+                .and_then(Json::as_arr)
+                .map(<[Json]>::len),
+            Some(10_000),
+            "the full projection is kept for the detail view"
+        );
+    }
+
     /// Large values are cut in the cell but the model keeps the full text for the tooltip.
     #[test]
     fn a_large_value_is_truncated_for_the_cell_and_kept_for_the_tooltip() {
@@ -697,6 +1139,12 @@ mod tests {
             name: "big".to_string(),
             kind: "Array".to_string(),
             display: long.clone(),
+            preview: ValuePreview {
+                type_label: "array".to_string(),
+                text: cell_text(&long),
+                shortened: true,
+            },
+            structured: None,
             ordinal: 0,
         };
         let cell = row.display_cell();

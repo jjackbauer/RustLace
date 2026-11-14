@@ -89,6 +89,112 @@ pub struct ResultIdentity {
     structured: String,
 }
 
+/// RES-002: whether the engine's projection says the value is exact, approximate, or says
+/// nothing at all.
+///
+/// The third case is not a permission to assume: a value whose projection carries no `exact`
+/// field is presented with no exactness claim, never as exact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exactness {
+    /// The projection published `exact: true`.
+    Exact,
+    /// The projection published `exact: false`.
+    Approximate,
+    /// The projection published no `exact` field (a Boolean, a Text, a bare array, ...).
+    Unsupplied,
+}
+
+impl Exactness {
+    /// The words the pane uses: `exact`, `approximate`, or the explicit absence.
+    pub fn label(self) -> &'static str {
+        match self {
+            Exactness::Exact => "exact",
+            Exactness::Approximate => "approximate",
+            Exactness::Unsupplied => "exactness not stated",
+        }
+    }
+}
+
+/// RES-002: a rendering the engine shortened, and the budget that stopped it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Truncation {
+    /// The projection's `truncationReason` (`digit-cap`, `node-budget`, ...).
+    pub reason: String,
+    /// The projection's `budget`, when it published one.
+    pub budget: Option<String>,
+}
+
+/// RES-002: the provenance line a committed result paints beside its tree.
+///
+/// Every field is read from the projection the engine published; nothing here infers exactness
+/// from the display text or from the kind. Precision is the document precision the snapshot was
+/// committed with, which is the precision the digits actually in the value were computed at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Provenance {
+    /// The root value kind (`Natural`, `Real`, `Complex`, `Array`, `Symbolic`, ...).
+    pub kind: String,
+    /// The exactness the projection stated, if any.
+    pub exactness: Exactness,
+    /// The precision the committed snapshot reports.
+    pub precision: usize,
+    /// The rendering truncation the projection stated, if any.
+    pub truncation: Option<Truncation>,
+}
+
+impl Provenance {
+    /// Reads the provenance of `projection`, committed at `precision` decimal places.
+    pub fn of(projection: &ResultProjection, precision: usize) -> Option<Provenance> {
+        let structured = projection.structured.as_ref()?;
+        let kind = structured
+            .get("kind")
+            .and_then(|kind| kind.as_str())
+            .unwrap_or("value")
+            .to_string();
+        let exactness = match structured.get("exact") {
+            Some(Json::Bool(true)) => Exactness::Exact,
+            Some(Json::Bool(false)) => Exactness::Approximate,
+            _ => Exactness::Unsupplied,
+        };
+        let truncation = structured
+            .get("truncationReason")
+            .and_then(|reason| reason.as_str())
+            .map(|reason| Truncation {
+                reason: reason.to_string(),
+                budget: match structured.get("budget") {
+                    Some(Json::Num(budget)) => Some(budget.clone()),
+                    Some(Json::Str(budget)) => Some(budget.clone()),
+                    _ => None,
+                },
+            });
+        Some(Provenance {
+            kind,
+            exactness,
+            precision,
+            truncation,
+        })
+    }
+
+    /// The one line the pane paints: kind, exactness, precision and any truncation reason.
+    ///
+    /// A shortened rendering always names its reason and budget, so a result the engine could not
+    /// render in full can never look like a complete exact answer.
+    pub fn line(&self) -> String {
+        let mut line = format!(
+            "{} · {} · precision {}",
+            self.kind,
+            self.exactness.label(),
+            self.precision
+        );
+        if let Some(truncation) = &self.truncation {
+            line.push_str(&format!(" · truncated: {}", truncation.reason));
+            if let Some(budget) = &truncation.budget {
+                line.push_str(&format!(" (budget {budget})"));
+            }
+        }
+        line
+    }
+}
+
 impl ResultIdentity {
     /// The identity of the result this projection describes.
     pub fn of(projection: &ResultProjection) -> ResultIdentity {
@@ -1381,5 +1487,107 @@ mod tests {
             .expect("the projection is a tree");
         assert_eq!(record.kind(), "Record");
         assert_eq!(record.headline(), "DivRemResult - 2 fields");
+    }
+
+    /// RES-002: the provenance line is read from the projection, never inferred. A value whose
+    /// projection states no exactness paints no exactness claim; an approximate value says so;
+    /// a shortened rendering names its reason and budget.
+    #[test]
+    fn provenance_reports_exactness_precision_and_truncation_from_the_projection() {
+        let exact = ResultProjection::new(
+            "42",
+            Some(Json::obj(vec![
+                ("kind", Json::Str("Natural".to_string())),
+                ("value", Json::Str("42".to_string())),
+                ("exact", Json::Bool(true)),
+            ])),
+        );
+        let provenance = Provenance::of(&exact, 1000).expect("a projected value has provenance");
+        assert_eq!(provenance.kind, "Natural");
+        assert_eq!(provenance.exactness, Exactness::Exact);
+        assert_eq!(provenance.precision, 1000);
+        assert_eq!(provenance.line(), "Natural · exact · precision 1000");
+
+        let approximate = ResultProjection::new(
+            "1.41421...",
+            Some(Json::obj(vec![
+                ("kind", Json::Str("Real".to_string())),
+                ("value", Json::Str("1.4142135623".to_string())),
+                ("exact", Json::Bool(false)),
+            ])),
+        );
+        let provenance = Provenance::of(&approximate, 10).unwrap();
+        assert_eq!(provenance.exactness, Exactness::Approximate);
+        assert_eq!(provenance.line(), "Real · approximate · precision 10");
+
+        // A Boolean projection has no `exact` field: the pane must not claim exactness at all.
+        let boolean = ResultProjection::new(
+            "true",
+            Some(Json::obj(vec![
+                ("kind", Json::Str("Boolean".to_string())),
+                ("value", Json::Str("true".to_string())),
+            ])),
+        );
+        let provenance = Provenance::of(&boolean, 30).unwrap();
+        assert_eq!(provenance.exactness, Exactness::Unsupplied);
+        assert_eq!(
+            provenance.line(),
+            "Boolean · exactness not stated · precision 30"
+        );
+
+        // A digit-capped value names the reason and the budget that stopped it.
+        let truncated = ResultProjection::new(
+            "3.14159...",
+            Some(Json::obj(vec![
+                ("kind", Json::Str("Real".to_string())),
+                ("value", Json::Str("3.14159265".to_string())),
+                ("exact", Json::Bool(false)),
+                ("truncated", Json::Bool(true)),
+                ("truncationReason", Json::Str("digit-cap".to_string())),
+                ("budget", Json::Num("1000".to_string())),
+            ])),
+        );
+        let provenance = Provenance::of(&truncated, 1000).unwrap();
+        assert_eq!(
+            provenance.line(),
+            "Real · approximate · precision 1000 · truncated: digit-cap (budget 1000)"
+        );
+
+        // No projection: no provenance line is invented.
+        assert!(Provenance::of(&ResultProjection::new("42", None), 30).is_none());
+    }
+
+    /// RES-005: a symbolic projection carries the pretty rendering, the canonical form, the
+    /// domain, the free symbols and the node count as separate published fields.
+    #[test]
+    fn a_symbolic_projection_publishes_every_inspected_field() {
+        let projection = ResultProjection::new(
+            "3*x^2",
+            Some(Json::obj(vec![
+                ("kind", Json::Str("Symbolic".to_string())),
+                ("pretty", Json::Str("3*x^2".to_string())),
+                (
+                    "canonical",
+                    Json::Str("(mul (rat 3 1) (pow (sym x) (rat 2 1)))".to_string()),
+                ),
+                ("domain", Json::Str("real".to_string())),
+                ("freeSymbols", Json::str_array(["x", "y"])),
+                ("nodeCount", Json::Num("5".to_string())),
+                ("exact", Json::Bool(true)),
+            ])),
+        );
+        let Some(StructuredNode::Symbolic(symbolic)) = projection.tree() else {
+            panic!("the projection is symbolic");
+        };
+        assert_eq!(symbolic.pretty, "3*x^2");
+        assert_eq!(
+            symbolic.canonical,
+            "(mul (rat 3 1) (pow (sym x) (rat 2 1)))"
+        );
+        assert_eq!(symbolic.domain.as_deref(), Some("real"));
+        assert_eq!(symbolic.free_symbols, vec!["x", "y"]);
+        assert_eq!(symbolic.node_count.as_deref(), Some("5"));
+        assert!(!symbolic.truncated);
+        assert_eq!(symbolic.headline(), "Symbolic  3*x^2");
     }
 }

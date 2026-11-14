@@ -99,6 +99,11 @@ pub struct LogLine {
     /// its log tail belongs to the same committed prefix as its variables and revision, instead
     /// of comparing display strings.
     pub statement: Option<usize>,
+    /// LOG-004: the 1-based source position a diagnostic line names, when one produced it.
+    ///
+    /// The Logs pane turns a line carrying a position into a control that opens and focuses the
+    /// source at exactly that position; a line without one is plain history and stays text.
+    pub location: Option<(usize, usize)>,
 }
 
 impl LogLine {
@@ -108,12 +113,19 @@ impl LogLine {
             kind,
             text: text.into(),
             statement: None,
+            location: None,
         }
     }
 
     /// Attributes the line to the 0-based statement that produced it.
     pub fn at_statement(mut self, statement: usize) -> LogLine {
         self.statement = Some(statement);
+        self
+    }
+
+    /// LOG-004: records the 1-based source position this line names.
+    pub fn at_location(mut self, line: usize, column: usize) -> LogLine {
+        self.location = Some((line, column));
         self
     }
 

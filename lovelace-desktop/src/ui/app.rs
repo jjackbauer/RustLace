@@ -702,7 +702,12 @@ pub struct WorkbenchApp {
     /// EDT-009 test seam: the find bar buttons painted in the last pass and their rectangles.
     find_buttons: Vec<(&'static str, Rect)>,
     plot: Plot,
-    loaded_plot_svg: Option<String>,
+    /// PLT-005/PLT-009: the identity and bytes of the capture the pane is showing.
+    ///
+    /// The document id and run id are part of the key, so a tab switch reloads the pane even when
+    /// two tabs happen to hold byte-identical captures: the pane can never keep painting one
+    /// tab's chart while another tab is active.
+    loaded_plot: Option<(u64, Option<u64>, String)>,
     /// PLT-006: the open PNG export options window, if any.
     plot_export: Option<PngExport>,
     /// PLT-006: the last export's short result and whether it is an error, shown in the plot
@@ -744,6 +749,45 @@ pub struct WorkbenchApp {
     /// The two Workspace tables, rebuilt from the frame's committed snapshot in [`Self::sync`].
     variables_table: VariableTable,
     functions_table: FunctionTable,
+    /// WKS-006: the variable whose full value the Workspace pane shows in its detail view.
+    ///
+    /// `None` closes the view. The name is kept (not a row index) so a resort, a repaint or a
+    /// rebuilt table cannot make the detail point at a different variable.
+    variable_detail: Option<String>,
+    /// WKS-003 / WKS-006: the per-row controls the variables table painted this pass, keyed
+    /// `delete <name>` and `details <name>`.
+    ///
+    /// The window itself never reads this list; it is the acceptance seam a pointer test uses to
+    /// click the control a user sees, exactly like `variable_header_rects`.
+    variable_action_rects: Vec<(String, Rect)>,
+    /// LOG-005: the log rows the user has selected, by index into the painted log.
+    ///
+    /// Selection is a range model with an anchor: a plain click selects one row, Shift+click
+    /// extends from the anchor, Ctrl+click toggles one row. The set is cleared when the painted
+    /// log is replaced (a document switch, a clear, an eviction) because an index would otherwise
+    /// name a different line.
+    log_selection: std::collections::BTreeSet<usize>,
+    /// LOG-005: the row a range selection extends from.
+    log_anchor: Option<usize>,
+    /// LOG-005: the last copy/save outcome, painted in the pane header.
+    log_status: Option<String>,
+    /// LOG-005: the log rows the painted pane offered this pass, by index.
+    ///
+    /// The window itself never reads this list; pointer tests click the row a user sees through
+    /// it, exactly like `variable_action_rects`.
+    log_row_rects: Vec<(usize, Rect)>,
+    /// The log length and discarded count the current selection was made against.
+    log_seen: (usize, usize),
+    /// LOG-010: the record count the last painted pass showed, so a pass that appended lines can
+    /// follow the newest record instead of leaving the view where it was.
+    log_follow_len: usize,
+    /// LOG-010: true while the log view follows the newest record; a user scroll away ends it and
+    /// the next appended record restores it.
+    log_follow: bool,
+    /// LOG-004 / LOG-006: the pinned diagnostic/result rows the pane painted this pass, by index.
+    ///
+    /// The window never reads this list; pointer tests click the pinned row a user sees.
+    log_pinned_rects: Vec<(usize, Rect)>,
     /// RES-004: the RESULT tree's per-path collapse state. It is bound to the committed result
     /// in `paint_result_section`, so repaints of the same value keep every decision and a new
     /// result clears the map.
@@ -843,6 +887,15 @@ impl WorkbenchApp {
         };
         let settings_warnings = settings.take_warnings();
         let mut workbench = Workbench::new();
+        // LOG-010 acceptance seam: `LOVELACE_LOG_FLOOD=<n>` appends n stdout records and one fatal
+        // diagnostic through the real log path, so a capture can show the virtualised pane and the
+        // storage cap on a document no script could produce quickly. Off unless set, and no
+        // script can reach it (the same pattern as `LOVELACE_ENGINE_FAULT` / `LOVELACE_PLOT_FAULT`).
+        if let Ok(count) = std::env::var("LOVELACE_LOG_FLOOD") {
+            if let Ok(count) = count.parse::<usize>() {
+                workbench.flood_log_active(count);
+            }
+        }
         // DOC-004: a recent path whose file was deleted between two launches is pruned before the
         // File bar can offer it.
         let before_recent = settings.recent_files.len();
@@ -1006,7 +1059,7 @@ impl WorkbenchApp {
             file_buttons: Vec::new(),
             find_buttons: Vec::new(),
             plot: Plot::new(),
-            loaded_plot_svg: None,
+            loaded_plot: None,
             plot_export: None,
             plot_export_status: None,
             goto_line: None,
@@ -1027,6 +1080,16 @@ impl WorkbenchApp {
             filter: String::new(),
             variables_table,
             functions_table,
+            variable_detail: None,
+            variable_action_rects: Vec::new(),
+            log_selection: std::collections::BTreeSet::new(),
+            log_anchor: None,
+            log_status: None,
+            log_row_rects: Vec::new(),
+            log_seen: (0, 0),
+            log_follow_len: 0,
+            log_follow: true,
+            log_pinned_rects: Vec::new(),
             expansion: ExpansionState::new(),
             inspector_open: false,
             inspector_expansion: InspectorExpansion::new(),
@@ -1144,19 +1207,44 @@ impl WorkbenchApp {
         for (index, editor) in self.editors.iter_mut().enumerate() {
             editor.diagnostic = self.workbench.diagnostic(index).cloned();
         }
+        // PLT-005/PLT-009: the plot pane is owned by the active document, and the key that decides
+        // whether the pane reloads carries the document id and the run id as well as the bytes.
+        // Selecting another tab therefore always replaces or clears the chart; two tabs whose
+        // captures happen to be byte-identical still reload, so the pane can never keep painting
+        // one tab's chart while another tab is active.
+        let (document_id, document_title, run_id) = {
+            let active = self.workbench.active_document();
+            (
+                active.id.0,
+                active.title.clone(),
+                active.run_id().map(|run| run.0),
+            )
+        };
         let current_svg = self.view.plot.as_ref().map(|plot| plot.svg.clone());
-        if current_svg != self.loaded_plot_svg {
-            match current_svg {
-                Some(svg) => {
-                    self.plot.set_svg(&svg);
-                    self.loaded_plot_svg = Some(svg);
+        let wanted = current_svg
+            .as_ref()
+            .map(|svg| (document_id, run_id, svg.clone()));
+        if wanted != self.loaded_plot {
+            match &wanted {
+                Some((_, _, svg)) => {
+                    self.plot.set_svg(&faulted_capture_svg(svg));
+                    self.loaded_plot = wanted;
                 }
                 None => {
                     self.plot.clear();
-                    self.loaded_plot_svg = None;
+                    self.loaded_plot = None;
                 }
             }
         }
+        // PLT-005: provenance is copied in the same pass that loads the capture, so the header,
+        // the canvas's accessible description and the chart itself always name the same document
+        // and run. `current_svg` is None for a tab with no capture, and the pane holds no
+        // provenance either (it was cleared above).
+        self.plot.provenance = current_svg.as_ref().map(|_| plot::PlotProvenance {
+            document_id,
+            document: document_title,
+            run: run_id,
+        });
     }
 
     /// Keeps `editors`, `loaded_revisions` and `editor_ids` in step with the workbench's tabs.
@@ -2481,6 +2569,26 @@ impl WorkbenchApp {
                 if self.view.has_snapshot && !self.workbench.active_is_running() {
                     self.workbench.clear_variables_active();
                 }
+                true
+            }
+            // LOG-005: the keyboard half of the Logs pane's copy and export commands.
+            Action::CopyLogSelection => {
+                self.copy_log(LogCopy::Selection, ctx);
+                true
+            }
+            Action::CopyLogAll => {
+                self.copy_log(LogCopy::All, ctx);
+                true
+            }
+            Action::ClearLog => {
+                self.workbench.clear_log_active();
+                self.log_selection.clear();
+                self.log_anchor = None;
+                self.log_status = Some("log cleared".to_string());
+                true
+            }
+            Action::SaveLog => {
+                self.save_log();
                 true
             }
             // LAY-003: the keyboard/command half of "double-click or command restores sensible
@@ -4942,6 +5050,14 @@ impl WorkbenchApp {
         let plot_title = view.plot.as_ref().map(|plot| plot.title.clone());
         let empty = self.plot.is_empty();
         let zoom_label = format!("{:.0}%", self.plot.zoom_percent());
+        // PLT-005: the document and run the chart belongs to, painted in the header beside the
+        // engine's title and repeated in the canvas's accessible description by `Plot::ui`.
+        let provenance_label = self
+            .plot
+            .provenance
+            .as_ref()
+            .map(|provenance| provenance.label())
+            .unwrap_or_else(|| "no document".to_string());
         // LAY-011: in the compact drawer the plot header carries the six plot actions and nothing
         // else; the zoom readout, the engine title and the raster diagnostics would each cost a
         // wrapped row and leave less canvas than the actions themselves.
@@ -4957,6 +5073,8 @@ impl WorkbenchApp {
                 + header_text_width(&zoom_label)
                 + 8.0
                 + header_text_width(plot_title.as_deref().unwrap_or("no engine plot"))
+                + 8.0
+                + header_text_width(&provenance_label)
                 + 8.0
                 + 100.0
                 + 105.0
@@ -5031,6 +5149,19 @@ impl WorkbenchApp {
                         }
                     }
                     ui.separator();
+                    // PLT-005: the chart never appears without the document and run that produced
+                    // it. The label is a real text node, so it is in the accessibility tree and in
+                    // a UIA capture rather than only in the painted pixels.
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&provenance_label)
+                                .small()
+                                .color(theme::dim()),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text("The document and run this chart belongs to");
+                    ui.separator();
                 }
                 // PLT-006: both exports go through the native save dialog. SVG copies the
                 // engine's captured bytes; PNG opens an in-window options step first.
@@ -5084,12 +5215,14 @@ impl WorkbenchApp {
                 return;
             }
             let info = format!(
-                "raster {}x{} @ {:.2}x · {:.2} ms raster · {:.2} ms upload",
+                "raster {}x{} @ {:.2}x · {:.2} ms parse · {:.2} ms raster · {:.2} ms upload · {} frames painted meanwhile",
                 self.plot.raster_px[0],
                 self.plot.raster_px[1],
                 self.plot.raster_scale,
+                self.plot.parse_ms,
                 self.plot.last_raster_ms,
-                self.plot.last_upload_ms
+                self.plot.last_upload_ms,
+                self.plot.frames_during_raster
             );
             let legend = self.plot.legend_entries();
             ui.scope_builder(
@@ -5491,6 +5624,10 @@ impl WorkbenchApp {
         let mut function_sort = self.functions_table.sort;
         let mut variable_header_rects: [Option<Rect>; 3] = [None; 3];
         let mut function_header_rects: [Option<Rect>; 3] = [None; 3];
+        let mut variable_action_rects: Vec<(String, Rect)> = Vec::new();
+        // WKS-006: the variable whose full value the pane is showing, if any. The state lives on
+        // the window (not this pass), so a repaint cannot close the detail the user opened.
+        let mut variable_detail = self.variable_detail.clone();
         // RES-004: the RESULT tree's collapse state and the headers this pass paints. The state
         // lives on the window, not in the paint pass, so a repaint or an unrelated update (a
         // quick eval, an edit) cannot reset it; `paint_result_section` clears it only when the
@@ -5623,6 +5760,19 @@ impl WorkbenchApp {
                                         .small()
                                         .color(theme::dim()),
                                 );
+                                // WKS-003: the workspace's own revision. A delete or a clear
+                                // changes the state without changing the source, so the pane
+                                // states the counter that did move.
+                                ui.label(
+                                    RichText::new(format!("state rev {}", view.workspace_revision))
+                                        .small()
+                                        .color(theme::dim()),
+                                )
+                                .on_hover_text(
+                                    "Workspace revision: moved by every workspace edit (delete a \
+                                     variable, clear the variables); the source revision is shown \
+                                     on the line above",
+                                );
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     let can_clear =
                                         has_snapshot && !self.workbench.active_is_running();
@@ -5646,7 +5796,11 @@ impl WorkbenchApp {
                                     }
                                 });
                             });
-                            let widths = variable_column_widths(ui.available_width());
+                            // WKS-003: the trailing control column of the variables table.
+                            let row_actions_width = ROW_ACTION_WIDTH * 2.0;
+                            let widths = variable_column_widths(
+                                (ui.available_width() - row_actions_width).max(120.0),
+                            );
                             ui.horizontal(|ui| {
                                 for column in VariableColumn::ALL {
                                     let response = ui.add_sized(
@@ -5686,6 +5840,8 @@ impl WorkbenchApp {
                                     })
                                     .collect();
                             let shown = visible_variables.len();
+                            let mut delete_requested: Option<String> = None;
+                            let mut detail_requested: Option<String> = None;
                             // A11Y-002: the Variables grid is a `Table` whose rows are `Row`
                             // nodes named after their cells and whose sort headers are
                             // `ColumnHeader`s carrying the sort state.
@@ -5726,17 +5882,45 @@ impl WorkbenchApp {
                                             "{} | {} | {}",
                                             row.name,
                                             row.kind,
-                                            row.display_cell()
+                                            row.preview.text
                                         );
+                                        let detail_open = variable_detail.as_deref()
+                                            == Some(row.name.as_str());
                                         table_row(ui, label, |ui| {
-                                            table_cell(
-                                                ui,
-                                                widths[0],
-                                                RichText::new(cell_text(&row.name))
-                                                    .monospace()
-                                                    .color(theme::accent()),
-                                                &row.name,
+                                            // WKS-006: the name cell opens the row's detail view,
+                                            // which paints the full value the cell shortened.
+                                            let name = ui.add_sized(
+                                                [widths[0], 16.0],
+                                                egui::Button::new(
+                                                    RichText::new(cell_text(&row.name))
+                                                        .monospace()
+                                                        .color(theme::accent()),
+                                                )
+                                                .frame(false),
                                             );
+                                            let name_accessible = format!(
+                                                "{}{}",
+                                                if detail_open { "Hide" } else { "Show" },
+                                                format!(" details of {}", row.name)
+                                            );
+                                            name.widget_info(|| {
+                                                egui::WidgetInfo::labeled(
+                                                    egui::Role::Button,
+                                                    true,
+                                                    name_accessible.clone(),
+                                                )
+                                            });
+                                            variable_action_rects
+                                                .push((format!("details {}", row.name), name.rect));
+                                            if name.clicked() {
+                                                detail_requested = Some(row.name.clone());
+                                            }
+                                            name.on_hover_text(format!(
+                                                "{} — open the full value ({} chars, {})",
+                                                row.name,
+                                                row.display.chars().count(),
+                                                row.preview.type_label
+                                            ));
                                             table_cell(
                                                 ui,
                                                 widths[1],
@@ -5745,20 +5929,87 @@ impl WorkbenchApp {
                                                     .color(theme::dim()),
                                                 &row.kind,
                                             );
-                                            // WKS-001: a large display value is cut in the cell;
-                                            // the full value stays available as the hover text.
+                                            // WKS-006: the value cell is the type-aware preview
+                                            // (matrix rows, record fields, complex pair, pretty
+                                            // symbolic text); the full untyped display stays the
+                                            // hover text and the printable detail.
                                             table_cell(
                                                 ui,
                                                 widths[2],
-                                                RichText::new(row.display_cell())
+                                                RichText::new(row.preview_cell())
                                                     .monospace()
                                                     .color(theme::text()),
-                                                &row.display,
+                                                &format!(
+                                                    "{}: {}\nfull display: {}",
+                                                    row.preview.type_label,
+                                                    row.preview.text,
+                                                    row.display
+                                                ),
                                             );
+                                            // WKS-003: delete exactly this variable. Disabled
+                                            // while a run is in flight or before a run published a
+                                            // workspace, like Clear Variables.
+                                            let can_delete = has_snapshot
+                                                && !self.workbench.active_is_running();
+                                            let delete = ui.add_enabled(
+                                                can_delete,
+                                                egui::Button::new(
+                                                    RichText::new("del")
+                                                        .small()
+                                                        .monospace()
+                                                        .color(theme::error()),
+                                                )
+                                                .frame(false)
+                                                .min_size(vec2(ROW_ACTION_WIDTH, 16.0)),
+                                            );
+                                            let delete_name =
+                                                format!("Delete variable {}", row.name);
+                                            delete.widget_info(|| {
+                                                egui::WidgetInfo::labeled(
+                                                    egui::Role::Button,
+                                                    true,
+                                                    delete_name.clone(),
+                                                )
+                                            });
+                                            if !can_delete {
+                                                mark_disabled(ui, &delete);
+                                            }
+                                            let delete = delete.on_hover_text(format!(
+                                                "Delete {} only; functions and every other \
+                                                 variable are unchanged",
+                                                row.name
+                                            ));
+                                            variable_action_rects
+                                                .push((format!("delete {}", row.name), delete.rect));
+                                            if delete.clicked() {
+                                                delete_requested = Some(row.name.clone());
+                                            }
                                         });
                                     }
                                 },
                             );
+                            if let Some(name) = delete_requested {
+                                self.workbench.delete_variable_active(&name);
+                            }
+                            if let Some(name) = detail_requested {
+                                variable_detail = if variable_detail.as_deref() == Some(&name) {
+                                    None
+                                } else {
+                                    Some(name)
+                                };
+                            }
+                            // WKS-006: the detail view keeps the whole value: the cell may cut a
+                            // preview, but the memory and this view hold the full display, the
+                            // engine's structured projection of it and every published field.
+                            if let Some(open) = variable_detail.clone() {
+                                if let Some(row) =
+                                    variable_rows.iter().find(|row| row.name == open)
+                                {
+                                    paint_variable_detail(ui, row);
+                                } else {
+                                    variable_detail = None;
+                                }
+                            }
                             if shown == 0 {
                                 // VIS-008: three distinct reasons, three distinct next steps;
                                 // each keeps the pane's purpose, and each offers the command that
@@ -6011,6 +6262,8 @@ impl WorkbenchApp {
         self.filter = filter;
         self.variables_table.sort = variable_sort;
         self.functions_table.sort = function_sort;
+        self.variable_detail = variable_detail;
+        self.variable_action_rects = variable_action_rects;
         self.variable_header_rects = variable_header_rects;
         self.function_header_rects = function_header_rects;
         self.result_toggle_rects = result_toggle_rects;
@@ -6047,6 +6300,17 @@ impl WorkbenchApp {
         }
         let active = self.workbench.active();
         let legend = log_kind_legend();
+        // LOG-005: a selection names rows of the log that was painted when it was made. A
+        // document switch, a clear or a cap eviction makes the same index name a different line,
+        // so the selection is dropped rather than silently repointed.
+        let seen = (view.logs.len(), view.logs_dropped);
+        if seen != self.log_seen {
+            self.log_selection.clear();
+            self.log_anchor = None;
+            self.log_seen = seen;
+        }
+        let selection_count = self.log_selection.len();
+        let status = self.log_status.clone();
         let header_line = {
             let (line, column) = self.editors[active].line_col_1based();
             format!(
@@ -6054,8 +6318,22 @@ impl WorkbenchApp {
                 self.workbench.engine_name()
             )
         };
-        let header_hint =
-            header_text_width(&header_line) + header_text_width("Logs") + 8.0 + 60.0 + 80.0;
+        let mut header_hint = header_text_width(&header_line)
+            + header_text_width("Logs")
+            + 8.0
+            + 60.0
+            + 80.0
+            + 3.0 * 96.0;
+        if let Some(status) = &status {
+            header_hint += 8.0 + header_text_width(status);
+        }
+        // LOG-005 / LOG-006: every request the header, the rows or a context menu makes this
+        // pass. They are applied after the pane stops borrowing the tree's interaction state.
+        let mut request: Option<LogRequest> = None;
+        let mut log_row_rects: Vec<(usize, Rect)> = Vec::new();
+        let mut log_pinned_rects: Vec<(usize, Rect)> = Vec::new();
+        let mut click: Option<(usize, bool, bool)> = None;
+        let mut jump: Option<(usize, usize)> = None;
         with_pane(ui, rect, "Logs", header_hint, |ui, header, body| {
             header_row(ui, header, |ui| {
                 // LAY-002: a visible pane title; the same string is the accessible name.
@@ -6066,18 +6344,8 @@ impl WorkbenchApp {
                 );
                 ui.label(RichText::new(&header_line).color(theme::dim()))
                     .on_hover_text(format!("Log kinds: {legend}"));
-                // LAY-002: the reachable empty state. The boot lines mean the log is never empty
-                // unless the user clears it; this is that command.
-                let can_clear = !view.logs.is_empty();
-                let clear = ui
-                    .add_enabled(can_clear, egui::Button::new(RichText::new("Clear log").small()))
-                    .on_hover_text("Empty this document's log; future runs append to it again");
-                if !can_clear {
-                    // VIS-006: the disabled clear command carries the same shape cue.
-                    mark_disabled(ui, &clear);
-                }
-                if clear.clicked() {
-                    self.workbench.clear_log_active();
+                if let Some(status) = &status {
+                    ui.label(RichText::new(status).small().color(theme::accent()));
                 }
             });
             ui.scope_builder(
@@ -6085,14 +6353,10 @@ impl WorkbenchApp {
                     .max_rect(body.shrink2(vec2(10.0, 4.0)))
                     .layout(Layout::top_down(Align::Min)),
                 |ui| {
-                    // RUN-002: the quick-eval one-liner lives above the log list, so it stays
-                    // visible with an empty log and cannot be confused with a history row.
-                    self.quick_eval_row(ui);
-                    let logs = &view.logs;
-                    if logs.is_empty() {
-                        // VIS-008: the empty log explains what the pane shows, why it is empty
-                        // and the command that fills it; the kind legend keeps the vocabulary
-                        // discoverable before the first line exists.
+                    // VIS-008: an empty log paints its own state with the whole body, so the
+                    // state's headline is not squeezed into the compact form (the card is only
+                    // compact below 72 points, which the empty pane would otherwise hit).
+                    if view.logs.is_empty() {
                         let state = empty::logs();
                         let rect = ui.available_rect_before_wrap();
                         if empty::paint(ui, rect, &state) == Some(empty::EmptyAction::Run) {
@@ -6101,21 +6365,479 @@ impl WorkbenchApp {
                         ui.label(RichText::new(legend.clone()).small().color(theme::dim()));
                         return;
                     }
-                    egui::ScrollArea::vertical()
-                        .id_salt("logs_scroll")
-                        .stick_to_bottom(true)
-                        .show(ui, |ui| {
-                            for entry in logs {
-                                // LOG-002: the marker is part of the line's rendered model, so
-                                // the pane paints exactly the string the unit tests pin.
-                                let color = semantic::SemanticRole::for_log_kind(entry.kind).color();
-                                ui.label(RichText::new(entry.render()).monospace().color(color));
+                    // LAY-011 / A11Y-004: a control only paints when the body has room for it, so
+                    // a 200% interface scale squeezes the log — never a clipped control.
+                    let room_for_rows = ui.available_height() > 28.0;
+                    if room_for_rows {
+                        // RUN-002: the quick-eval one-liner lives above the log list, so it stays
+                        // visible with an empty log and cannot be confused with a history row.
+                        self.quick_eval_row(ui);
+                    }
+                    // LOG-005: the copy/export/clear actions live in the body, not the header, so
+                    // a 200% interface scale cannot push the pane's first control past the pane
+                    // edge with a taller header row. They are painted only when the pane has room
+                    // for them; the same actions are always on each line's context menu and on
+                    // their keyboard chords.
+                    let menu_room = room_for_rows && ui.available_height() > 24.0;
+                    if menu_room {
+                        ui.horizontal_wrapped(|ui| {
+                            let can_clear = !view.logs.is_empty();
+                            let menu = ui.menu_button(RichText::new("Log actions").small(), |ui| {
+                                if ui
+                                    .add_enabled(can_clear, egui::Button::new("Clear log"))
+                                    .clicked()
+                                {
+                                    request = Some(LogRequest::Clear);
+                                    ui.close();
+                                }
+                                if ui.add(egui::Button::new("Copy all")).clicked() {
+                                    request = Some(LogRequest::CopyAll);
+                                    ui.close();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        selection_count > 0,
+                                        egui::Button::new("Copy selected"),
+                                    )
+                                    .clicked()
+                                {
+                                    request = Some(LogRequest::CopySelection);
+                                    ui.close();
+                                }
+                                if ui.add(egui::Button::new("Save log…")).clicked() {
+                                    request = Some(LogRequest::Save);
+                                    ui.close();
+                                }
+                            });
+                            menu.response.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::Role::Button,
+                                    true,
+                                    "Log actions: copy selected, copy all, save log, clear log",
+                                )
+                            });
+                            menu.response.on_hover_text(
+                                "Copy selected (Ctrl+Shift+C), copy all (Ctrl+Shift+A), save \
+                                 log (Ctrl+Alt+L), clear log (Ctrl+Shift+K); the same actions are \
+                                 on each line's context menu",
+                            );
+                        });
+                    }
+                    // LOG-006: the log cap is not silent. When records were discarded the pane
+                    // says how many, where they went and what the export contains.
+                    if view.logs_dropped > 0 {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "truncated history: the first {} record(s) were discarded at \
+                                     the {} record cap; the {} retained record(s) below are the \
+                                     exportable full run log",
+                                    view.logs_dropped,
+                                    crate::workbench::LOG_CAP,
+                                    view.logs.len()
+                                ))
+                                .small()
+                                .color(theme::warning()),
+                            )
+                            .on_hover_text(
+                                "The cap bounds memory. Newer records are always kept, including \
+                                 the current fatal error; only the oldest are discarded.",
+                            );
+                            if ui
+                                .add(egui::Button::new(RichText::new("Export…").small()))
+                                .clicked()
+                            {
+                                request = Some(LogRequest::Save);
                             }
                         });
+                    }
+                    let logs = &view.logs;
+                    let selected = self.log_selection.clone();
+                    let anchor = self.log_anchor;
+                    // LOG-004 / LOG-006 / DOC-009: the two lines whose content must never be
+                    // hidden by a scroll position are pinned above the list — the current
+                    // diagnostic (clickable: it opens and highlights the source) and the last
+                    // result (the value the notation setting localizes). They stay one row each,
+                    // so the pin costs a bounded two widgets however long the log is.
+                    let pinned: [(usize, &str); 2] = {
+                        let diagnostic = logs
+                            .iter()
+                            .rposition(|line| {
+                                line.kind == crate::log_kind::LogKind::Diagnostic
+                                    && line.location.is_some()
+                            });
+                        let result = logs
+                            .iter()
+                            .rposition(|line| line.kind == crate::log_kind::LogKind::Result);
+                        match (diagnostic, result) {
+                            (Some(diagnostic), Some(result)) if diagnostic == result => {
+                                [(diagnostic, "pinned diagnostic"), (usize::MAX, "")]
+                            }
+                            (Some(diagnostic), Some(result)) => {
+                                [(diagnostic, "pinned diagnostic"), (result, "pinned last result")]
+                            }
+                            (Some(diagnostic), None) => {
+                                [(diagnostic, "pinned diagnostic"), (usize::MAX, "")]
+                            }
+                            (None, Some(result)) => [(result, "pinned last result"), (usize::MAX, "")],
+                            (None, None) => [(usize::MAX, ""), (usize::MAX, "")],
+                        }
+                    };
+                    // The pin is painted only when the pane has room for it: in a short pane the
+                    // virtualised list (which follows the newest record) carries the same lines,
+                    // and a pin painted past the pane's bottom edge would be clipped content.
+                    for (index, caption) in pinned {
+                        if index == usize::MAX || index >= logs.len() {
+                            continue;
+                        }
+                        if ui.available_height() < 20.0 {
+                            break;
+                        }
+                        let entry = &logs[index];
+                        // The pin is ONE line: a bounded prefix, truncated by the label, so a
+                        // 90 000-cell result cannot wrap the pin into hundreds of lines and push
+                        // the list (and the pane) out of the window.
+                        let rendered = entry.render();
+                        let head: String = rendered.chars().take(160).collect();
+                        let text = if rendered.chars().count() > 160 {
+                            format!("{head}…")
+                        } else {
+                            head
+                        };
+                        let color = semantic::SemanticRole::for_log_kind(entry.kind).color();
+                        let label = ui.add(
+                            egui::Label::new(RichText::new(text).monospace().small().color(color))
+                                .sense(egui::Sense::click())
+                                .truncate(),
+                        );
+                        let accessible = match entry.location {
+                            Some((line, column)) => format!(
+                                "{} (pinned; click to open source at line {}, column {})",
+                                entry.render(),
+                                line,
+                                column
+                            ),
+                            None => format!("{} (pinned {caption})", entry.render()),
+                        };
+                        label.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Label, true, accessible.clone())
+                        });
+                        log_pinned_rects.push((index, label.rect));
+                        if label.clicked() {
+                            self.log_selection.clear();
+                            self.log_selection.insert(index);
+                            self.log_anchor = Some(index);
+                            if let Some((line, column)) = entry.location {
+                                jump = Some((line, column));
+                            }
+                        }
+                        label.on_hover_text(match entry.location {
+                            Some((line, column)) => format!(
+                                "{caption} · click to open the source at line {line}, column {column}"
+                            ),
+                            None => format!("{caption} · also in the log list below"),
+                        });
+                    }
+                    // LOG-010: the log list is virtualised. Each row is one fixed-height line,
+                    // so egui's scroll area lays out only the rows inside its viewport: a
+                    // 100 000-record log costs one viewport of widgets, not 100 000, and a live
+                    // update adds rows without rebuilding the widget tree.
+                    //
+                    // The view follows the newest record: a pass that appended lines scrolls the
+                    // viewport to the end (the terminal behaviour a log needs), so a run's fatal
+                    // diagnostic is on screen when the run ends. A user can still scroll back;
+                    // the next appended line brings the view to the tail again.
+                    let grew = logs.len() > self.log_follow_len;
+                    self.log_follow_len = logs.len();
+                    if grew {
+                        self.log_follow = true;
+                    }
+                    let mut area = egui::ScrollArea::vertical()
+                        .id_salt("logs_scroll")
+                        .auto_shrink([false, false]);
+                    if self.log_follow {
+                        // The exact content height of `show_rows` (rows plus their spacing), so
+                        // the offset clamps to the end instead of overflowing egui's row math.
+                        // It is applied on every pass while the view follows the tail, so the
+                        // newest record stays on screen across repaints.
+                        let advance = LOG_ROW_HEIGHT + ui.spacing().item_spacing.y;
+                        area = area
+                            .vertical_scroll_offset(logs.len() as f32 * advance)
+                            .animated(false);
+                    }
+                    let area_output = area.show_rows(ui, LOG_ROW_HEIGHT, logs.len(), |ui, range| {
+                            for index in range {
+                                let entry = &logs[index];
+                                // LOG-010: a printed megabyte is one line in the model and a
+                                // bounded painted prefix; the full line stays in the log and in
+                                // the copy/export text.
+                                let (full, hidden) = bounded_value_text(&entry.render());
+                                let text = if hidden > 0 {
+                                    format!("{full} … (+{hidden} chars)")
+                                } else {
+                                    full
+                                };
+                                let color =
+                                    semantic::SemanticRole::for_log_kind(entry.kind).color();
+                                let is_selected = selected.contains(&index);
+                                let response = ui.add_sized(
+                                    [ui.available_width(), LOG_ROW_HEIGHT],
+                                    egui::Button::new(
+                                        RichText::new(text).monospace().small().color(color),
+                                    )
+                                    .frame(is_selected)
+                                    .fill(if is_selected {
+                                        theme::selection_bg()
+                                    } else {
+                                        theme::panel_bg()
+                                    }),
+                                );
+                                log_row_rects.push((index, response.rect));
+                                let accessible = if entry.location.is_some() {
+                                    format!(
+                                        "{} (click to open source at line {}, column {})",
+                                        entry.render(),
+                                        entry.location.unwrap().0,
+                                        entry.location.unwrap().1
+                                    )
+                                } else {
+                                    entry.render()
+                                };
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::Role::Button,
+                                        true,
+                                        accessible.clone(),
+                                    )
+                                });
+                                ui.ctx().accesskit_node_builder(response.id, |node| {
+                                    node.set_selected(is_selected);
+                                });
+                                if response.clicked() {
+                                    let (shift, command) = ui.input(|input| {
+                                        (input.modifiers.shift, input.modifiers.command)
+                                    });
+                                    click = Some((index, shift, command));
+                                    // LOG-004: a diagnostic line opens and focuses its source.
+                                    if let Some((line, column)) = entry.location {
+                                        jump = Some((line, column));
+                                    }
+                                }
+                                let hover = match entry.location {
+                                    Some((line, column)) => format!(
+                                        "{} — click to open {line}:{column}; right-click for the \
+                                         log actions",
+                                        entry.render()
+                                    ),
+                                    None => format!(
+                                        "{} — click to select; right-click for the log actions",
+                                        entry.render()
+                                    ),
+                                };
+                                let response = response.on_hover_text(hover);
+                                response.context_menu(|ui| {
+                                    if ui
+                                        .add(egui::Button::new("Copy selected"))
+                                        .clicked()
+                                    {
+                                        request = Some(LogRequest::CopySelection);
+                                        ui.close();
+                                    }
+                                    if ui.add(egui::Button::new("Copy all")).clicked() {
+                                        request = Some(LogRequest::CopyAll);
+                                        ui.close();
+                                    }
+                                    if entry.location.is_some()
+                                        && ui
+                                            .add(egui::Button::new("Copy details"))
+                                            .clicked()
+                                    {
+                                        request = Some(LogRequest::CopyDetails(index));
+                                        ui.close();
+                                    }
+                                    if entry.location.is_some()
+                                        && ui
+                                            .add(egui::Button::new("Open source position"))
+                                            .clicked()
+                                    {
+                                        if let Some((line, column)) = entry.location {
+                                            jump = Some((line, column));
+                                        }
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.add(egui::Button::new("Clear log")).clicked() {
+                                        request = Some(LogRequest::Clear);
+                                        ui.close();
+                                    }
+                                    if ui.add(egui::Button::new("Save log…")).clicked() {
+                                        request = Some(LogRequest::Save);
+                                        ui.close();
+                                    }
+                                });
+                                // The anchor of a Shift+click range is recorded with the click.
+                                let _ = anchor;
+                            }
+                        });
+                    // LOG-010: a user who scrolls away from the tail leaves follow mode; the next
+                    // appended record turns it back on (the terminal behaviour a log needs).
+                    let max_offset = (area_output.content_size.y - area_output.inner_rect.height())
+                        .max(0.0);
+                    if (area_output.state.offset().y - max_offset).abs() > 1.0 {
+                        self.log_follow = false;
+                    }
                 },
             );
         });
+        self.log_row_rects = log_row_rects;
+        self.log_pinned_rects = log_pinned_rects;
+        // Apply this pass's selection change and requested action.
+        if let Some((index, shift, command)) = click {
+            if shift {
+                let anchor = self.log_anchor.unwrap_or(index);
+                let (low, high) = if anchor <= index {
+                    (anchor, index)
+                } else {
+                    (index, anchor)
+                };
+                for row in low..=high {
+                    self.log_selection.insert(row);
+                }
+            } else if command {
+                if !self.log_selection.remove(&index) {
+                    self.log_selection.insert(index);
+                }
+                self.log_anchor = Some(index);
+            } else {
+                self.log_selection.clear();
+                self.log_selection.insert(index);
+                self.log_anchor = Some(index);
+            }
+        }
+        if let Some((line, column)) = jump {
+            self.jump_to_source_position(line, column, ui.ctx());
+        }
+        match request {
+            Some(LogRequest::Clear) => {
+                self.workbench.clear_log_active();
+                self.log_selection.clear();
+                self.log_anchor = None;
+                self.log_status = Some("log cleared".to_string());
+            }
+            Some(LogRequest::CopySelection) => {
+                self.copy_log(LogCopy::Selection, ui.ctx());
+            }
+            Some(LogRequest::CopyAll) => {
+                self.copy_log(LogCopy::All, ui.ctx());
+            }
+            Some(LogRequest::CopyDetails(index)) => {
+                let line = self.view.logs.get(index).cloned();
+                if let Some(line) = line {
+                    ui.ctx()
+                        .copy_text(format!("{}\r\n", line.text.trim_end()));
+                    self.log_status =
+                        Some(format!("copied diagnostic details ({} chars)", line.text.len()));
+                }
+            }
+            Some(LogRequest::Save) => {
+                self.save_log();
+            }
+            None => {}
+        }
     }
+
+    /// LOG-005: copies the selected lines or the whole retained log, in painted log order.
+    fn copy_log(&mut self, what: LogCopy, ctx: &egui::Context) {
+        let lines: Vec<String> = match what {
+            LogCopy::Selection => self
+                .log_selection
+                .iter()
+                .filter_map(|index| self.view.logs.get(*index))
+                .map(|line| line.render())
+                .collect(),
+            LogCopy::All => self.view.logs.iter().map(|line| line.render()).collect(),
+        };
+        let count = lines.len();
+        if count == 0 {
+            self.log_status = Some("nothing to copy: no log line is selected".to_string());
+            return;
+        }
+        let mut text = lines.join("\r\n");
+        text.push_str("\r\n");
+        let bytes = text.len();
+        ctx.copy_text(text);
+        self.log_status = Some(format!("copied {count} log line(s), {bytes} bytes"));
+    }
+
+    /// LOG-005 / LOG-006: writes the retained log to a file the user chooses.
+    ///
+    /// When the cap discarded earlier records the file starts with that fact, so an exported log
+    /// can never claim to be the complete run while a prefix is missing.
+    fn save_log(&mut self) {
+        let (title, parent) = {
+            let document = self.workbench.active_document();
+            (
+                document.title.clone(),
+                document
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.parent().map(|parent| parent.to_path_buf())),
+            )
+        };
+        let suggested = format!(
+            "{}.log",
+            title
+                .rsplit_once('.')
+                .map(|(stem, _)| stem)
+                .unwrap_or(title.as_str())
+        );
+        let Some(path) = self.dialogs.save_log(&suggested, parent.as_deref()) else {
+            self.log_status = Some("save log cancelled".to_string());
+            return;
+        };
+        let dropped = self.view.logs_dropped;
+        let mut text = String::new();
+        if dropped > 0 {
+            text.push_str(&format!(
+                "# truncated history: {dropped} earlier record(s) were discarded at the {} \
+                 record cap\r\n",
+                crate::workbench::LOG_CAP
+            ));
+        }
+        for line in &self.view.logs {
+            text.push_str(&line.render());
+            text.push_str("\r\n");
+        }
+        let count = self.view.logs.len();
+        match std::fs::write(&path, text.as_bytes()) {
+            Ok(()) => {
+                self.log_status = Some(format!(
+                    "saved {count} log line(s) to {}",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                self.log_status = Some(format!("save log failed: {error}"));
+            }
+        }
+    }
+
+    /// LOG-004: opens the editor at a diagnostic's source position and highlights its span.
+    ///
+    /// The editor owns the caret, the selection and the scroll, so the jump and the highlight are
+    /// one operation there; the pane focus follows so the keyboard is in the source the click
+    /// named.
+    fn jump_to_source_position(&mut self, line: usize, column: usize, ctx: &egui::Context) {
+        let active = self.workbench.active();
+        if self.editors[active].jump_to_position(line, column).is_some() {
+            self.request_pane_focus(Pane::Editor, ctx);
+            self.pending_focus = Some(surface_id());
+            self.log_status = Some(format!("opened source at {line}:{column}"));
+        } else {
+            self.log_status = Some(format!("no source position {line}:{column} in this buffer"));
+        }
+    }
+
 
     /// LAY-002: the dedicated Symbolic Inspector pane.
     ///
@@ -6284,6 +7006,36 @@ impl WorkbenchApp {
         // On refusal the workbench already logged its [info] advisory; the field is left exactly
         // as typed so the expression can be retried.
     }
+}
+
+/// LOG-010: the fixed height of one painted log row.
+///
+/// Virtualisation requires uniform rows; a log line is one monospace line, so a fixed height is
+/// its exact geometry rather than an approximation.
+const LOG_ROW_HEIGHT: f32 = 15.0;
+
+/// LOG-005: one copy/clear/save request the Logs pane raises in a pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LogRequest {
+    /// Empty the active document's log.
+    Clear,
+    /// Copy the selected rows, in log order.
+    CopySelection,
+    /// Copy every retained row.
+    CopyAll,
+    /// Copy one diagnostic line's full details.
+    CopyDetails(usize),
+    /// Write the retained log to a file.
+    Save,
+}
+
+/// LOG-005: which log lines a copy command covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LogCopy {
+    /// The selected rows only.
+    Selection,
+    /// Every retained row.
+    All,
 }
 
 impl eframe::App for WorkbenchApp {
@@ -7200,6 +7952,27 @@ fn paint_result_section(
     // SYM-006: the engine's own status for this result, beside the result it describes.
     paint_result_status(ui, view);
     let projection = ResultProjection::new(view.result.clone(), view.result_structured.clone());
+    // RES-002: exactness and provenance, from the projection and the committed precision. A
+    // value whose projection states no exactness says so instead of implying it is exact.
+    if let Some(provenance) =
+        crate::results_tree::Provenance::of(&projection, view.precision)
+    {
+        let line = provenance.line();
+        ui.label(
+            RichText::new(&line)
+                .small()
+                .monospace()
+                .color(if provenance.exactness == crate::results_tree::Exactness::Approximate {
+                    theme::warning()
+                } else {
+                    theme::dim()
+                }),
+        )
+        .on_hover_text(
+            "The engine's own kind, exactness and precision for this value, and any print budget \
+             that shortened its rendering",
+        );
+    }
     // RES-004: the one place the expansion map is scoped to its result. A repaint of the same
     // committed snapshot returns false and keeps every path; a commit that publishes a different
     // value replaces the map instead of applying paths that name the old tree.
@@ -7323,15 +8096,50 @@ fn paint_node_body(
     }
 }
 
-/// One scalar row: the projection kind, the value, then the remaining published fields.
+/// RES-002 / RES-010: one scalar row: the projection kind, the value (bounded for paint), then the
+/// remaining published fields in readable words.
+///
+/// The exactness the projection published is painted as `exact` / `approximate` rather than the
+/// raw `exact=true`, and a shortened value names the reason and budget the engine published. A
+/// value with no `exact` field paints no exactness word at all.
 fn paint_scalar(ui: &mut Ui, scalar: &crate::results_tree::ScalarNode) {
+    let (value, hidden) = bounded_value_text(&scalar.value);
+    // RES-010: the paint bound is stated before the value, not after it: a value longer than the
+    // bound pushes anything below it out of the pane, and the note explaining the shortening must
+    // stay visible exactly when it matters.
+    if hidden > 0 {
+        ui.label(
+            RichText::new(bounded_value_note(hidden))
+                .small()
+                .color(theme::warning()),
+        )
+        .on_hover_text("The whole value is kept in memory and copied in full");
+    }
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(&scalar.kind).monospace().color(theme::dim()));
-        ui.label(RichText::new(&scalar.value).monospace().color(theme::text()));
-        for (key, value) in &scalar.details {
-            ui.label(RichText::new(format!("{key}={value}")).small().color(theme::dim()));
+        ui.label(RichText::new(&value).monospace().color(theme::text()));
+        for (key, raw) in &scalar.details {
+            let text = describe_scalar_detail(key, raw);
+            let color = match key.as_str() {
+                "truncationReason" => theme::warning(),
+                "exact" if raw == "false" => theme::warning(),
+                _ => theme::dim(),
+            };
+            ui.label(RichText::new(text).small().monospace().color(color));
         }
     });
+}
+
+/// RES-002: one projection detail field in the pane's words instead of `key=raw`.
+fn describe_scalar_detail(key: &str, raw: &str) -> String {
+    match (key, raw) {
+        ("exact", "true") => "exact".to_string(),
+        ("exact", "false") => "approximate".to_string(),
+        ("truncated", "true") => "truncated".to_string(),
+        ("truncationReason", reason) => format!("truncated: {reason}"),
+        ("budget", budget) => format!("budget {budget}"),
+        _ => format!("{key}={raw}"),
+    }
 }
 
 /// The absent value, painted where a node would be.
@@ -7417,9 +8225,31 @@ fn paint_symbolic_body(ui: &mut Ui, symbolic: &crate::results_tree::SymbolicNode
     }
 }
 
-/// Paints an array's body. Every row is a collapsible group: a 2-D array's rows hold the cells
-/// laid out as columns; a 1-D array's rows hold one element each. A higher-rank array names its
-/// shape and lists its row-major elements exactly like a flat array.
+/// RES-003 / RES-010: above this many cells, an array is painted as a virtualised window.
+///
+/// Small arrays keep the collapsible per-element view (a 2-D matrix shows rows of cells, and a
+/// symbolic cell is itself a node). A large array must not allocate a widget per element: the
+/// pane paints only the rows inside its scroll viewport, so a 100 000-cell matrix costs the same
+/// paint as a 100-cell one.
+const VIRTUAL_ARRAY_CELLS: usize = 400;
+
+/// The fixed height of one painted array row (virtualisation needs uniform rows).
+const ARRAY_ROW_HEIGHT: f32 = 16.0;
+
+/// The greatest height the virtualised array viewport takes inside the pane.
+const ARRAY_VIEWPORT_HEIGHT: f32 = 200.0;
+
+/// The most matrix columns one virtualised row paints; wider rows name the hidden count.
+const MAX_MATRIX_COLUMNS: usize = 12;
+
+/// Paints an array's body. A 2-D array's rows hold the cells laid out as columns; a 1-D array's
+/// rows hold one element each. A higher-rank array names its shape and lists its row-major
+/// elements exactly like a flat array.
+///
+/// RES-003 / RES-010: an array with more than [`VIRTUAL_ARRAY_CELLS`] cells is painted through a
+/// virtualised scroll area instead: only the rows the viewport shows are laid out, each row is one
+/// fixed-height line (so the scroll geometry is exact), and the element kinds stay visible beside
+/// each value. The whole value is still in the model; nothing is dropped from the tree.
 fn paint_array_body(
     ui: &mut Ui,
     array: &ArrayNode,
@@ -7427,6 +8257,10 @@ fn paint_array_body(
     expansion: &mut ExpansionState,
     toggles: &mut Vec<(String, Rect)>,
 ) {
+    if array.elements.len() > VIRTUAL_ARRAY_CELLS {
+        paint_virtual_array(ui, array, path);
+        return;
+    }
     let rows = array.rows();
     if array.is_matrix() && !rows.is_empty() {
         let columns = array.shape[1].max(1);
@@ -7485,6 +8319,93 @@ fn paint_array_body(
             });
         }
     }
+}
+
+/// RES-003 / RES-010: paints a large array one viewport at a time.
+///
+/// The scroll area owns the row geometry, so egui lays out exactly the rows it shows plus a
+/// small margin: a 100 000-cell matrix paints the visible rows (each at most
+/// [`MAX_MATRIX_COLUMNS`] columns) instead of one widget per element. Each row names the element
+/// kinds it shows and how many columns it did not paint, so the shape and kinds stay visible.
+fn paint_virtual_array(ui: &mut Ui, array: &ArrayNode, path: &str) {
+    let rows = array.rows();
+    let (row_count, columns) = if array.is_matrix() && !rows.is_empty() {
+        (rows.len(), array.shape[1].max(1))
+    } else {
+        (array.elements.len(), 1)
+    };
+    let painted_columns = columns.min(MAX_MATRIX_COLUMNS);
+    ui.label(
+        RichText::new(format!(
+            "virtualised: {row_count} row(s) of {columns} cell(s); painting the rows in view \
+             ({} column(s) per row, {} element(s) in the value)",
+            painted_columns,
+            array.elements.len()
+        ))
+        .small()
+        .color(theme::dim()),
+    );
+    if columns > painted_columns {
+        ui.label(
+            RichText::new(format!(
+                "each row names its first {painted_columns} of {columns} columns; the rest stay in \
+                 the value"
+            ))
+            .small()
+            .color(theme::warning()),
+        );
+    }
+    let row_height = ARRAY_ROW_HEIGHT;
+    egui::ScrollArea::vertical()
+        .id_salt(format!("{path}.virtual_rows"))
+        .max_height(ARRAY_VIEWPORT_HEIGHT)
+        .auto_shrink([false, true])
+        .show_rows(ui, row_height, row_count, |ui, range| {
+            for row_index in range {
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [56.0, row_height],
+                        egui::Label::new(
+                            RichText::new(format!("[{row_index}]"))
+                                .small()
+                                .monospace()
+                                .color(theme::accent()),
+                        )
+                        .truncate(),
+                    );
+                    for column_index in 0..painted_columns {
+                        let node = if array.is_matrix() && !rows.is_empty() {
+                            rows.get(row_index)
+                                .and_then(|row| row.get(column_index))
+                        } else {
+                            array.elements.get(row_index)
+                        };
+                        let text = match node {
+                            Some(StructuredNode::Scalar(scalar)) => {
+                                let (value, _) = bounded_value_text(&scalar.value);
+                                format!("{} {value}", scalar.kind)
+                            }
+                            Some(StructuredNode::Null) | None => "Null".to_string(),
+                            Some(other) => other.headline(),
+                        };
+                        ui.add_sized(
+                            [96.0, row_height],
+                            egui::Label::new(
+                                RichText::new(text).small().monospace().color(theme::text()),
+                            )
+                            .truncate(),
+                        );
+                    }
+                    if columns > painted_columns {
+                        ui.label(
+                            RichText::new(format!("… {} more", columns - painted_columns))
+                                .small()
+                                .color(theme::dim()),
+                        );
+                    }
+                });
+            }
+        });
 }
 
 /// Paints a record body: every published field is one collapsible node. Its header names the
@@ -7597,6 +8518,263 @@ fn variable_column_widths(available: f32) -> [f32; 3] {
     let display = (usable - name - kind).max(40.0);
     [name, kind, display]
 }
+
+/// The width of one trailing row action (`×` delete, and the detail view's own controls).
+const ROW_ACTION_WIDTH: f32 = 26.0;
+
+/// RES-010: the most characters one value label paints.
+///
+/// A million-digit value must not become one million-glyph galley: the pane paints a bounded
+/// prefix, states how much it hid and keeps the full text available to the copy command and to
+/// the model. The bound is a paint bound only — nothing truncates the value in memory.
+pub const MAX_PAINTED_VALUE_CHARS: usize = 4096;
+
+/// RES-010: bounds one value string for painting, returning the text and how many characters were
+/// withheld (`0` when the whole value is painted).
+fn bounded_value_text(text: &str) -> (String, usize) {
+    let total = text.chars().count();
+    if total <= MAX_PAINTED_VALUE_CHARS {
+        return (text.to_string(), 0);
+    }
+    let head: String = text.chars().take(MAX_PAINTED_VALUE_CHARS).collect();
+    (head, total - MAX_PAINTED_VALUE_CHARS)
+}
+
+/// RES-010 / WKS-006: the one-line note a bounded value paints under itself.
+fn bounded_value_note(hidden: usize) -> String {
+    format!(
+        "… {hidden} more character(s) not painted (the full value is kept and copied); \
+         the pane paints at most {MAX_PAINTED_VALUE_CHARS}"
+    )
+}
+
+/// WKS-006: the detail view of one variable, painted under the variables table.
+///
+/// The table cell is a bounded preview; this view is the whole value the committed snapshot
+/// holds — the full display text, and the engine's published structure behind it (shape and
+/// element kinds for an array, type and fields for a record, pretty/canonical/domain/free symbols
+/// for a symbolic value, the real and imaginary parts for a complex number). The text is kept
+/// untruncated in memory; only the paint is bounded, and the copy command carries every character.
+fn paint_variable_detail(ui: &mut Ui, row: &crate::workspace_table::VariableRow) {
+    ui.add_space(4.0);
+    ui.scope_builder(
+        UiBuilder::new()
+            .accessibility_role(egui::Role::Group)
+            .accessibility_label(format!("Variable details · {}", row.name)),
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!("Details · {}", row.name))
+                        .small()
+                        .strong()
+                        .color(theme::accent()),
+                );
+                ui.label(
+                    RichText::new(&row.preview.type_label)
+                        .small()
+                        .monospace()
+                        .color(theme::dim()),
+                );
+                if row.preview.shortened {
+                    ui.label(
+                        RichText::new("preview shortened in the cell")
+                            .small()
+                            .color(theme::warning()),
+                    );
+                }
+            });
+            let (shown, hidden) = bounded_value_text(&row.display);
+            ui.add(
+                egui::Label::new(RichText::new(&shown).monospace().small().color(theme::text()))
+                    .wrap(),
+            );
+            if hidden > 0 {
+                ui.label(
+                    RichText::new(bounded_value_note(hidden))
+                        .small()
+                        .color(theme::warning()),
+                );
+            }
+            if let Some(structured) = &row.structured {
+                paint_value_structure(ui, structured);
+            } else {
+                ui.label(
+                    RichText::new(
+                        "The engine published no structured projection for this value; only the \
+                         display text is available.",
+                    )
+                    .small()
+                    .color(theme::dim()),
+                );
+            }
+            ui.horizontal(|ui| {
+                let copy = ui.add(egui::Button::new(RichText::new("Copy value").small()));
+                copy.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        true,
+                        format!("Copy value of {}", row.name),
+                    )
+                });
+                if copy.clicked() {
+                    copy_to_clipboard(ui, &format!("value of {}", row.name), &row.display);
+                }
+                ui.label(
+                    RichText::new(format!("{} characters", row.display.chars().count()))
+                        .small()
+                        .color(theme::dim()),
+                )
+                .on_hover_text("The full value, not the preview and not the painted prefix");
+            });
+        },
+    );
+    ui.add_space(4.0);
+}
+
+/// WKS-006 / RES-002: the published structure of one value, as readable rows.
+///
+/// Every field named here is one the engine's projection actually publishes; a field the
+/// projection omitted is not invented.
+fn paint_value_structure(ui: &mut Ui, structured: &lovelace_json::Json) {
+    let text = |key: &str| -> Option<String> {
+        match structured.get(key) {
+            Some(lovelace_json::Json::Str(value)) => Some(value.clone()),
+            Some(lovelace_json::Json::Num(value)) => Some(value.clone()),
+            Some(lovelace_json::Json::Bool(value)) => Some(value.to_string()),
+            _ => None,
+        }
+    };
+    let kind = text("kind").unwrap_or_else(|| "value".to_string());
+    ui.label(
+        RichText::new(format!("structured · {kind}"))
+            .small()
+            .color(theme::dim()),
+    );
+    if let Some(type_name) = text("type") {
+        ui.label(
+            RichText::new(format!("type       {type_name}"))
+                .small()
+                .monospace()
+                .color(theme::text()),
+        );
+    }
+    if let Some(shape) = structured.get("shape").and_then(|shape| shape.as_arr()) {
+        let shape: Vec<String> = shape
+            .iter()
+            .map(|item| match item {
+                lovelace_json::Json::Num(number) => number.clone(),
+                lovelace_json::Json::Str(value) => value.clone(),
+                _ => "?".to_string(),
+            })
+            .collect();
+        ui.label(
+            RichText::new(format!("shape      {}", shape.join(" x ")))
+                .small()
+                .monospace()
+                .color(theme::text()),
+        );
+    }
+    let mut scalar_rows: Vec<(String, String)> = Vec::new();
+    for key in [
+        "value",
+        "re",
+        "im",
+        "pretty",
+        "canonical",
+        "domain",
+        "nodeCount",
+        "exact",
+        "truncated",
+        "truncationReason",
+        "budget",
+    ] {
+        if let Some(value) = text(key) {
+            scalar_rows.push((key.to_string(), value));
+        }
+    }
+    if let Some(symbols) = structured.get("freeSymbols").and_then(|s| s.as_arr()) {
+        let symbols: Vec<String> = symbols
+            .iter()
+            .filter_map(|item| match item {
+                lovelace_json::Json::Str(value) => Some(value.clone()),
+                _ => None,
+            })
+            .collect();
+        if !symbols.is_empty() {
+            scalar_rows.push(("freeSymbols".to_string(), symbols.join(", ")));
+        }
+    }
+    for (key, value) in scalar_rows {
+        let (shown, hidden) = bounded_value_text(&value);
+        let line = format!("{key:<10} {shown}");
+        ui.add(
+            egui::Label::new(RichText::new(line).small().monospace().color(theme::text())).wrap(),
+        );
+        if hidden > 0 {
+            ui.label(
+                RichText::new(bounded_value_note(hidden))
+                    .small()
+                    .color(theme::warning()),
+            );
+        }
+    }
+    // Arrays and records: the published children, with element kinds, in publication order.
+    let children: Vec<lovelace_json::Json> = structured
+        .get("elements")
+        .and_then(|elements| elements.as_arr())
+        .map(|elements| elements.to_vec())
+        .unwrap_or_else(|| {
+            structured
+                .get("fields")
+                .and_then(|fields| fields.as_arr())
+                .map(|fields| fields.to_vec())
+                .unwrap_or_default()
+        });
+    for (index, child) in children.iter().take(MAX_STRUCTURE_CHILDREN).enumerate() {
+        let child_kind = child
+            .get("kind")
+            .and_then(|kind| kind.as_str())
+            .unwrap_or("value");
+        let child_value = match child {
+            lovelace_json::Json::Str(value) => value.clone(),
+            _ => child
+                .get("value")
+                .and_then(|value| match value {
+                    lovelace_json::Json::Str(text) => Some(text.clone()),
+                    lovelace_json::Json::Num(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .or_else(|| child.get("pretty").and_then(|pretty| pretty.as_str().map(str::to_string)))
+                .unwrap_or_default(),
+        };
+        let name = child
+            .get("name")
+            .and_then(|name| name.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("[{index}]"));
+        let (shown, _) = bounded_value_text(&child_value);
+        ui.label(
+            RichText::new(format!("  {name}  {child_kind}  {shown}"))
+                .small()
+                .monospace()
+                .color(theme::dim()),
+        );
+    }
+    if children.len() > MAX_STRUCTURE_CHILDREN {
+        ui.label(
+            RichText::new(format!(
+                "  … {} more element(s) in the value; the detail view paints the first {}",
+                children.len() - MAX_STRUCTURE_CHILDREN,
+                MAX_STRUCTURE_CHILDREN
+            ))
+            .small()
+            .color(theme::warning()),
+        );
+    }
+}
+
+/// WKS-006 / RES-010: the most structured children the detail view paints at once.
+pub const MAX_STRUCTURE_CHILDREN: usize = 64;
 
 /// The fixed widths of the functions table's three columns, fitted to the pane.
 fn function_column_widths(available: f32) -> [f32; 3] {
@@ -7803,6 +8981,66 @@ fn header_row(ui: &mut Ui, header: Rect, add: impl FnOnce(&mut Ui)) {
     ui.scope_builder(header_ui(header), |ui| {
         ui.horizontal_wrapped(add);
     });
+}
+
+/// PLT-008 acceptance seam: the capture the window loads, optionally replaced by an invalid one.
+///
+/// The shipped window can only receive a capture the engine produced, and the engine never
+/// produces a malformed or oversized document. To observe the pane's bounded failure in the real
+/// window, `LOVELACE_PLOT_FAULT=malformed` or `=oversized` replaces the capture bytes at the same
+/// point the window would load them; the fault is off unless the variable is set, no script can
+/// reach it, and it changes nothing about how the pane handles the document. This mirrors the
+/// `LOVELACE_ENGINE_FAULT` seam the RUN-017 recovery capture already uses.
+fn faulted_capture_svg(svg: &str) -> String {
+    match std::env::var("LOVELACE_PLOT_FAULT").ok().as_deref() {
+        Some("malformed") => {
+            // Truncated mid-path: the exact defect class a damaged capture would show.
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\"><path d=\"M 0 0 L"
+                .to_string()
+        }
+        Some("oversized") => {
+            // One byte over the pane's cap, so the refusal is the size rule and not a parse error.
+            let padding = "x".repeat(crate::ui::plot::MAX_SVG_BYTES + 1);
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\"><desc>{padding}</desc></svg>"
+            )
+        }
+        Some("heavy") => {
+            // PLT-012: a document whose rasterisation is heavy but whose parse is not, so the
+            // window capture can show how many frames the UI painted while the canvas worker
+            // rasterised it. Four series of 30 000 points each: 120 000 points inside ~1.6 MiB,
+            // drawn as four dense bands rather than one solid block.
+            let mut svg = String::from(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\">\
+                 <rect width=\"800\" height=\"600\" fill=\"#ffffff\"/>",
+            );
+            for (series, (base, stroke)) in [
+                (110.0f32, "#e6194b"),
+                (240.0, "#3cb44b"),
+                (370.0, "#4363d8"),
+                (500.0, "#f58231"),
+            ]
+            .iter()
+            .enumerate()
+            {
+                svg.push_str(&format!(
+                    "<polyline fill=\"none\" stroke=\"{stroke}\" stroke-width=\"1\" points=\""
+                ));
+                for point in 0..30_000 {
+                    let x = 8.0 + point as f32 * (784.0 / 29_999.0);
+                    let y = base
+                        + 42.0
+                            * ((point as f32 * 0.19) + series as f32 * 1.7).sin()
+                        + 10.0 * ((point as f32 * 0.031) + series as f32).cos();
+                    svg.push_str(&format!("{x:.1},{y:.1} "));
+                }
+                svg.push_str("\"/>");
+            }
+            svg.push_str("</svg>");
+            svg
+        }
+        _ => svg.to_string(),
+    }
 }
 
 /// The kind vocabulary, as `label: marker` pairs, for the pane header hover and the empty pane.
@@ -10051,6 +11289,8 @@ mod tests {
             plot: None,
             output: Vec::new(),
             logs: Vec::new(),
+            logs_dropped: 0,
+            workspace_revision: 1,
             diagnostic: None,
             run_state: RunState::Idle,
             buffer_revision: crate::execution::SourceRevision(1),
@@ -11760,6 +13000,7 @@ mod tests {
     struct ScriptedDialogs {
         open: std::collections::VecDeque<Option<PathBuf>>,
         save: std::collections::VecDeque<Option<PathBuf>>,
+        log: std::collections::VecDeque<Option<PathBuf>>,
     }
 
     impl ScriptedDialogs {
@@ -11767,6 +13008,7 @@ mod tests {
             ScriptedDialogs {
                 open: paths.into_iter().collect(),
                 save: std::collections::VecDeque::new(),
+                log: std::collections::VecDeque::new(),
             }
         }
 
@@ -11774,6 +13016,16 @@ mod tests {
             ScriptedDialogs {
                 open: std::collections::VecDeque::new(),
                 save: paths.into_iter().collect(),
+                log: std::collections::VecDeque::new(),
+            }
+        }
+
+        /// LOG-005: a dialogs queue whose Save log answer is `paths`.
+        fn saving_log(paths: impl IntoIterator<Item = Option<PathBuf>>) -> ScriptedDialogs {
+            ScriptedDialogs {
+                open: std::collections::VecDeque::new(),
+                save: std::collections::VecDeque::new(),
+                log: paths.into_iter().collect(),
             }
         }
     }
@@ -11789,6 +13041,14 @@ mod tests {
             _initial_dir: Option<&std::path::Path>,
         ) -> Option<PathBuf> {
             self.save.pop_front().flatten()
+        }
+
+        fn save_log(
+            &mut self,
+            _suggested: &str,
+            _initial_dir: Option<&std::path::Path>,
+        ) -> Option<PathBuf> {
+            self.log.pop_front().flatten()
         }
     }
 
@@ -14175,6 +15435,182 @@ mod tests {
         }
     }
 
+    /// PLT-005/PLT-009: an engine whose figure is named after the `plot("…")` title in the source
+    /// it evaluated, so two tabs hold visibly different charts and a tab switch can be checked
+    /// for the right one.
+    struct PerDocumentPlotEngine {
+        title: String,
+    }
+
+    impl Default for PerDocumentPlotEngine {
+        fn default() -> PerDocumentPlotEngine {
+            PerDocumentPlotEngine {
+                title: "untitled".to_string(),
+            }
+        }
+    }
+
+    impl Evaluator for PerDocumentPlotEngine {
+        fn eval(&mut self, src: &str) -> Result<String, String> {
+            if let Some(start) = src.find("plot(\"") {
+                let rest = &src[start + 6..];
+                if let Some(end) = rest.find('"') {
+                    self.title = rest[..end].to_string();
+                }
+            }
+            Ok("1".to_string())
+        }
+
+        fn last_plot(&self) -> Option<crate::engine::PlotCapture> {
+            Some(crate::engine::PlotCapture {
+                path: format!("{}.svg", self.title),
+                title: self.title.clone(),
+                svg: format!(
+                    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"600\">\
+                     <rect width=\"800\" height=\"600\" fill=\"#ffffff\"/>\
+                     <text x=\"20\" y=\"40\" fill=\"#000000\">{}</text>\
+                     <polyline fill=\"none\" stroke=\"#e6194b\" stroke-width=\"2\" points=\"40,80 400,500\"/>\
+                     </svg>",
+                    self.title
+                ),
+            })
+        }
+    }
+
+    /// A two-tab workbench whose figures are named by each tab's own script.
+    fn two_plot_tabs() -> WorkbenchApp {
+        let mut workbench =
+            Workbench::with_factory(Box::new(|| Box::new(PerDocumentPlotEngine::default())));
+        workbench.set_source(0, "plot(\"alpha\")".to_string());
+        workbench.new_document();
+        workbench.set_source(1, "plot(\"beta\")".to_string());
+        workbench.set_active(0);
+        WorkbenchApp::with_workbench(workbench)
+    }
+
+    /// Runs the active tab and paints the frame that loads its capture.
+    fn run_and_settle_plot(ctx: &egui::Context, app: &mut WorkbenchApp) {
+        frame(ctx, app, Vec::new());
+        let _ = run_from_keyboard(ctx, app);
+        frame(ctx, app, Vec::new());
+    }
+
+    /// PLT-005: every chart appears with its title, its document and the run that produced it,
+    /// and selecting another tab replaces the chart instead of leaving the previous tab's on
+    /// screen.
+    #[test]
+    fn plt_005_the_plot_names_its_document_and_run_and_a_tab_switch_never_shows_the_other_chart() {
+        let ctx = egui::Context::default();
+        let mut app = two_plot_tabs();
+
+        run_and_settle_plot(&ctx, &mut app);
+        let first = {
+            let document = &app.workbench.documents()[0];
+            (
+                document.title.clone(),
+                document.id.0,
+                document.run_id().map(|run| run.0),
+            )
+        };
+        assert_eq!(app.plot.title.as_deref(), Some("alpha"));
+        let provenance = app.plot.provenance.clone().expect("tab 1 provenance");
+        assert_eq!(provenance.document, first.0, "the document title");
+        assert_eq!(provenance.document_id, first.1, "the document id");
+        assert_eq!(provenance.run, first.2, "the run id");
+        assert!(
+            provenance.label().contains("run "),
+            "the provenance line does not name the run: {}",
+            provenance.label()
+        );
+
+        // Selecting the other tab and running it loads that tab's own chart and identity.
+        app.workbench.set_active(1);
+        frame(&ctx, &mut app, Vec::new());
+        assert!(
+            app.plot.is_empty(),
+            "a tab that has not run kept the other tab's chart"
+        );
+        run_and_settle_plot(&ctx, &mut app);
+        let second = {
+            let document = &app.workbench.documents()[1];
+            (document.title.clone(), document.id.0)
+        };
+        assert_eq!(
+            app.plot.title.as_deref(),
+            Some("beta"),
+            "the plot pane still shows the other tab's chart"
+        );
+        let provenance = app.plot.provenance.clone().expect("tab 2 provenance");
+        assert_eq!(provenance.document, second.0);
+        assert_eq!(provenance.document_id, second.1);
+
+        // Back to the first tab: its own chart again.
+        app.workbench.set_active(0);
+        frame(&ctx, &mut app, Vec::new());
+        assert_eq!(app.plot.title.as_deref(), Some("alpha"));
+
+        // A tab that has never run shows the empty state, not the previous tab's chart.
+        app.workbench.new_document();
+        app.workbench.set_active(2);
+        frame(&ctx, &mut app, Vec::new());
+        assert!(
+            app.plot.is_empty(),
+            "a tab without a capture kept the previous tab's chart"
+        );
+        assert!(
+            app.plot.provenance.is_none(),
+            "a chartless tab kept a provenance"
+        );
+        assert!(
+            app.plot.title.is_none(),
+            "a chartless tab kept the previous chart's title"
+        );
+    }
+
+    /// PLT-009: a successful run's chart stays inspectable across edits and tab switches until a
+    /// later run replaces it, and each tab keeps its own.
+    #[test]
+    fn plt_009_the_last_plot_stays_inspectable_until_replaced_and_is_isolated_between_tabs() {
+        let ctx = egui::Context::default();
+        let mut app = two_plot_tabs();
+
+        run_and_settle_plot(&ctx, &mut app);
+        assert_eq!(app.plot.title.as_deref(), Some("alpha"));
+
+        // An edit does not run anything: the last chart must stay inspectable.
+        frame(&ctx, &mut app, vec![egui::Event::Text(" ".to_string())]);
+        assert_eq!(
+            app.plot.title.as_deref(),
+            Some("alpha"),
+            "an edit cleared the last plot"
+        );
+        assert!(!app.plot.is_empty());
+
+        // Switching tabs and back keeps each tab's own chart.
+        app.workbench.set_active(1);
+        frame(&ctx, &mut app, Vec::new());
+        assert!(app.plot.is_empty(), "tab 2 has not run yet");
+        run_and_settle_plot(&ctx, &mut app);
+        assert_eq!(app.plot.title.as_deref(), Some("beta"));
+        app.workbench.set_active(0);
+        frame(&ctx, &mut app, Vec::new());
+        assert_eq!(
+            app.plot.title.as_deref(),
+            Some("alpha"),
+            "tab 1 lost its plot while tab 2 ran"
+        );
+
+        // A later successful run replaces the chart with its own.
+        app.workbench
+            .set_source(0, "plot(\"gamma\")".to_string());
+        run_and_settle_plot(&ctx, &mut app);
+        assert_eq!(
+            app.plot.title.as_deref(),
+            Some("gamma"),
+            "the newer run did not replace the chart"
+        );
+    }
+
     /// The document the failing engine decorates: line 2 is the failed statement
     /// (`y = sqrt(x)`, brackets at columns 7 and 9) and line 3 carries a `->` pair for the
     /// ligature rendering. A 1-based caret column 9 is inside the pair.
@@ -15965,6 +17401,900 @@ mod tests {
             "the sizes and the visibility must come from the same settings document"
         );
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// WKS-003 at the paint layer: every variable row carries its own delete control, and
+    /// clicking it removes exactly that variable, leaves the function rows and the result alone,
+    /// and moves the workspace revision. The click is a real pointer click on the painted rect.
+    #[test]
+    fn wks_003_the_painted_row_delete_removes_only_that_variable() {
+        let mut app = fake_app_with_source("alpha = 1\nbeta = 2\n");
+        let ctx = egui::Context::default();
+        assert!(app.workbench.run_active());
+        assert!(app.workbench.wait_until_idle(Duration::from_secs(5)));
+        frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+        let function_count = app.functions_table.rows.len();
+        let revision = app.view.workspace_revision;
+        let controls: Vec<String> = app
+            .variable_action_rects
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect();
+        assert!(
+            controls.iter().any(|key| key == "delete beta"),
+            "the beta row must paint its delete control: {controls:?}"
+        );
+        assert!(
+            controls.iter().any(|key| key == "details beta"),
+            "and its detail control: {controls:?}"
+        );
+        let beta = app
+            .variable_action_rects
+            .iter()
+            .find(|(key, _)| key == "delete beta")
+            .map(|(_, rect)| *rect)
+            .expect("the delete control of beta");
+        pointer_click_sized(&ctx, &mut app, vec2(1600.0, 1000.0), beta.center());
+        // The tables are rebuilt from the committed capture at the start of the next pass, so the
+        // frame after the click is the one that shows the deletion.
+        frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+        let names: Vec<String> = app
+            .variables_table
+            .rows
+            .iter()
+            .map(|row| row.name.clone())
+            .collect();
+        assert!(
+            !names.iter().any(|name| name == "beta"),
+            "only beta is deleted: {names:?}"
+        );
+        assert!(
+            names.iter().any(|name| name == "alpha"),
+            "alpha survives: {names:?}"
+        );
+        assert_eq!(
+            app.functions_table.rows.len(),
+            function_count,
+            "the function table is unchanged"
+        );
+        assert_eq!(
+            app.view.workspace_revision,
+            revision + 1,
+            "the workspace revision moved"
+        );
+        assert!(
+            app.view
+                .logs
+                .iter()
+                .any(|line| line.text.contains("Variable deleted: beta")),
+            "the delete is reported in the log: {:?}",
+            app.view.logs.last()
+        );
+    }
+
+    /// WKS-004 at the paint layer: Clear Variables empties the variables table and keeps every
+    /// user function row in the functions table, and the counts follow the same snapshot.
+    #[test]
+    fn wks_004_clear_variables_keeps_the_painted_function_rows() {
+        let mut workbench = Workbench::with_factory(Box::new(|| {
+            Box::new(crate::engine::RealEngine::new())
+        }));
+        workbench.set_source(
+            0,
+            "func twice(x) = x * 2\nanswer = 21\ntwice(answer)\n".to_string(),
+        );
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(10)));
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        assert!(
+            app.variables_table
+                .rows
+                .iter()
+                .any(|row| row.name == "answer"),
+            "the run published answer"
+        );
+        let functions_before = app.functions_table.rows.len();
+        assert!(app.workbench.clear_variables_active().is_some());
+        frame(&ctx, &mut app, Vec::new());
+        assert!(
+            app.variables_table.rows.is_empty(),
+            "the variables table is emptied: {:?}",
+            app.variables_table.rows
+        );
+        assert_eq!(
+            app.functions_table.rows.len(),
+            functions_before,
+            "the functions table keeps every row"
+        );
+        assert!(
+            app.functions_table
+                .rows
+                .iter()
+                .any(|row| row.name == "twice" && row.origin_label() == "user"),
+            "the user function row survives"
+        );
+        assert_eq!(
+            app.view.workspace_revision,
+            2,
+            "the clear moved the workspace revision once"
+        );
+    }
+
+    /// WKS-006 at the paint layer: the variables table paints a type-aware preview, and the
+    /// row's detail view opens the full value the preview shortened.
+    #[test]
+    fn wks_006_the_table_paints_a_typed_preview_and_the_detail_opens_the_full_value() {
+        let mut workbench = Workbench::with_factory(Box::new(|| {
+            Box::new(crate::engine::RealEngine::new())
+        }));
+        workbench.set_source(0, "m = [[1, 2], [3, 4]]\ndivrem(7, 2)\n".to_string());
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(10)));
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+        let m = app
+            .variables_table
+            .rows
+            .iter()
+            .find(|row| row.name == "m")
+            .expect("m is a committed variable");
+        assert_eq!(m.preview.type_label, "2 x 2 matrix");
+        assert_eq!(m.preview.text, "[1, 2]; [3, 4]");
+        let details = app
+            .variable_action_rects
+            .iter()
+            .find(|(key, _)| key == "details m")
+            .map(|(_, rect)| *rect)
+            .expect("the m row paints its detail control");
+        pointer_click_sized(&ctx, &mut app, vec2(1600.0, 1000.0), details.center());
+        assert_eq!(
+            app.variable_detail.as_deref(),
+            Some("m"),
+            "the detail control opens the row's detail: rects={:?}",
+            app.variable_action_rects
+        );
+        let mut texts = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let view = app.view.clone();
+                let row = app
+                    .variables_table
+                    .rows
+                    .iter()
+                    .find(|row| row.name == "m")
+                    .cloned()
+                    .expect("the row");
+                let _ = view;
+                paint_variable_detail(ui, &row);
+            },
+        );
+        output.textures_delta.clear();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        assert!(
+            texts.iter().any(|text| text == "Details · m"),
+            "the detail view names the variable: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "structured · Array"),
+            "the detail view names the published structure: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "shape      2 x 2"),
+            "the detail view states the shape: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.trim_start().starts_with("[0]  Natural")),
+            "the detail view lists the element kinds: {texts:?}"
+        );
+    }
+
+    /// WKS-009: a tab switch repaints the workspace and the plot from the newly active document
+    /// in one pass, even while the other tab's run is still in flight.
+    #[test]
+    fn wks_009_a_tab_switch_matches_the_workspace_and_plot_while_the_other_tab_runs() {
+        let gate = Arc::new(Gate::default());
+        let mut workbench = gated_workbench(Arc::clone(&gate));
+        workbench.set_source(0, "alpha = 1\n".to_string());
+        workbench.set_source(1, "beta = 2\n".to_string());
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        // Tab A's engine blocks inside the run, so tab B's frame happens during A's run.
+        assert!(app.workbench.run_active());
+        assert_eq!(app.workbench.documents()[0].state(), RunState::Queued);
+        app.workbench.set_active(1);
+        let mut texts = Vec::new();
+        let mut output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            Vec::new(),
+            Default::default(),
+        );
+        output.textures_delta.clear();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        assert!(
+            app.workbench.documents()[0].state().is_in_flight(),
+            "tab A is still running during the switch"
+        );
+        assert_eq!(
+            app.view.buffer_revision,
+            crate::execution::SourceRevision(1),
+            "the frame's view is the active document's"
+        );
+        assert!(
+            app.variables_table
+                .rows
+                .iter()
+                .all(|row| row.name != "alpha"),
+            "tab A's variables are not shown on tab B: {:?}",
+            app.variables_table.rows
+        );
+        assert!(
+            app.plot.provenance.is_none(),
+            "tab B has no plot capture, so no other tab's chart can be shown"
+        );
+        assert!(
+            !texts.iter().any(|text| text.contains("alpha")),
+            "the painted frame shows no tab-A workspace text: {texts:?}"
+        );
+        gate.release();
+    }
+
+    /// RES-002 at the paint layer: the result section states the kind, the exactness, the
+    /// precision and any truncation reason the projection published.
+    #[test]
+    fn res_002_the_result_paints_exactness_precision_and_truncation() {
+        use lovelace_json::Json;
+        let ctx = egui::Context::default();
+        let mut view = result_view("3.14159...");
+        view.precision = 1000;
+        view.result_structured = Some(Json::obj([
+            ("kind", Json::Str("Real".to_string())),
+            ("value", Json::Str("3.14159265".to_string())),
+            ("exact", Json::Bool(false)),
+            ("truncated", Json::Bool(true)),
+            ("truncationReason", Json::Str("digit-cap".to_string())),
+            ("budget", Json::Num("1000".to_string())),
+        ]));
+        let mut expansion = ExpansionState::new();
+        let mut toggles = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(460.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let _ = paint_result_section(ui, &view, 420.0, &mut expansion, &mut toggles);
+                });
+            },
+        );
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        assert!(
+            texts.iter().any(|text| text
+                == "Real · approximate · precision 1000 · truncated: digit-cap (budget 1000)"),
+            "the provenance line: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "approximate"),
+            "the scalar row states approximate, not exact: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "truncated: digit-cap"),
+            "the reason is in words: {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|text| text == "exact=true"),
+            "no raw exact=true field is painted: {texts:?}"
+        );
+    }
+
+    /// RES-005 at the paint layer: the symbolic result's pretty text, canonical form, domain,
+    /// free symbols and node count are all painted from the projection.
+    #[test]
+    fn res_005_the_symbolic_result_paints_pretty_canonical_domain_free_symbols_and_node_count() {
+        use lovelace_json::Json;
+        let ctx = egui::Context::default();
+        let mut view = symbolic_result_view();
+        view.result_structured = Some(Json::obj([
+            ("kind", Json::Str("Symbolic".to_string())),
+            ("pretty", Json::Str("x^2 - 1".to_string())),
+            (
+                "canonical",
+                Json::Str("(add (pow (sym x) (rat 2 1)) (rat -1 1))".to_string()),
+            ),
+            ("domain", Json::Str("real".to_string())),
+            ("freeSymbols", Json::str_array(["x"])),
+            ("nodeCount", Json::Str("5".to_string())),
+            ("exact", Json::Bool(true)),
+        ]));
+        let mut expansion = ExpansionState::new();
+        let mut toggles = Vec::new();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(460.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let _ = paint_result_section(ui, &view, 420.0, &mut expansion, &mut toggles);
+                });
+            },
+        );
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        assert!(
+            texts.iter().any(|text| text == "pretty     x^2 - 1"),
+            "pretty: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text
+                == "canonical  (add (pow (sym x) (rat 2 1)) (rat -1 1))"),
+            "canonical: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "domain     real"),
+            "domain: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "free       x"),
+            "free symbols: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text == "nodes      5"),
+            "node count: {texts:?}"
+        );
+    }
+
+    /// An evaluator that counts how often it is asked to evaluate and publishes one structured
+    /// Natural value per evaluation. Used to prove that inspecting a captured result is not an
+    /// evaluation.
+    struct CountingEvaluator {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::engine::Evaluator for CountingEvaluator {
+        fn eval(&mut self, _src: &str) -> Result<String, String> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("41".to_string())
+        }
+
+        fn variables(&self) -> Vec<(String, String)> {
+            vec![("answer".to_string(), "41".to_string())]
+        }
+
+        fn state(&self) -> Option<crate::engine::EngineState> {
+            Some(crate::engine::EngineState {
+                variables: vec![crate::engine::EngineVariable {
+                    name: "answer".to_string(),
+                    kind: "Natural".to_string(),
+                    display: "41".to_string(),
+                    structured: Some(lovelace_json::Json::obj([
+                        ("kind", lovelace_json::Json::Str("Natural".to_string())),
+                        ("value", lovelace_json::Json::Str("41".to_string())),
+                        ("exact", lovelace_json::Json::Bool(true)),
+                    ])),
+                }],
+                functions: Vec::new(),
+            })
+        }
+
+        fn last_structured(&self) -> Option<lovelace_json::Json> {
+            Some(lovelace_json::Json::obj([
+                ("kind", lovelace_json::Json::Str("Natural".to_string())),
+                ("value", lovelace_json::Json::Str("41".to_string())),
+                ("exact", lovelace_json::Json::Bool(true)),
+            ]))
+        }
+    }
+
+    /// RES-006: selecting result detail uses the captured value and revision; painting and
+    /// expanding it evaluates nothing, and an edit after the run does not recompute the value
+    /// being inspected.
+    #[test]
+    fn res_006_inspecting_a_result_never_evaluates_again_and_survives_a_source_edit() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let mut workbench = Workbench::with_factory(Box::new(move || {
+            Box::new(CountingEvaluator {
+                calls: Arc::clone(&counter),
+            })
+        }));
+        workbench.set_source(0, "answer = 1 + 1\nanswer + 1\n".to_string());
+        assert!(workbench.run_active());
+        assert!(workbench.wait_until_idle(Duration::from_secs(5)));
+        let evaluations = calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(evaluations, 2, "the two statements evaluated once each");
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+        let captured = app.view.result.clone();
+        let revision = app.view.revision;
+        // Expand every painted result header: inspection is a model read, never an evaluation.
+        let mut expansion = ExpansionState::new();
+        let mut toggles = Vec::new();
+        let view = app.view.clone();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(460.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let _ = paint_result_section(ui, &view, 420.0, &mut expansion, &mut toggles);
+                });
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            evaluations,
+            "painting the result performed no evaluation"
+        );
+        // Edit the source after the run: the inspected value and its revision stay as committed.
+        app.workbench.set_source(0, "answer = 99\n".to_string());
+        frame(&ctx, &mut app, Vec::new());
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            evaluations,
+            "editing the source performed no evaluation"
+        );
+        assert_eq!(
+            app.view.result, captured,
+            "the inspected value is the captured one, not recomputed"
+        );
+        assert_eq!(
+            app.view.revision, revision,
+            "the inspected result keeps its committed revision"
+        );
+        assert!(
+            app.view.buffer_revision.0 > app.view.revision.0,
+            "the buffer moved on while the inspected value stayed committed"
+        );
+    }
+
+    /// RES-003 / RES-010 at the paint layer: a 100 000-cell matrix is painted as a virtualised
+    /// window (a bounded number of widgets naming its shape and element kinds), and a
+    /// million-digit value paints a bounded prefix with a note while the full value stays in the
+    /// model.
+    #[test]
+    fn res_010_a_huge_result_paints_a_bounded_number_of_widgets() {
+        use lovelace_json::Json;
+        let ctx = egui::Context::default();
+        let cell = |index: usize| {
+            Json::obj([
+                ("kind", Json::Str("Natural".to_string())),
+                ("value", Json::Str(index.to_string())),
+                ("exact", Json::Bool(true)),
+            ])
+        };
+        let mut view = result_view("huge");
+        view.result_structured = Some(Json::obj([
+            ("kind", Json::Str("Array".to_string())),
+            ("type", Json::Str("Array".to_string())),
+            ("shape", Json::num_array(vec![316, 316])),
+            ("elements", Json::Arr((0..99_856).map(cell).collect())),
+            ("exact", Json::Bool(true)),
+        ]));
+        let mut expansion = ExpansionState::new();
+        let mut toggles = Vec::new();
+        let started = std::time::Instant::now();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(460.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let _ = paint_result_section(ui, &view, 420.0, &mut expansion, &mut toggles);
+                });
+            },
+        );
+        let elapsed = started.elapsed();
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        assert!(
+            texts.iter().any(|text| text.starts_with("virtualised:")),
+            "the large array states its virtualised presentation: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("316 x 316")),
+            "the shape is visible: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("Natural")),
+            "the element kinds are visible: {texts:?}"
+        );
+        assert!(
+            texts.len() < 400,
+            "a 100 000-cell matrix must not allocate a widget per element: {} painted texts",
+            texts.len()
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the huge matrix paint must not block the UI: {elapsed:?}"
+        );
+
+        // A million-digit value: one bounded label plus a note, never a million-glyph galley.
+        let digits = "9".repeat(1_000_000);
+        let mut big = result_view(&digits);
+        big.result_structured = Some(Json::obj([
+            ("kind", Json::Str("Natural".to_string())),
+            ("value", Json::Str(digits.clone())),
+            ("exact", Json::Bool(true)),
+        ]));
+        let mut expansion = ExpansionState::new();
+        let mut toggles = Vec::new();
+        let started = std::time::Instant::now();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(460.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let _ = paint_result_section(ui, &big, 420.0, &mut expansion, &mut toggles);
+                });
+            },
+        );
+        let elapsed = started.elapsed();
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        let painted: usize = texts.iter().map(String::len).sum();
+        assert!(
+            texts.iter().any(|text| text.starts_with("999")),
+            "the visible prefix of the value is painted"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.chars().count() > MAX_PAINTED_VALUE_CHARS + 256),
+            "no painted label is longer than the paint bound"
+        );
+        assert_eq!(
+            bounded_value_text(&digits).1,
+            1_000_000 - MAX_PAINTED_VALUE_CHARS,
+            "the bounded painter states exactly how many characters it withheld"
+        );
+        assert!(
+            painted < 40_000,
+            "the million-digit value paints a bounded prefix ({painted} chars)"
+        );
+        assert_eq!(
+            big.result.chars().count(),
+            1_000_000,
+            "the full value stays in the model"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the million-digit paint must not block the UI: {elapsed:?}"
+        );
+    }
+
+    /// LOG-004: clicking a diagnostic log line opens the editor at the reported position, selects
+    /// the span there and puts the keyboard focus in the source.
+    #[test]
+    fn log_004_clicking_a_diagnostic_line_opens_and_highlights_its_source() {
+        let mut app = fake_app_with_source("alpha = 1\n1 / 0\ngamma = 3\n");
+        let ctx = egui::Context::default();
+        assert!(app.workbench.run_active());
+        assert!(app.workbench.wait_until_idle(Duration::from_secs(5)));
+        // Two passes let the terminal event's buffered lines land, so the rects describe the log
+        // the click pass paints.
+        frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+        frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+        let index = app
+            .view
+            .logs
+            .iter()
+            .rposition(|line| {
+                line.kind == crate::log_kind::LogKind::Diagnostic && line.location.is_some()
+            })
+            .expect("the failed run logged its diagnostic with a source position");
+        assert_eq!(
+            app.view.logs[index].location,
+            Some((2, 1)),
+            "the diagnostic log line names its source position"
+        );
+        // The pinned diagnostic row is a real painted control (it is the row a user clicks, and
+        // the UIA capture invokes the same label through UI Automation). Click it with pointer
+        // events: the click selects the line and opens/highlights the source it names.
+        let row = app
+            .log_pinned_rects
+            .iter()
+            .find(|(painted, _)| *painted == index)
+            .map(|(_, rect)| *rect)
+            .expect("the pinned diagnostic row is painted");
+        pointer_click_sized(&ctx, &mut app, vec2(1600.0, 1000.0), row.center());
+        assert!(
+            app.log_selection.contains(&index),
+            "the clicked diagnostic line becomes the selection: {:?}",
+            app.log_selection
+        );
+        let caret = app.editors[0].caret();
+        assert_eq!(
+            (caret.row, caret.col),
+            (1, 0),
+            "the caret moved to the reported line and column"
+        );
+        assert!(
+            app.editors[0].selection.is_some(),
+            "the diagnostic's span is highlighted"
+        );
+        assert_eq!(
+            app.focused_pane,
+            Pane::Editor,
+            "the source holds the pane focus after the click"
+        );
+        assert!(
+            app.log_status
+                .as_deref()
+                .unwrap_or_default()
+                .contains("opened source at 2:1"),
+            "the pane reports the jump: {:?}",
+            app.log_status
+        );
+    }
+
+    /// LOG-005: copy selected, copy all, clear and save all work from the keyboard (and the same
+    /// functions back the header buttons and the row context menu), with the exported file
+    /// holding the same lines the pane paints.
+    #[test]
+    fn log_005_copy_selected_copy_all_clear_and_save_log_work_from_the_keyboard() {
+        let mut app = fake_app_with_source("alpha = 1\nbeta = 2\n");
+        assert!(app.workbench.run_active());
+        assert!(app.workbench.wait_until_idle(Duration::from_secs(5)));
+        let target = std::env::temp_dir().join("lovelace-round59-log.txt");
+        let _ = std::fs::remove_file(&target);
+        app.dialogs = Box::new(ScriptedDialogs::saving_log([Some(target.clone())]));
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, Vec::new());
+
+        let chord = |key: Key, shift: bool, alt: bool| egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                command: true,
+                shift,
+                alt,
+                ..Default::default()
+            },
+        };
+
+        // Select one line by clicking its pinned row (the row-click seam), then Copy selected
+        // (Ctrl+Shift+C).
+        frame_sized(&ctx, &mut app, vec2(1600.0, 1000.0), Vec::new());
+        let row = app
+            .log_pinned_rects
+            .first()
+            .map(|(_, rect)| *rect)
+            .expect("the pane paints its pinned rows");
+        pointer_click_sized(&ctx, &mut app, vec2(1600.0, 1000.0), row.center());
+        assert_eq!(
+            app.log_selection.len(),
+            1,
+            "one row is selected: pinned={:?} logs={}",
+            app.log_pinned_rects,
+            app.view.logs.len()
+        );
+        let mut output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            vec![chord(Key::C, true, false)],
+            Default::default(),
+        );
+        let copied = copied_texts(&output.platform_output);
+        assert_eq!(copied.len(), 1, "one clipboard command: {copied:?}");
+        let selected_line = app.view.logs[*app.log_selection.iter().next().unwrap()]
+            .render();
+        assert_eq!(
+            copied[0],
+            format!("{selected_line}\r\n"),
+            "the clipboard carries exactly the selected line"
+        );
+
+        // Copy all (Ctrl+Shift+A) carries every retained line, in painted order.
+        output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            vec![chord(Key::A, true, false)],
+            Default::default(),
+        );
+        let copied = copied_texts(&output.platform_output);
+        assert_eq!(copied.len(), 1, "one clipboard command: {copied:?}");
+        let expected: Vec<String> = app.view.logs.iter().map(|line| line.render()).collect();
+        let mut all = expected.join("\r\n");
+        all.push_str("\r\n");
+        assert_eq!(copied[0], all, "copy all carries every retained line");
+
+        // Save log (Ctrl+Alt+L) writes the same lines to the chosen file.
+        let _ = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            vec![chord(Key::L, false, true)],
+            Default::default(),
+        );
+        let written = std::fs::read_to_string(&target).expect("the log file was written");
+        assert_eq!(
+            written, all,
+            "the exported log holds exactly the painted lines"
+        );
+
+        // Clear log (Ctrl+Shift+K) empties the view; the selection goes with it.
+        let _ = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            vec![chord(Key::K, true, false)],
+            Default::default(),
+        );
+        assert!(app.view.logs.is_empty(), "the log view is empty");
+        assert!(app.log_selection.is_empty(), "the selection is gone");
+        let _ = std::fs::remove_file(&target);
+    }
+
+    /// LOG-006: when the storage cap discarded earlier records the pane states that the history
+    /// is truncated, keeps the current fatal error on screen, and the export names the missing
+    /// prefix instead of presenting a partial log as the whole run.
+    #[test]
+    fn log_006_the_truncated_history_is_stated_and_the_export_names_it() {
+        let mut app = fake_app_with_source("alpha = 1\n");
+        let target = std::env::temp_dir().join("lovelace-round59-truncated.txt");
+        let _ = std::fs::remove_file(&target);
+        app.dialogs = Box::new(ScriptedDialogs::saving_log([Some(target.clone())]));
+        app.workbench
+            .flood_log_active(crate::workbench::LOG_CAP + 5_000);
+        let ctx = egui::Context::default();
+        let mut texts = Vec::new();
+        let mut output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1280.0, 800.0),
+            Vec::new(),
+            Default::default(),
+        );
+        output.textures_delta.clear();
+        for clipped in &output.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        assert!(
+            app.view.logs_dropped > 0,
+            "the flood exceeded the cap"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("truncated history:")),
+            "the pane states that its history is truncated: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("were discarded")),
+            "the discarded count is stated: {texts:?}"
+        );
+        // The current fatal error is the newest record: the cap drops only the oldest, so the
+        // run's fatal diagnostic is retained, painted in the tail the virtualised pane shows, and
+        // exported verbatim.
+        assert_eq!(
+            app.view.logs.last().map(|line| line.kind),
+            Some(crate::log_kind::LogKind::Diagnostic),
+            "the newest record is the fatal diagnostic"
+        );
+        assert!(
+            app.view
+                .logs
+                .last()
+                .is_some_and(|line| line.text.contains("LOGCAP-900 fatal")),
+            "the fatal error is retained verbatim"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("LOGCAP-900 fatal"))
+                || app
+                    .log_row_rects
+                    .iter()
+                    .any(|(index, _)| *index + 1 == app.view.logs.len()),
+            "the fatal diagnostic is painted (it is the newest row of the virtualised list)"
+        );
+        app.save_log();
+        let written = std::fs::read_to_string(&target).expect("the truncated log was written");
+        let mut lines = written.lines();
+        assert!(
+            lines
+                .next()
+                .unwrap_or_default()
+                .starts_with("# truncated history:"),
+            "the export names the missing prefix: {written:.200}"
+        );
+        assert!(
+            written.contains("LOGCAP-900 fatal"),
+            "the export retains the fatal error"
+        );
+        let _ = std::fs::remove_file(&target);
+    }
+
+    /// LOG-010: a 100 000-record log paints a bounded number of row widgets in one pass (the
+    /// viewport, not the log) and the pass stays responsive.
+    #[test]
+    fn log_010_a_hundred_thousand_records_paint_a_bounded_number_of_rows() {
+        let mut app = fake_app_with_source("alpha = 1\n");
+        let boot = app.workbench.documents()[0].logs.len();
+        app.workbench
+            .flood_log_active(crate::workbench::LOG_CAP - boot - 1);
+        let ctx = egui::Context::default();
+        let started = std::time::Instant::now();
+        let mut output = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1600.0, 1000.0),
+            Vec::new(),
+            Default::default(),
+        );
+        let elapsed = started.elapsed();
+        output.textures_delta.clear();
+        assert_eq!(app.view.logs.len(), crate::workbench::LOG_CAP);
+        assert!(
+            app.log_row_rects.len() < 200,
+            "only the viewport rows are allocated as widgets: {} rows for {} records",
+            app.log_row_rects.len(),
+            app.view.logs.len()
+        );
+        assert!(
+            app.log_row_rects
+                .iter()
+                .any(|(index, _)| *index + 1 == app.view.logs.len()),
+            "the list is scrolled to the newest record, which is addressable: {:?}",
+            app.log_row_rects
+                .iter()
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the 100 000-record pass must not block: {elapsed:?}"
+        );
+        // The whole log is in the model, not in the widget tree: a second pass repaints the same
+        // bounded window without rebuilding 100 000 rows.
+        let started = std::time::Instant::now();
+        let _ = frame_capturing(
+            &ctx,
+            &mut app,
+            vec2(1600.0, 1000.0),
+            Vec::new(),
+            Default::default(),
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a live update repaint stays bounded"
+        );
+        assert_eq!(app.view.logs.len(), crate::workbench::LOG_CAP);
     }
 }
 

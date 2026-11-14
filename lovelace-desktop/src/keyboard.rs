@@ -377,6 +377,14 @@ pub enum Action {
     Quit,
     /// Jump the caret to the last failed run's diagnostic.
     JumpToDiagnostic,
+    /// LOG-005: copy the selected log lines to the clipboard.
+    CopyLogSelection,
+    /// LOG-005: copy every retained log line to the clipboard.
+    CopyLogAll,
+    /// LOG-005: empty the active document's log view.
+    ClearLog,
+    /// LOG-005 / LOG-006: write the retained log to a file.
+    SaveLog,
     /// Undo the active document's last edit (dispatched by the editor).
     Undo,
     /// Redo the last undone edit (dispatched by the editor).
@@ -418,6 +426,10 @@ impl Action {
             Action::ToggleTheme => "Toggle theme",
             Action::Quit => "Quit",
             Action::JumpToDiagnostic => "Jump to diagnostic",
+            Action::CopyLogSelection => "Copy selected log lines",
+            Action::CopyLogAll => "Copy log",
+            Action::ClearLog => "Clear log",
+            Action::SaveLog => "Save log",
             Action::Undo => "Undo",
             Action::Redo => "Redo",
             Action::Completion => "Completion",
@@ -475,10 +487,10 @@ const fn binding(
 }
 
 use Action::{
-    ClearVariables, Completion, EditorSettings, FocusPane, JumpToDiagnostic, NextPane, PlotActualSize,
-    PlotExportPng, PlotFit, PlotZoomIn, PlotZoomOut, PreviousPane, QuickEvalFocus, Quit, ResetLayout,
-    ShortcutsHelp, ToggleTheme, ToggleUnicodeGlyphs, WorkspaceFilterFocus, WorkspaceInspectorView,
-    WorkspaceResultView,
+    ClearLog, ClearVariables, Completion, CopyLogAll, CopyLogSelection, EditorSettings, FocusPane,
+    JumpToDiagnostic, NextPane, PlotActualSize, PlotExportPng, PlotFit, PlotZoomIn, PlotZoomOut,
+    PreviousPane, QuickEvalFocus, Quit, ResetLayout, SaveLog, ShortcutsHelp, ToggleTheme,
+    ToggleUnicodeGlyphs, WorkspaceFilterFocus, WorkspaceInspectorView, WorkspaceResultView,
 };
 use KeyName::{Char, Comma, Digit, Enter, Escape, F1, F6, F8, Minus, Plus, Space, Tab};
 use Scope::{Editor, Global};
@@ -610,6 +622,31 @@ pub const BINDINGS: &[Binding] = &[
         Shortcut::new(Char('l'), true, true, false),
         Global,
         "Restore the shipped pane sizes (a splitter double-click does the same)",
+    ),
+    // ---- logs: selection, copy and export (LOG-005 / LOG-006) -----------------------------
+    binding(
+        CopyLogSelection,
+        Shortcut::new(Char('c'), true, true, false),
+        Global,
+        "Copy the selected log lines, in log order, to the clipboard",
+    ),
+    binding(
+        CopyLogAll,
+        Shortcut::new(Char('a'), true, true, false),
+        Global,
+        "Copy every retained log line to the clipboard",
+    ),
+    binding(
+        ClearLog,
+        Shortcut::new(Char('k'), true, true, false),
+        Global,
+        "Empty the active document's log view (the next run appends again)",
+    ),
+    binding(
+        SaveLog,
+        Shortcut::new(Char('l'), true, false, true),
+        Global,
+        "Save the retained log to a file (also exports the available full run log)",
     ),
     binding(
         PlotFit,
@@ -1193,6 +1230,10 @@ mod tests {
                 | Action::ToggleTheme
                 | Action::Quit
                 | Action::JumpToDiagnostic
+                | Action::CopyLogSelection
+                | Action::CopyLogAll
+                | Action::ClearLog
+                | Action::SaveLog
                 | Action::Completion => {}
             }
         }

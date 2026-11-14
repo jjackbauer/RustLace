@@ -808,6 +808,22 @@ impl ExecutionHost {
             .unwrap_or_else(|error| error.into_inner());
         caches.get(&document).map(DocumentCache::len).unwrap_or(0)
     }
+
+    /// Drops exactly the cached statements a removed global affects (WKS-003).
+    ///
+    /// The workspace deletion changes the document's engine state without a source edit, so the
+    /// memoised outcomes that read or re-create that global must not be reused by the next run.
+    /// Returns how many entries were dropped; a document with no cache drops none.
+    pub fn invalidate_variable(&self, document: DocumentId, name: &str) -> usize {
+        let mut caches = self
+            .caches
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        caches
+            .entry(document)
+            .or_default()
+            .invalidate_variable(name)
+    }
 }
 
 impl Drop for ExecutionHost {
