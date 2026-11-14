@@ -30,6 +30,7 @@ pub mod numeric;
 pub mod plot_file;
 pub mod plot_surface;
 pub mod print_budget;
+pub mod progress;
 pub mod real_literal_route;
 pub mod registry;
 pub mod signals;
@@ -778,6 +779,9 @@ pub struct Engine {
     /// Cancel button). It is passed into the per-evaluation cancellation scope beside the
     /// deadline, so one long kernel stops without waiting for a statement boundary.
     cancel_flag: Option<Arc<AtomicBool>>,
+    /// RUN-005: the observer a long-running kernel reports its phase/fraction to. `None` is the
+    /// unobserved path: every `progress::report` is one thread-local read and a return.
+    progress_sink: Option<crate::progress::Sink>,
     /// Whether a kernel observed the armed deadline during the last evaluation.
     cancelled: bool,
     /// The top-level statement that is running, so a cancellation raised at the end of a kernel
@@ -846,6 +850,7 @@ impl Engine {
             free_charge: 0,
             cancel_after: None,
             cancel_flag: None,
+            progress_sink: None,
             cancelled: false,
             current_position: 0,
             last_completed_position: 0,
@@ -1069,6 +1074,27 @@ impl Engine {
     /// `Cancelled` failure a spent deadline produces. `None` restores the deadline-only path.
     pub fn set_cancel_flag(&mut self, flag: Option<Arc<AtomicBool>>) {
         self.cancel_flag = flag;
+    }
+
+    /// RUN-005: installs (or clears) the kernel sub-progress observer the next evaluation arms.
+    ///
+    /// This is the same shape as [`Engine::set_cancel_flag`]: the engine owns the handle, the
+    /// evaluation arms it for exactly its own duration, and a kernel inside it reports a
+    /// human-readable phase plus a fraction through [`crate::progress::report`]. `None` is the
+    /// unobserved path, which is bit-for-bit and second-for-second the run the engine always did:
+    /// a report with nothing armed reads one thread-local slot and returns.
+    ///
+    /// The callback runs on the evaluating thread, so a host that must show the report elsewhere
+    /// (the desktop forwards it into the run's event queue) sends from inside it. Reports are
+    /// monotone and clamped to `0.0..=1.0` at the seam; a sink that panics is the host's problem,
+    /// exactly like a panicking print writer.
+    pub fn set_progress_sink(&mut self, sink: Option<crate::progress::Sink>) {
+        self.progress_sink = sink;
+    }
+
+    /// The kernel sub-progress observer this engine will arm, when one is installed.
+    pub fn progress_sink(&self) -> Option<crate::progress::Sink> {
+        self.progress_sink.clone()
     }
 
     /// Whether the deadline stopped the last evaluation (the token every kernel polls).
@@ -1343,6 +1369,9 @@ impl Engine {
         let deadline = self.cancel_after.map(|after| Instant::now() + after);
         let flag = self.cancel_flag.clone();
         let scope = lovelace_symbolics::cancel::arm_with_flag(deadline, flag);
+        // RUN-005: the same per-evaluation scoping for the kernel sub-progress observer, so a
+        // sink never survives the evaluation that armed it.
+        let progress_scope = crate::progress::arm(self.progress_sink.clone());
         self.cancelled = false;
         // A caller-installed plugin scope takes precedence INSIDE this evaluation, and the
         // engine's own session set is restored when the evaluation ends (the reference's
@@ -1374,6 +1403,7 @@ impl Engine {
             };
         }
         drop(scope);
+        drop(progress_scope);
         result
     }
 
@@ -2972,3 +3002,9 @@ mod round97_tail;
 /// 1.14.0 ground truth embedded as literals.
 #[cfg(test)]
 mod round98_differential_oracle;
+
+/// Round-66 engine data (RUN-005 / SYM-005): the kernel sub-progress observer's observed sequence
+/// and cost, and the per-step applicability `simplify_full` now publishes for fired and rejected
+/// rewrite rules.
+#[cfg(test)]
+mod round66_engine_data;

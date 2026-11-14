@@ -21,8 +21,8 @@ use lovelace_symbolics::{Expr, RelOp};
 
 /// Captures the inspection payload for one evaluated value.
 ///
-/// Always returns a payload: a non-symbolic result gets six specific "not supplied" reasons
-/// instead of an empty object.
+/// Always returns a payload: a non-symbolic result gets specific "not supplied" reasons instead
+/// of an empty object.
 pub fn capture(engine: &mut lovelace_lang::Engine, value: &Value) -> Json {
     let subject = Subject::of(value);
     let Some(expression) = subject.expression else {
@@ -59,6 +59,21 @@ pub fn capture(engine: &mut lovelace_lang::Engine, value: &Value) -> Json {
             ),
         )])
     };
+    // SYM-005: the per-rule applicability the result publishes — one row per rule the engine
+    // tried and rejected, plus a summary of the applied steps' own applicability.
+    let applicability = if subject.is_transform {
+        applicability_section(&subject.steps, &subject.attempts)
+    } else {
+        Json::obj([(
+            "reason",
+            Json::Str(
+                "The engine publishes rule applicability only in a TransformResult \
+                 (simplify_full). The last committed result is a plain Symbolic value, so no \
+                 rewrite rule was tried for it."
+                    .to_string(),
+            ),
+        )])
+    };
     let mathir = mathir_section(expression);
     sections_payload(
         &subject,
@@ -67,6 +82,7 @@ pub fn capture(engine: &mut lovelace_lang::Engine, value: &Value) -> Json {
         tree,
         assumptions,
         trace,
+        applicability,
         mathir,
     )
 }
@@ -81,6 +97,8 @@ struct Subject<'a> {
     is_transform: bool,
     conditions: Vec<&'a Value>,
     steps: Vec<&'a Value>,
+    /// SYM-005: the `TransformResult.attempts` records (rules tried and rejected).
+    attempts: Vec<&'a Value>,
 }
 
 impl<'a> Subject<'a> {
@@ -94,6 +112,7 @@ impl<'a> Subject<'a> {
                 is_transform: false,
                 conditions: Vec::new(),
                 steps: Vec::new(),
+                attempts: Vec::new(),
             },
             Value::Record(type_name, fields) if type_name == "TransformResult" => {
                 let expression = record_field(fields, "expression").and_then(|value| match value {
@@ -111,6 +130,7 @@ impl<'a> Subject<'a> {
                     is_transform: true,
                     conditions: record_list(fields, "conditions"),
                     steps: record_list(fields, "steps"),
+                    attempts: record_list(fields, "attempts"),
                 }
             }
             Value::Record(type_name, _) => Subject {
@@ -121,6 +141,7 @@ impl<'a> Subject<'a> {
                 is_transform: false,
                 conditions: Vec::new(),
                 steps: Vec::new(),
+                attempts: Vec::new(),
             },
             other => Subject {
                 kind: other.kind_name().to_string(),
@@ -130,6 +151,7 @@ impl<'a> Subject<'a> {
                 is_transform: false,
                 conditions: Vec::new(),
                 steps: Vec::new(),
+                attempts: Vec::new(),
             },
         }
     }
@@ -153,6 +175,7 @@ fn sections_payload(
     tree: Json,
     assumptions: Json,
     trace: Json,
+    applicability: Json,
     mathir: Json,
 ) -> Json {
     Json::obj([
@@ -165,6 +188,7 @@ fn sections_payload(
                 ("tree", tree),
                 ("assumptions", assumptions),
                 ("trace", trace),
+                ("applicability", applicability),
                 ("mathir", mathir),
             ]),
         ),
@@ -222,6 +246,16 @@ fn missing_payload(subject: &Subject<'_>) -> Json {
                 Json::Str(format!(
                     "The engine publishes rewrite steps only in a TransformResult. The last \
                      committed result is {kind}."
+                )),
+            )]),
+        ),
+        (
+            "applicability",
+            Json::obj([(
+                "reason",
+                Json::Str(format!(
+                    "The engine publishes rewrite-rule applicability only in a TransformResult. \
+                     The last committed result is {kind}."
                 )),
             )]),
         ),
@@ -435,9 +469,115 @@ fn trace_section(steps: &[&Value]) -> Json {
             ("before", before),
             ("after", after),
             ("conditions", Json::Arr(conditions)),
+            // SYM-005: whether this rewrite's preconditions were met. The engine publishes
+            // `Applicable` / `ApplicableWithConditions` per fired step; a record without the field
+            // (an older engine) says so with the empty string rather than being called applicable.
+            (
+                "applicability",
+                Json::Str(
+                    record_field(fields, "applicability")
+                        .and_then(enum_value)
+                        .unwrap_or("")
+                        .to_string(),
+                ),
+            ),
         ]));
     }
     Json::obj([("steps", Json::Arr(out))])
+}
+
+/// SYM-005: the applicability section.
+///
+/// Two facts, both from the engine: each applied step's own applicability (also published on the
+/// step itself, so the trace row can show it) and the `RuleAttempt` records for the rules the
+/// engine tried and rejected — the only place the reason for a non-fire exists. `applied` lists
+/// the fired rules with their decision, `attempts` the rejected ones with the reason, and `counts`
+/// is a summary the pane can state without re-deriving it from the lists.
+fn applicability_section(steps: &[&Value], attempts: &[&Value]) -> Json {
+    let mut applied = Vec::new();
+    for step in steps {
+        let Value::Record(type_name, fields) = step else {
+            continue;
+        };
+        if type_name != "RewriteStep" {
+            continue;
+        }
+        applied.push(Json::obj([
+            (
+                "ruleId",
+                Json::Str(
+                    record_field(fields, "rule_id")
+                        .and_then(text_value)
+                        .unwrap_or("unknown")
+                        .to_string(),
+                ),
+            ),
+            (
+                "applicability",
+                Json::Str(
+                    record_field(fields, "applicability")
+                        .and_then(enum_value)
+                        .unwrap_or("")
+                        .to_string(),
+                ),
+            ),
+        ]));
+    }
+    let mut rejected = Vec::new();
+    let mut conditioned = 0usize;
+    for attempt in attempts {
+        let Value::Record(type_name, fields) = attempt else {
+            continue;
+        };
+        if type_name != "RuleAttempt" {
+            continue;
+        }
+        let precondition = record_field(fields, "precondition")
+            .and_then(enum_value)
+            .unwrap_or("Unknown");
+        if precondition == "ApplicableWithConditions" {
+            conditioned += 1;
+        }
+        rejected.push(Json::obj([
+            (
+                "ruleId",
+                Json::Str(
+                    record_field(fields, "rule_id")
+                        .and_then(text_value)
+                        .unwrap_or("unknown")
+                        .to_string(),
+                ),
+            ),
+            (
+                "patternMatched",
+                record_field(fields, "pattern_matched")
+                    .and_then(|value| match value {
+                        Value::Boolean(matched) => Some(Json::Bool(*matched)),
+                        _ => None,
+                    })
+                    .unwrap_or(Json::Null),
+            ),
+            ("precondition", Json::Str(precondition.to_string())),
+            (
+                "reason",
+                Json::Str(
+                    record_field(fields, "rejection_reason")
+                        .and_then(text_value)
+                        .unwrap_or("")
+                        .to_string(),
+                ),
+            ),
+        ]));
+    }
+    Json::obj([
+        ("applied", Json::Arr(applied)),
+        ("attempts", Json::Arr(rejected)),
+        ("counts", Json::obj([
+            ("applied", Json::Num((steps.len()).to_string())),
+            ("rejected", Json::Num((attempts.len()).to_string())),
+            ("conditioned", Json::Num(conditioned.to_string())),
+        ])),
+    ])
 }
 
 /// The engine's pretty + canonical rendering of one symbolic step field.
@@ -653,6 +793,11 @@ mod tests {
             step.get("classification").and_then(Json::as_str),
             Some("Conditional")
         );
+        // SYM-005: the fired step's own applicability crosses the payload.
+        assert_eq!(
+            step.get("applicability").and_then(Json::as_str),
+            Some("ApplicableWithConditions")
+        );
         assert_eq!(
             step.get("before")
                 .and_then(|before| before.get("pretty"))
@@ -691,6 +836,81 @@ mod tests {
             .and_then(Json::as_str)
             .expect("mathir");
         assert!(mathir.contains("param x"), "mathir={mathir}");
+        // SYM-005: every rule the engine tried fired, so the rejected-attempt list is empty — a
+        // supplied section with zero rows, not a missing one.
+        let attempts = sections
+            .get("applicability")
+            .and_then(|section| section.get("attempts"))
+            .and_then(Json::as_arr)
+            .expect("applicability attempts");
+        assert!(attempts.is_empty(), "no rule was rejected: {attempts:?}");
+    }
+
+    /// SYM-005 proof with the known row's own expression: under `assume(x > 0)` the
+    /// `sqrt(x^2)` -> `x` rewrite publishes `ApplicableWithConditions` and the condition text;
+    /// without the assumption the same expression publishes each rejected rule with the engine's
+    /// reason, so the inspector never has to say "applicability not published" again.
+    #[test]
+    fn simplify_full_publishes_step_applicability_and_the_rejected_reason() {
+        // The met precondition: x > 0 licenses pow.sqrt-square-nonnegative.
+        let mut engine = lovelace_lang::Engine::new();
+        engine.eval("x = symbol(\"x\")").expect("symbol");
+        engine.eval("assume(x > 0)").expect("assume");
+        let value = engine
+            .eval("simplify_full(sqrt(x^2))")
+            .expect("simplify_full");
+        let payload = capture(&mut engine, &value);
+        let inspection =
+            crate::inspector::Inspection::from_json(&payload).expect("the payload must read back");
+        let step = &inspection.trace.supplied().expect("trace")[0];
+        assert_eq!(step.rule_id, "pow.sqrt-square-nonnegative");
+        assert_eq!(step.classification, "Conditional");
+        assert_eq!(
+            step.applicability, "ApplicableWithConditions",
+            "the step's preconditions were met under a condition"
+        );
+        assert!(
+            step.conditions
+                .iter()
+                .any(|condition| condition.label.contains("x >= 0")),
+            "the condition text the rewrite requires must be published: {:?}",
+            step.conditions
+        );
+        assert!(
+            inspection
+                .applicability
+                .supplied()
+                .expect("applicability")
+                .is_empty(),
+            "a fired rule leaves no rejection"
+        );
+
+        // The unmet precondition: the same expression without an assumption.
+        let mut plain = lovelace_lang::Engine::new();
+        plain.eval("x = symbol(\"x\")").expect("symbol");
+        let value = plain
+            .eval("simplify_full(sqrt(x^2))")
+            .expect("simplify_full");
+        let payload = capture(&mut plain, &value);
+        let inspection =
+            crate::inspector::Inspection::from_json(&payload).expect("the payload must read back");
+        assert!(
+            inspection.trace.supplied().expect("trace").is_empty(),
+            "neither power rule may fire without an assumption"
+        );
+        let attempts = inspection.applicability.supplied().expect("applicability");
+        assert_eq!(attempts.len(), 2, "both sqrt rules were tried: {attempts:?}");
+        assert_eq!(attempts[0].rule_id, "pow.sqrt-square-nonnegative");
+        assert!(attempts[0].pattern_matched);
+        assert_eq!(attempts[0].precondition, "NotApplicable");
+        assert_eq!(attempts[0].status_label(), "not applicable");
+        assert!(
+            attempts[0].reason.contains("not known to be nonnegative"),
+            "the reason must name the unmet premise: {:?}",
+            attempts[0].reason
+        );
+        assert_eq!(attempts[1].rule_id, "pow.sqrt-square-real");
+        assert!(attempts[1].reason.contains("not known to be real"));
     }
 
     #[test]

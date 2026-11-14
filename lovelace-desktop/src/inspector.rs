@@ -103,6 +103,10 @@ pub struct TraceStep {
     pub rule_id: String,
     /// The engine's classification: `Universal`, `Conditional` or `DomainSpecific`.
     pub classification: String,
+    /// SYM-005: whether this rewrite's preconditions were actually met, in the engine's own
+    /// vocabulary (`Applicable` or `ApplicableWithConditions`). Empty when the engine published
+    /// none for this step, which the pane states as such instead of implying applicability.
+    pub applicability: String,
     /// The rewritten sub-expression, pretty-printed by the engine.
     pub before: String,
     /// The rewritten sub-expression's canonical form.
@@ -113,6 +117,47 @@ pub struct TraceStep {
     pub after_canonical: String,
     /// The conditions this step requires (typed condition rows).
     pub conditions: Vec<Assumption>,
+}
+
+impl TraceStep {
+    /// SYM-005: the applicability as the pane paints it, or the explicit absence when the engine
+    /// published none. The two words the row requires — applied / conditioned — map from the
+    /// engine's own enum, never from a guess about the conditions list.
+    pub fn applicability_label(&self) -> String {
+        match self.applicability.as_str() {
+            "Applicable" => "applicable (preconditions met unconditionally)".to_string(),
+            "ApplicableWithConditions" => "conditioned (met under the required conditions)".to_string(),
+            "" => "not published by this engine for this step".to_string(),
+            other => other.to_string(),
+        }
+    }
+}
+
+/// SYM-005: one rule the engine tried and rejected, with the reason.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleAttempt {
+    /// The stable rewrite-rule id.
+    pub rule_id: String,
+    /// True when the rule's pattern matched the node (independently of applicability).
+    pub pattern_matched: bool,
+    /// The engine's applicability decision (`NotApplicable`, `Unknown`).
+    pub precondition: String,
+    /// The engine's reason the attempt did not fire.
+    pub reason: String,
+}
+
+impl RuleAttempt {
+    /// The applicability as the pane paints it: `not applicable` / `not decided`, with the
+    /// engine's precondition name kept visible so the two never blur.
+    pub fn status_label(&self) -> &'static str {
+        match self.precondition.as_str() {
+            "NotApplicable" => "not applicable",
+            "Unknown" => "not decided",
+            "Applicable" => "applicable",
+            "ApplicableWithConditions" => "conditioned",
+            _ => "not published",
+        }
+    }
 }
 
 /// The lowered MathIR text and its compilation contract.
@@ -181,6 +226,9 @@ pub struct Inspection {
     pub assumptions: Section<Vec<Assumption>>,
     /// `trace`: the `simplify_full` rewrite steps.
     pub trace: Section<Vec<TraceStep>>,
+    /// SYM-005: the rule applicability the result publishes — the fired rules' decisions and the
+    /// rejected rules' reasons.
+    pub applicability: Section<Vec<RuleAttempt>>,
     /// `mathir`: the compiled IR.
     pub mathir: Section<MathIr>,
 }
@@ -218,18 +266,20 @@ impl Inspection {
             tree: tree_section(section("tree")),
             assumptions: assumptions_section(section("assumptions")),
             trace: trace_section(section("trace")),
+            applicability: applicability_section(section("applicability")),
             mathir: mathir_section(section("mathir")),
         })
     }
 
-    /// The six section names, in the order the inspector paints them.
+    /// The seven section names, in the order the inspector paints them.
     #[allow(dead_code)] // model vocabulary: the round document and tests name them
-    pub const SECTION_NAMES: [&'static str; 6] = [
+    pub const SECTION_NAMES: [&'static str; 7] = [
         "pretty",
         "canonical",
         "expression tree",
         "assumptions",
         "simplification trace",
+        "applicability",
         "MathIR",
     ];
 }
@@ -379,6 +429,11 @@ fn trace_step(json: &Json) -> Option<TraceStep> {
             .and_then(Json::as_str)
             .unwrap_or("Unclassified")
             .to_string(),
+        applicability: json
+            .get("applicability")
+            .and_then(Json::as_str)
+            .unwrap_or_default()
+            .to_string(),
         before: pair("before", "pretty"),
         before_canonical: pair("before", "canonical"),
         after: pair("after", "pretty"),
@@ -388,6 +443,50 @@ fn trace_step(json: &Json) -> Option<TraceStep> {
             .and_then(Json::as_arr)
             .map(|items| items.iter().filter_map(assumption).collect())
             .unwrap_or_default(),
+    })
+}
+
+/// SYM-005: the applicability section.
+///
+/// The engine's `attempts` array carries one row per rejected rule; `counts` is its own summary.
+/// A result whose rules all fired has an empty `attempts` array, which is `Supplied(empty)` — the
+/// pane then says no rule was rejected, which is a fact, not a missing section.
+fn applicability_section(json: Option<&Json>) -> Section<Vec<RuleAttempt>> {
+    let Some(json) = json else {
+        return Section::Missing(
+            "The engine supplied no rewrite applicability: the payload has no such section."
+                .to_string(),
+        );
+    };
+    if let Some(reason) = json.get("reason").and_then(Json::as_str) {
+        return Section::Missing(reason.to_string());
+    }
+    match json.get("attempts").and_then(Json::as_arr) {
+        Some(attempts) => Section::Supplied(attempts.iter().filter_map(rule_attempt).collect()),
+        None => Section::Missing(
+            "The engine's applicability section was not readable (unexpected payload shape)."
+                .to_string(),
+        ),
+    }
+}
+
+fn rule_attempt(json: &Json) -> Option<RuleAttempt> {
+    Some(RuleAttempt {
+        rule_id: json.get("ruleId").and_then(Json::as_str)?.to_string(),
+        pattern_matched: matches!(
+            json.get("patternMatched"),
+            Some(Json::Bool(true))
+        ),
+        precondition: json
+            .get("precondition")
+            .and_then(Json::as_str)
+            .unwrap_or("Unknown")
+            .to_string(),
+        reason: json
+            .get("reason")
+            .and_then(Json::as_str)
+            .unwrap_or_default()
+            .to_string(),
     })
 }
 
@@ -754,6 +853,7 @@ mod tests {
                                     Json::Str("trig.pythagorean-sin2-cos2".to_string()),
                                 ),
                                 ("classification", Json::Str("Universal".to_string())),
+                                ("applicability", Json::Str("Applicable".to_string())),
                                 (
                                     "before",
                                     Json::obj([
@@ -778,6 +878,51 @@ mod tests {
                         )]),
                     ),
                     (
+                        "applicability",
+                        Json::obj([
+                            (
+                                "applied",
+                                Json::Arr(vec![Json::obj([
+                                    (
+                                        "ruleId",
+                                        Json::Str("trig.pythagorean-sin2-cos2".to_string()),
+                                    ),
+                                    ("applicability", Json::Str("Applicable".to_string())),
+                                ])]),
+                            ),
+                            (
+                                "attempts",
+                                Json::Arr(vec![Json::obj([
+                                    (
+                                        "ruleId",
+                                        Json::Str("pow.sqrt-square-nonnegative".to_string()),
+                                    ),
+                                    ("patternMatched", Json::Bool(true)),
+                                    (
+                                        "precondition",
+                                        Json::Str("NotApplicable".to_string()),
+                                    ),
+                                    (
+                                        "reason",
+                                        Json::Str(
+                                            "precondition false: the radicand is not known to be \
+                                             nonnegative in this session"
+                                                .to_string(),
+                                        ),
+                                    ),
+                                ])]),
+                            ),
+                            (
+                                "counts",
+                                Json::obj([
+                                    ("applied", Json::Num("1".to_string())),
+                                    ("rejected", Json::Num("1".to_string())),
+                                    ("conditioned", Json::Num("0".to_string())),
+                                ]),
+                            ),
+                        ]),
+                    ),
+                    (
                         "mathir",
                         Json::obj([
                             ("text", Json::Str("#!mathir 2\nparam x".to_string())),
@@ -791,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn a_full_payload_reads_all_six_sections_from_the_engine_data() {
+    fn a_full_payload_reads_all_seven_sections_from_the_engine_data() {
         let inspection = Inspection::from_json(&full_payload()).expect("payload");
         assert_eq!(inspection.subject.kind, "Symbolic");
         assert_eq!(inspection.subject.path, "result");
@@ -814,8 +959,26 @@ mod tests {
         let step = &inspection.trace.supplied().expect("trace")[0];
         assert_eq!(step.rule_id, "trig.pythagorean-sin2-cos2");
         assert_eq!(step.classification, "Universal");
+        // SYM-005: the step states its applicability, and the pane's wording distinguishes the
+        // unconditional case from the conditioned one.
+        assert_eq!(step.applicability, "Applicable");
+        assert_eq!(
+            step.applicability_label(),
+            "applicable (preconditions met unconditionally)"
+        );
         assert_eq!(step.before, "sin(x)^2 + cos(x)^2");
         assert_eq!(step.conditions[0].source, "session");
+        // SYM-005: a rejected rule keeps the engine's applicability AND its reason.
+        let attempt = &inspection.applicability.supplied().expect("applicability")[0];
+        assert_eq!(attempt.rule_id, "pow.sqrt-square-nonnegative");
+        assert!(attempt.pattern_matched);
+        assert_eq!(attempt.precondition, "NotApplicable");
+        assert_eq!(attempt.status_label(), "not applicable");
+        assert!(
+            attempt.reason.contains("not known to be nonnegative"),
+            "the unmet precondition's reason must survive the payload: {:?}",
+            attempt.reason
+        );
         let mathir = inspection.mathir.supplied().expect("mathir");
         assert_eq!(mathir.parameters, vec!["x".to_string()]);
         assert_eq!(mathir.result_type.as_deref(), Some("Integer"));

@@ -1471,7 +1471,18 @@ pub fn call(
                 let half = Sym::rational(&Int::from_i64(1), &Nat::from_u64(2));
                 return Ok(Value::Symbolic(Sym::pow(base, half)));
             }
-            Ok(Value::Real(r.sqrt(engine.precision_value())))
+            // RUN-005: the phases this kernel passes through, in order. The digit-count kernel
+            // itself is the arithmetic crate's integer square root and is opaque here, so the
+            // reports bracket it: the observer learns that the root is running (not that it is
+            // 40 % through the digits, which only the arithmetic crate could say) and that the
+            // truncation that follows is reached. A host with sub-progress of its own can report
+            // inside those brackets and the fractions stay monotone.
+            crate::progress::report("sqrt:operand", 0.02);
+            let digits = engine.precision_value();
+            crate::progress::report("sqrt:integer-square-root", 0.10);
+            let root = r.sqrt(digits);
+            crate::progress::report("sqrt:truncate", 0.90);
+            Ok(Value::Real(root))
         }
         "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "sinh" | "cosh"
         | "tanh" | "asinh" | "acosh" | "atanh" => {
@@ -2582,6 +2593,7 @@ pub fn call(
                         e,
                         Vec::new(),
                         Vec::new(),
+                        Vec::new(),
                         false,
                     ));
                 }
@@ -2609,6 +2621,7 @@ pub fn call(
                             Sym::num(0),
                             vec![Value::Symbolic(condition)],
                             vec![step],
+                            Vec::new(),
                             false,
                         ));
                     }
@@ -2631,12 +2644,15 @@ pub fn call(
                             Sym::num(1),
                             vec![Value::Symbolic(condition)],
                             vec![step],
+                            Vec::new(),
                             false,
                         ));
                     }
                 }
                 let mut budget = RewriteBudget::new();
-                let (simplified, steps) = simplify_traced(engine, e.clone(), &mut budget);
+                let mut attempts = Vec::new();
+                let (simplified, steps) =
+                    simplify_traced(engine, e.clone(), &mut budget, &mut attempts);
                 let conditions = step_conditions(&steps);
                 return Ok(transform_result(
                     engine,
@@ -2644,6 +2660,7 @@ pub fn call(
                     simplified,
                     conditions,
                     steps,
+                    attempts,
                     budget.exhausted(),
                 ));
             }
@@ -3253,11 +3270,32 @@ pub fn call(
                 let max = engine.precision_value().max(1);
                 digit_count_bounded(name, &args[0], max, 1)?
             };
-            Ok(Value::Real(if name == "pi" {
+            // RUN-005: the constant's kernel has two observable stages: the arctan series (pi) or
+            // the inverse-factorial series (e), then the truncation to the requested digits. The
+            // series itself runs inside the arithmetic crate; the phases say which stage the
+            // kernel is in and the fractions are monotone across them.
+            crate::progress::report(
+                if name == "pi" {
+                    "pi:machin-arctan"
+                } else {
+                    "e:inverse-factorial"
+                },
+                0.10,
+            );
+            let value = if name == "pi" {
                 Real::pi(digits)
             } else {
                 e_constant(digits)
-            }))
+            };
+            crate::progress::report(
+                if name == "pi" {
+                    "pi:truncate"
+                } else {
+                    "e:truncate"
+                },
+                0.90,
+            );
+            Ok(Value::Real(value))
         }
         "setprecision" => {
             arity(1)?;
@@ -11014,6 +11052,50 @@ pub fn simplify(engine: &Engine, e: Sym) -> Sym {
     }
 }
 
+/// One rewrite rule the engine tried and did NOT fire (SYM-005).
+///
+/// A fired rule is a `RewriteStep` and its applicability is published on the step. A rule that was
+/// *rejected* has no step, and the trace therefore used to say nothing at all about it: the reader
+/// could not tell "this simplification needs x >= 0 and x is not known nonnegative" from "this rule
+/// does not exist". Each record below is one such attempt, with the reference's own
+/// [`RuleApplicability`](lovelace_symbolics::rewrite_registry::RuleApplicability) value and the
+/// engine's reason.
+struct RuleAttemptData {
+    /// Stable rewrite-rule id (the reference's registry id).
+    rule_id: &'static str,
+    /// True when the pattern matched this node (independently of applicability).
+    pattern_matched: bool,
+    /// The applicability decision: `NotApplicable` or `Unknown` for a rejected attempt.
+    precondition: lovelace_symbolics::rewrite_registry::RuleApplicability,
+    /// Why the attempt did not fire: the reason, never an empty string.
+    rejection_reason: String,
+}
+
+/// One RuleAttempt wire record.
+fn rule_attempt_value(attempt: RuleAttemptData) -> Value {
+    Value::Record(
+        "RuleAttempt".to_string(),
+        vec![
+            (
+                "rule_id".to_string(),
+                Value::Text(attempt.rule_id.to_string()),
+            ),
+            (
+                "pattern_matched".to_string(),
+                Value::Boolean(attempt.pattern_matched),
+            ),
+            (
+                "precondition".to_string(),
+                enum_value("RuleApplicability", attempt.precondition.name()),
+            ),
+            (
+                "rejection_reason".to_string(),
+                Value::Text(attempt.rejection_reason),
+            ),
+        ],
+    )
+}
+
 /// One applied rewrite: the stable rule id, the rule's declared classification, the node it
 /// rewrote, and the conditions the rewrite requires. Provenance, never a second policy.
 struct RewriteStepData {
@@ -11030,8 +11112,26 @@ struct RewriteStepData {
     required_conditions: Vec<Value>,
 }
 
+impl RewriteStepData {
+    /// SYM-005: the applicability the reference would have decided for this step.
+    ///
+    /// A rule that fired with no required conditions holds unconditionally; one that fired
+    /// carrying conditions holds only where they do (the reference's `Applicable` versus
+    /// `ApplicableWithConditions`). The steps themselves are only built by the branch of a rule
+    /// that already passed its precondition, so `NotApplicable`/`Unknown` cannot occur here — the
+    /// rules the engine rejected are published as `RuleAttempt` records instead.
+    fn applicability(&self) -> &'static str {
+        if self.required_conditions.is_empty() {
+            "Applicable"
+        } else {
+            "ApplicableWithConditions"
+        }
+    }
+}
+
 /// One RewriteStep wire record.
 fn rewrite_step_value(step: RewriteStepData) -> Value {
+    let applicability = step.applicability();
     Value::Record(
         "RewriteStep".to_string(),
         vec![
@@ -11046,18 +11146,26 @@ fn rewrite_step_value(step: RewriteStepData) -> Value {
                 "required_conditions".to_string(),
                 Value::Vector(step.required_conditions),
             ),
+            // SYM-005: whether this rewrite's preconditions were actually met, in the reference's
+            // own vocabulary (`Applicable` / `ApplicableWithConditions`).
+            (
+                "applicability".to_string(),
+                enum_value("RuleApplicability", applicability),
+            ),
         ],
     )
 }
 
 /// The TransformResult record simplify_full publishes: status, original, expression, changed,
-/// the conditions the result requires, the rule steps that produced it, budget state, diagnostics.
+/// the conditions the result requires, the rule steps that produced it, the rules that were tried
+/// and rejected (SYM-005), budget state and diagnostics.
 fn transform_result(
     engine: &Engine,
     original: Sym,
     expression: Sym,
     conditions: Vec<Value>,
     steps: Vec<RewriteStepData>,
+    attempts: Vec<RuleAttemptData>,
     budget_exceeded: bool,
 ) -> Value {
     let changed = original != expression;
@@ -11098,6 +11206,12 @@ fn transform_result(
             (
                 "steps".to_string(),
                 Value::Vector(steps.into_iter().map(rewrite_step_value).collect()),
+            ),
+            // SYM-005: the rules the engine tried and rejected, with the applicability decision
+            // and the engine's reason. Empty when every attempt fired (or when no rule was tried).
+            (
+                "attempts".to_string(),
+                Value::Vector(attempts.into_iter().map(rule_attempt_value).collect()),
             ),
             (
                 "budget_exceeded".to_string(),
@@ -11594,10 +11708,15 @@ fn is_square_exp(exp: &Sym) -> bool {
 
 /// simplify_full's traced simplifier: the same rewrites as the safe simplifier, each recorded as
 /// a RewriteStep so the TransformResult publishes provenance instead of only the answer.
+///
+/// SYM-005: `attempts` collects the rules whose pattern matched a node but whose precondition did
+/// not hold, with the engine's reason. A rejected rule produces no step, so this is the only place
+/// the applicability of a *non*-fire can be published.
 fn simplify_traced(
     engine: &Engine,
     e: Sym,
     budget: &mut RewriteBudget,
+    attempts: &mut Vec<RuleAttemptData>,
 ) -> (Sym, Vec<RewriteStepData>) {
     use lovelace_symbolics::RelOp;
     if lovelace_symbolics::cancel::check() {
@@ -11609,7 +11728,7 @@ fn simplify_traced(
             let mut steps = Vec::new();
             let mut new_args = Vec::with_capacity(args.len());
             for a in args {
-                let (s, mut st) = simplify_traced(engine, a, budget);
+                let (s, mut st) = simplify_traced(engine, a, budget, attempts);
                 new_args.push(s);
                 steps.append(&mut st);
             }
@@ -11619,7 +11738,7 @@ fn simplify_traced(
             let mut steps = Vec::new();
             let mut acc = Sym::num(0);
             for t in terms {
-                let (s, mut st) = simplify_traced(engine, t, budget);
+                let (s, mut st) = simplify_traced(engine, t, budget, attempts);
                 acc = Sym::add(acc, s);
                 steps.append(&mut st);
             }
@@ -11629,27 +11748,27 @@ fn simplify_traced(
             let mut steps = Vec::new();
             let mut acc = Sym::num(1);
             for f in factors {
-                let (s, mut st) = simplify_traced(engine, f, budget);
+                let (s, mut st) = simplify_traced(engine, f, budget, attempts);
                 acc = Sym::mul(acc, s);
                 steps.append(&mut st);
             }
             (acc, steps)
         }
         Sym::Pow(a, b) => {
-            let (sa, mut st1) = simplify_traced(engine, *a, budget);
-            let (sb, mut st2) = simplify_traced(engine, *b, budget);
+            let (sa, mut st1) = simplify_traced(engine, *a, budget, attempts);
+            let (sb, mut st2) = simplify_traced(engine, *b, budget, attempts);
             st1.append(&mut st2);
             (Sym::pow(sa, sb), st1)
         }
         Sym::Div(a, b) => {
-            let (sa, mut st1) = simplify_traced(engine, *a, budget);
-            let (sb, mut st2) = simplify_traced(engine, *b, budget);
+            let (sa, mut st1) = simplify_traced(engine, *a, budget, attempts);
+            let (sb, mut st2) = simplify_traced(engine, *b, budget, attempts);
             st1.append(&mut st2);
             (Sym::Div(Box::new(sa), Box::new(sb)), st1)
         }
         Sym::Rel(op, a, b) => {
-            let (sa, mut st1) = simplify_traced(engine, *a, budget);
-            let (sb, mut st2) = simplify_traced(engine, *b, budget);
+            let (sa, mut st1) = simplify_traced(engine, *a, budget, attempts);
+            let (sb, mut st2) = simplify_traced(engine, *b, budget, attempts);
             st1.append(&mut st2);
             (Sym::Rel(op, Box::new(sa), Box::new(sb)), st1)
         }
@@ -11692,13 +11811,29 @@ fn simplify_traced(
     }
 
     if let Sym::Fun(fname, fargs) = &rebuilt {
-        // power: sqrt(w^2) -> w when w is known positive.
+        // The two power rules over sqrt(w^2). They are one dispatch here because SYM-005 needs the
+        // branch that did NOT fire as well as the one that did: the applicability of the rule that
+        // produced a step is on the step, and the reason the other rule was rejected is a
+        // RuleAttempt.
         if fname == "sqrt" && fargs.len() == 1 {
             if let Sym::Pow(base, exp) = &fargs[0] {
                 if is_square_exp(exp) {
-                    if let Sym::Sym(s) = base.as_ref() {
-                        if engine.is_positive(s) && budget.step() {
-                            let after = Sym::sym(s);
+                    use lovelace_symbolics::rewrite_registry::RuleApplicability;
+                    let symbol = match base.as_ref() {
+                        Sym::Sym(s) => Some(s.clone()),
+                        _ => None,
+                    };
+                    let positive = symbol
+                        .as_deref()
+                        .is_some_and(|s| engine.is_positive(s));
+                    let provably_real = engine.assumptions().provably_real(base);
+                    // power: sqrt(w^2) -> w when w is known positive.
+                    if positive && symbol.is_some() {
+                        if budget.step() {
+                            let after = match base.as_ref() {
+                                Sym::Sym(name) => Sym::sym(name),
+                                other => other.clone(),
+                            };
                             let condition =
                                 Sym::Rel(RelOp::Ge, Box::new(after.clone()), Box::new(Sym::num(0)));
                             steps.push(RewriteStepData {
@@ -11711,36 +11846,70 @@ fn simplify_traced(
                             return (after, steps);
                         }
                     }
-                }
-            }
-        }
-        // power: sqrt(w^2) -> |w| when w is provably real but not known nonnegative. The
-        // identity without a sign premise is domain-specific: it is what makes |w| the
-        // published form of sqrt(w^2) under a real domain assumption, and it carries that
-        // assumption as its DomainCondition. Firing it unguarded would define sqrt((-1)^2)
-        // as -1.
-        if fname == "sqrt" && fargs.len() == 1 {
-            if let Sym::Pow(base, exp) = &fargs[0] {
-                if is_square_exp(exp) {
-                    if let Sym::Sym(s) = base.as_ref() {
-                        if !engine.is_positive(s)
-                            && engine.assumptions().provably_real(base)
-                            && budget.step()
-                        {
-                            let after = Sym::Fun("abs".to_string(), vec![base.as_ref().clone()]);
-                            let condition = assumption_condition_leaf(&Assumption::SymbolDomain(
-                                s.clone(),
-                                AssumptionDomain::Real,
-                            ));
-                            steps.push(RewriteStepData {
-                                rule_id: "pow.sqrt-square-real",
-                                classification: "DomainSpecific",
-                                before: rebuilt.clone(),
-                                after: after.clone(),
-                                required_conditions: vec![condition],
-                            });
-                            return (after, steps);
+                    // power: sqrt(w^2) -> |w| when w is provably real but not known nonnegative.
+                    // The identity without a sign premise is domain-specific: it is what makes |w|
+                    // the published form of sqrt(w^2) under a real domain assumption, and it
+                    // carries that assumption as its DomainCondition. Firing it unguarded would
+                    // define sqrt((-1)^2) as -1.
+                    if !positive && provably_real {
+                        if let Some(s) = symbol.as_deref() {
+                            if budget.step() {
+                                let after =
+                                    Sym::Fun("abs".to_string(), vec![base.as_ref().clone()]);
+                                let condition =
+                                    assumption_condition_leaf(&Assumption::SymbolDomain(
+                                        s.to_string(),
+                                        AssumptionDomain::Real,
+                                    ));
+                                steps.push(RewriteStepData {
+                                    rule_id: "pow.sqrt-square-real",
+                                    classification: "DomainSpecific",
+                                    before: rebuilt.clone(),
+                                    after: after.clone(),
+                                    required_conditions: vec![condition],
+                                });
+                                return (after, steps);
+                            }
                         }
+                    }
+                    // SYM-005: neither rule fired. Publish each rule's own applicability decision
+                    // and the engine's reason, so the reader learns WHAT would have been needed
+                    // (`x` nonnegative, or a real domain) instead of only seeing no trace.
+                    if !positive {
+                        attempts.push(RuleAttemptData {
+                            rule_id: "pow.sqrt-square-nonnegative",
+                            pattern_matched: true,
+                            precondition: RuleApplicability::NotApplicable,
+                            rejection_reason: match symbol.as_deref() {
+                                Some(_) => {
+                                    "precondition false: the radicand is not known to be \
+                                     nonnegative in this session"
+                                }
+                                None => {
+                                    "precondition false: the radicand is not a single symbol, \
+                                     which this rule's applicability is defined over"
+                                }
+                            }
+                            .to_string(),
+                        });
+                    }
+                    if !provably_real {
+                        attempts.push(RuleAttemptData {
+                            rule_id: "pow.sqrt-square-real",
+                            pattern_matched: true,
+                            precondition: RuleApplicability::NotApplicable,
+                            rejection_reason: match symbol.as_deref() {
+                                Some(_) => {
+                                    "precondition false: the domain of the radicand is not known \
+                                     to be real in this session"
+                                }
+                                None => {
+                                    "precondition false: the radicand is not a single symbol, \
+                                     which this rule's applicability is defined over"
+                                }
+                            }
+                            .to_string(),
+                        });
                     }
                 }
             }
@@ -11770,6 +11939,9 @@ fn simplify_traced(
     // rat: x * x^-1 -> 1, carrying the non-vanishing condition x != 0.
     if let Sym::Mul(factors) = &rebuilt {
         let mut pair: Option<(usize, usize, String)> = None;
+        // SYM-005: the first reciprocal factor the rule's pattern matched but could not pair
+        // with a numerator factor, so the rejection can name the factor it was about.
+        let mut unmatched_reciprocal: Option<String> = None;
         for i in 0..factors.len() {
             if let Sym::Pow(base, exp) = &factors[i] {
                 if let Sym::Num(n) = exp.as_ref() {
@@ -11783,6 +11955,9 @@ fn simplify_traced(
                                     pair = Some((i, j, s.clone()));
                                     break;
                                 }
+                            }
+                            if unmatched_reciprocal.is_none() {
+                                unmatched_reciprocal = Some(s.clone());
                             }
                         }
                     }
@@ -11807,6 +11982,16 @@ fn simplify_traced(
                 });
                 return (after, steps);
             }
+        } else if let Some(reciprocal) = unmatched_reciprocal {
+            attempts.push(RuleAttemptData {
+                rule_id: "rat.cancel-x-over-x",
+                pattern_matched: true,
+                precondition: lovelace_symbolics::rewrite_registry::RuleApplicability::NotApplicable,
+                rejection_reason: format!(
+                    "precondition false: the product carries {reciprocal}^-1 but no {reciprocal} \
+                     factor to cancel it against, and the rule requires the pair"
+                ),
+            });
         }
     }
 

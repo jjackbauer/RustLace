@@ -194,6 +194,9 @@ impl RecordSchemas {
                 RecordFieldSchema::new("changed", "Boolean"),
                 RecordFieldSchema::new("conditions", "Array"),
                 RecordFieldSchema::new("steps", "Array"),
+                // SYM-005: the rules the engine tried and rejected, each a RuleAttempt record.
+                // Always present and always an Array (empty when every attempted rule fired).
+                RecordFieldSchema::new("attempts", "Array"),
                 RecordFieldSchema::new("budget_exceeded", "Boolean"),
                 RecordFieldSchema::new("budget_kind", "Text"),
                 RecordFieldSchema::new("diagnostics", "Array"),
@@ -207,6 +210,21 @@ impl RecordSchemas {
                 RecordFieldSchema::new("before", "Symbolic"),
                 RecordFieldSchema::new("after", "Symbolic"),
                 RecordFieldSchema::new("required_conditions", "Array"),
+                // SYM-005: the RuleApplicability decision for the rewrite that fired
+                // (Applicable / ApplicableWithConditions); always an Enum, never absent.
+                RecordFieldSchema::new("applicability", "Enum"),
+            ],
+        ),
+        // SYM-005: one rejected rewrite attempt a TransformResult's attempts array carries. The
+        // precondition is the reference's RuleApplicability enum (NotApplicable / Unknown here),
+        // and rejection_reason is the engine's human sentence, never an empty string.
+        RecordSchema::new(
+            "RuleAttempt",
+            &[
+                RecordFieldSchema::new("rule_id", "Text"),
+                RecordFieldSchema::new("pattern_matched", "Boolean"),
+                RecordFieldSchema::new("precondition", "Enum"),
+                RecordFieldSchema::new("rejection_reason", "Text"),
             ],
         ),
         // "exists" is three-valued (N19): Boolean true/false when determined or proven, Null when

@@ -1925,7 +1925,7 @@ fn descriptor_example_114_simplify() {
 fn descriptor_example_115_simplify_full() {
     check_typed(
         "x = symbol(\"x\"); y = symbol(\"y\"); t = symbol(\"t\"); simplify_full(x/x)",
-        "TransformResult(status: Satisfied, original: x/x, expression: 1, changed: True, conditions: [x != 0], steps: [RewriteStep(rule_id: rat.cancel-x-over-x, classification: Conditional, before: x/x, after: 1, required_conditions: [x != 0])], budget_exceeded: False, budget_kind: , diagnostics: []) (TransformResult)",
+        "TransformResult(status: Satisfied, original: x/x, expression: 1, changed: True, conditions: [x != 0], steps: [RewriteStep(rule_id: rat.cancel-x-over-x, classification: Conditional, before: x/x, after: 1, required_conditions: [x != 0], applicability: ApplicableWithConditions)], attempts: [], budget_exceeded: False, budget_kind: , diagnostics: []) (TransformResult)",
     );
 }
 

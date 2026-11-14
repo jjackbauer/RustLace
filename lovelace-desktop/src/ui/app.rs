@@ -4357,6 +4357,35 @@ impl WorkbenchApp {
                         node.set_numeric_value(committed as f64);
                     });
                     progress.on_hover_text("Committed statements of the last run's snapshot");
+                    // RUN-005: the in-flight statement's kernel sub-progress, painted as its OWN
+                    // readout beside the statement count. The count is statements committed out of
+                    // the run's total; this is the engine's phase and the kernel's own percentage
+                    // of its own work, so a single long `sqrt(2)`/`pi(n)`/`n!` statement no longer
+                    // looks hung at `1/1`. Absent whenever the engine published none (a short
+                    // statement, or an evaluator with no kernel progress seam).
+                    if let Some(kernel) = self
+                        .workbench
+                        .active_document()
+                        .kernel_progress()
+                        .cloned()
+                    {
+                        ui.separator();
+                        let kernel_bar = ui.add(
+                            egui::ProgressBar::new(kernel.fraction.clamp(0.0, 1.0))
+                                .desired_width(112.0)
+                                .text(format!("kernel {}", kernel.label())),
+                        );
+                        ui.ctx().accesskit_node_builder(kernel_bar.id, |node| {
+                            node.set_min_numeric_value(0.0);
+                            node.set_max_numeric_value(1.0);
+                            node.set_numeric_value(kernel.fraction as f64);
+                        });
+                        kernel_bar.on_hover_text(
+                            "Kernel sub-progress reported by the running statement's engine \
+                             (RUN-005): the phase the kernel is in and its own percentage of its \
+                             own work",
+                        );
+                    }
                 },
             );
     }
@@ -4396,6 +4425,11 @@ impl WorkbenchApp {
                 self.view.committed_steps.min(self.view.total),
                 self.view.total
             ));
+        }
+        // RUN-005: the compact strip carries the same kernel segment the full strip paints, so a
+        // narrow window still shows the running kernel's phase beside the statement count.
+        if let Some(kernel) = self.workbench.active_document().kernel_progress().cloned() {
+            short.push_str(&format!(" · kernel {}", kernel.label()));
         }
         ui.horizontal(|ui| {
             ui.label(RichText::new(short).monospace().small().color(
@@ -7513,17 +7547,22 @@ fn paint_inspector(
                         .small()
                         .color(theme::dim()),
                 );
-                // SYM-005: applicability is the one part of the row the engine does not publish
-                // for a recorded step. The pane states that absence instead of implying the step
-                // was unconditional.
+                // SYM-005: whether this rewrite's preconditions were met, from the engine's own
+                // published applicability. `Applicable` states the rule held unconditionally;
+                // `ApplicableWithConditions` states it held only under the conditions listed
+                // below; the empty value is the explicit "this engine published none" state, so a
+                // step is never silently implied to be unconditional.
                 ui.add(
                     egui::Label::new(
-                        RichText::new(
-                            "applicability  not published: a RewriteStep carries the rule id, \
-                             classification, before/after and required conditions only",
-                        )
-                        .small()
-                        .color(theme::warning()),
+                        RichText::new(format!("applicability  {}", step.applicability_label()))
+                            .small()
+                            .color(if step.applicability == "Applicable" {
+                                theme::dim()
+                            } else if step.applicability.is_empty() {
+                                theme::warning()
+                            } else {
+                                theme::accent()
+                            }),
                     )
                     .wrap(),
                 );
@@ -7570,6 +7609,72 @@ fn paint_inspector(
         }
         Section::Missing(reason) => {
             paint_inspector_heading(ui, "Simplification trace", "");
+            paint_inspector_reason(ui, reason);
+        }
+    }
+
+    // SYM-005: the rules the engine TRIED and rejected, each with its applicability decision and
+    // the engine's reason. This is the half of the row a trace alone could never show: a rule that
+    // did not fire has no step, so without this section the pane could only say "not applied".
+    match &inspection.applicability {
+        Section::Supplied(attempts) => {
+            paint_inspector_heading(
+                ui,
+                "Applicability",
+                &count_label(attempts.len(), "rejected rule", "rejected rules"),
+            );
+            if attempts.is_empty() {
+                ui.label(
+                    RichText::new(
+                        "Every rule the engine tried fired or was not applicable this time; no \
+                         rule was rejected for this result.",
+                    )
+                    .small()
+                    .color(theme::dim()),
+                );
+            }
+            for attempt in attempts {
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{}  {}",
+                        attempt.rule_id,
+                        attempt.status_label()
+                    ))
+                    .monospace()
+                    .color(theme::warning()),
+                );
+                ui.label(
+                    RichText::new(format!("precondition  {}", attempt.precondition))
+                        .small()
+                        .color(theme::dim()),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "pattern  {}",
+                        if attempt.pattern_matched {
+                            "matched this node"
+                        } else {
+                            "did not match this node"
+                        }
+                    ))
+                    .small()
+                    .color(theme::dim()),
+                );
+                if !attempt.reason.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("reason  {}", attempt.reason))
+                                .small()
+                                .color(theme::text()),
+                        )
+                        .wrap(),
+                    );
+                }
+            }
+        }
+        Section::Missing(reason) => {
+            paint_inspector_heading(ui, "Applicability", "");
             paint_inspector_reason(ui, reason);
         }
     }
@@ -7708,6 +7813,10 @@ fn paint_result_status(ui: &mut Ui, view: &DocumentView) {
 
 /// SYM-011: the tree paints inside its own bounded, scrolled body, so a deep expression cannot
 /// push the assumptions, trace and MathIR sections below the pane.
+///
+/// ROUND-67: the bound is a maximum, not a reservation. A shallow tree (the common case: the
+/// inspector shows the RESULT expression, often one node) shrinks to its rows instead of spending
+/// 260 points of empty space that would push the Applicability section out of a 1600x1000 pane.
 const TREE_VIEWPORT_HEIGHT: f32 = 260.0;
 /// SYM-003: the indentation one tree level adds, in points.
 const TREE_INDENT: f32 = 14.0;
@@ -7764,7 +7873,7 @@ fn paint_inspector_tree(
     let mut area = egui::ScrollArea::vertical()
         .id_salt("inspector_tree")
         .max_height(TREE_VIEWPORT_HEIGHT)
-        .auto_shrink([false, false]);
+        .auto_shrink([false, true]);
     if let Some(offset) = scroll_to.take() {
         area = area.vertical_scroll_offset(offset);
     }
@@ -9614,6 +9723,92 @@ mod tests {
             }),
             "gated-slow",
         )
+    }
+
+    /// RUN-005: a test engine that reports kernel sub-progress through the REAL seam (the sink the
+    /// execution core installs) and then holds the statement in flight until the test releases it,
+    /// so a frame can be painted in the middle of one long kernel.
+    struct KernelReportingEngine {
+        gate: Arc<Gate>,
+        sink: Option<crate::engine::KernelProgressSink>,
+    }
+
+    impl Evaluator for KernelReportingEngine {
+        fn eval(&mut self, _src: &str) -> Result<String, String> {
+            if let Some(sink) = &self.sink {
+                sink("sqrt:integer-square-root", 0.10);
+            }
+            self.gate.wait();
+            Ok("1.4142".to_string())
+        }
+
+        fn set_kernel_progress_sink(&mut self, sink: Option<crate::engine::KernelProgressSink>) {
+            self.sink = sink;
+        }
+    }
+
+    /// The window paints the kernel segment beside the statement count while the statement that
+    /// owns it is still running, and stops painting it once that statement has committed.
+    #[test]
+    fn the_status_strip_paints_the_kernel_sub_progress_beside_the_statement_count() {
+        let gate = Arc::new(Gate::default());
+        let factory_gate = Arc::clone(&gate);
+        let workbench = Workbench::with_factory(Box::new(move || {
+            Box::new(KernelReportingEngine {
+                gate: Arc::clone(&factory_gate),
+                sink: None,
+            })
+        }));
+        let mut app = WorkbenchApp::with_workbench(workbench);
+        let ctx = egui::Context::default();
+        app.workbench
+            .set_source(0, "sqrt(2)\n".to_string());
+        assert!(
+            app.workbench.run_active(),
+            "the run must be accepted before a frame can paint it"
+        );
+        // Paint passes until the strip shows the kernel's own phase. The engine is blocked in its
+        // own evaluation, so this cannot race the commit: the statement stays in flight until the
+        // gate is released below.
+        let mut texts = Vec::new();
+        let mut observed = false;
+        for _ in 0..40 {
+            frame(&ctx, &mut app, Vec::new());
+            texts = pump_text(&ctx, &mut app, 1);
+            if texts.iter().any(|text| text.contains("kernel sqrt:")) {
+                observed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            observed,
+            "the status strip never painted the kernel sub-progress: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("kernel sqrt:integer-square-root 10%")),
+            "the painted strip must name the engine's phase and fraction: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains("0/1")),
+            "the statement count must be painted beside it: {texts:?}"
+        );
+        gate.release();
+        assert!(
+            app.workbench.wait_until_idle(Duration::from_secs(30)),
+            "the run must finish once the gate opens"
+        );
+        let after = pump_text(&ctx, &mut app, 1);
+        assert!(
+            !after.iter().any(|text| text.contains("kernel sqrt:")),
+            "a committed statement's kernel segment must not linger: {after:?}"
+        );
+        assert!(
+            after.iter().any(|text| text.contains("1/1")),
+            "the committed statement count stays painted: {after:?}"
+        );
     }
 
     fn key(key: Key, modifiers: egui::Modifiers) -> egui::Event {
@@ -12282,6 +12477,12 @@ mod tests {
                             Json::Arr(vec![Json::obj([
                                 ("ruleId", Json::Str("logexp.exp-log".to_string())),
                                 ("classification", Json::Str("Conditional".to_string())),
+                                // SYM-005: the fired step's own applicability, as the engine
+                                // publishes it.
+                                (
+                                    "applicability",
+                                    Json::Str("ApplicableWithConditions".to_string()),
+                                ),
                                 (
                                     "before",
                                     Json::obj([
@@ -12302,6 +12503,52 @@ mod tests {
                                 ("conditions", Json::Arr(vec![finite])),
                             ])]),
                         )]),
+                    ),
+                    // SYM-005: the rejected rule with the engine's applicability and reason.
+                    (
+                        "applicability",
+                        Json::obj([
+                            (
+                                "applied",
+                                Json::Arr(vec![Json::obj([
+                                    ("ruleId", Json::Str("logexp.exp-log".to_string())),
+                                    (
+                                        "applicability",
+                                        Json::Str("ApplicableWithConditions".to_string()),
+                                    ),
+                                ])]),
+                            ),
+                            (
+                                "attempts",
+                                Json::Arr(vec![Json::obj([
+                                    (
+                                        "ruleId",
+                                        Json::Str("pow.sqrt-square-nonnegative".to_string()),
+                                    ),
+                                    ("patternMatched", Json::Bool(true)),
+                                    (
+                                        "precondition",
+                                        Json::Str("NotApplicable".to_string()),
+                                    ),
+                                    (
+                                        "reason",
+                                        Json::Str(
+                                            "precondition false: the radicand is not known to be \
+                                             nonnegative in this session"
+                                                .to_string(),
+                                        ),
+                                    ),
+                                ])]),
+                            ),
+                            (
+                                "counts",
+                                Json::obj([
+                                    ("applied", Json::Num("1".to_string())),
+                                    ("rejected", Json::Num("1".to_string())),
+                                    ("conditioned", Json::Num("0".to_string())),
+                                ]),
+                            ),
+                        ]),
                     ),
                     ("mathir", mathir),
                 ]),
@@ -12395,9 +12642,11 @@ mod tests {
         (texts, output.platform_output, controls)
     }
 
-    /// SYM-001 at the paint layer: all six sections come from the payload, not from the display.
+    /// SYM-001 at the paint layer: all seven sections come from the payload, not from the display.
+    /// SYM-005 adds the seventh: the applicability value on each step and the rejected rules with
+    /// the engine's reason.
     #[test]
-    fn the_inspector_paints_all_six_sections_from_the_engine_payload() {
+    fn the_inspector_paints_all_seven_sections_from_the_engine_payload() {
         let ctx = egui::Context::default();
         let view = inspector_view(supplied_mathir());
         let mut expansion = InspectorExpansion::new();
@@ -12454,6 +12703,15 @@ mod tests {
                 .any(|text| text == "classification  Conditional"),
             "{texts:?}"
         );
+        // SYM-005: the step states its applicability instead of claiming the engine publishes
+        // none, and the wording distinguishes "conditioned" from "unconditional".
+        assert!(
+            texts
+                .iter()
+                .any(|text| text
+                    == "applicability  conditioned (met under the required conditions)"),
+            "the step's applicability is painted: {texts:?}"
+        );
         assert!(
             texts.iter().any(|text| text == "before  exp(log(x))"),
             "{texts:?}"
@@ -12462,6 +12720,30 @@ mod tests {
         assert!(
             texts.iter().any(|text| text == "FiniteCondition"),
             "the required condition's engine record kind: {texts:?}"
+        );
+        // SYM-005: the rejected rule and the engine's own reason are painted, so an unmet
+        // precondition is a reason rather than a silent absence.
+        assert!(
+            texts.iter().any(|text| text == "Applicability"),
+            "the applicability section is painted: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "pow.sqrt-square-nonnegative  not applicable"),
+            "the rejected rule with its status: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "precondition  NotApplicable"),
+            "the engine's precondition value: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|text| text.contains(
+                "reason  precondition false: the radicand is not known to be nonnegative"
+            )),
+            "the unmet precondition's reason is painted: {texts:?}"
         );
         assert!(texts.iter().any(|text| text == "MathIR"), "{texts:?}");
         assert!(

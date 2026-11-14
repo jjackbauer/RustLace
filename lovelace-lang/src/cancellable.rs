@@ -23,12 +23,21 @@ const FACTORIAL_LEAF: u64 = 64;
 /// work is microseconds and the cancellation rows are orders of magnitude above it).
 const NATIVE_FACTORIAL_LIMIT: u64 = 4096;
 
+/// RUN-005: multiplications between sub-progress reports in the factorial product tree. One report
+/// per merge node would be tens of thousands of callbacks for `2000000!`; one per 256 leaves is
+/// ~0.03 % of the loop body and still moves the observer's fraction.
+const FACTORIAL_PROGRESS_STRIDE: u64 = 256;
+
 fn cancelled() -> LangError {
     crate::cancelled_error()
 }
 
 /// `base ^ exponent` by binary exponentiation, checking the caller's deadline between every
 /// square and multiply. Returns the structured cancellation failure when the deadline is observed.
+///
+/// RUN-005: the exponentiation has few iterations but every one of them is a full-width product,
+/// so the phase/fraction is reported per iteration (never strided: 2^1000000000 spends its whole
+/// budget inside ~30 squares).
 pub(crate) fn pow(base: &Nat, exponent: u64) -> Result<Nat, LangError> {
     if exponent == 0 {
         return Ok(Nat::from_u64(1));
@@ -39,9 +48,19 @@ pub(crate) fn pow(base: &Nat, exponent: u64) -> Result<Nat, LangError> {
     let mut result = Nat::from_u64(1);
     let mut factor = base.clone();
     let mut remaining = exponent;
+    // How many bits of the exponent have been consumed, for the observer's fraction.
+    let total_bits = 64 - exponent.leading_zeros();
     loop {
         if lovelace_symbolics::cancel::check() {
             return Err(cancelled());
+        }
+        if crate::progress::active() {
+            let remaining_bits = 64 - remaining.leading_zeros();
+            let done_bits = total_bits.saturating_sub(remaining_bits);
+            crate::progress::report(
+                "pow:binary-exponentiation",
+                done_bits as f32 / total_bits as f32,
+            );
         }
         if remaining & 1 == 1 {
             result = result.mul(&factor);
@@ -59,6 +78,10 @@ pub(crate) fn pow(base: &Nat, exponent: u64) -> Result<Nat, LangError> {
 }
 
 /// `n!` by a balanced product tree, checking the caller's deadline per leaf range and per merge.
+///
+/// RUN-005: the tree visits every value from 2 to n, so the leaf loop reports its fraction of that
+/// range (strided, see [`FACTORIAL_PROGRESS_STRIDE`]) and a kernel of seconds shows real progress
+/// instead of one label.
 pub(crate) fn factorial(n: u64) -> Result<Nat, LangError> {
     if n < 2 {
         return Ok(Nat::from_u64(1));
@@ -66,10 +89,37 @@ pub(crate) fn factorial(n: u64) -> Result<Nat, LangError> {
     if n <= NATIVE_FACTORIAL_LIMIT {
         return Ok(Nat::factorial(n));
     }
-    product_range(2, n)
+    let mut progress = FactorialProgress {
+        done: 0,
+        total: n - 1,
+    };
+    product_range(2, n, &mut progress)
 }
 
-fn product_range(low: u64, high: u64) -> Result<Nat, LangError> {
+/// The product tree's observation state: values multiplied so far out of the whole range.
+struct FactorialProgress {
+    done: u64,
+    total: u64,
+}
+
+impl FactorialProgress {
+    /// Counts one multiplied value and reports the fraction on the stride.
+    fn advance(&mut self) {
+        self.done += 1;
+        if self.done % FACTORIAL_PROGRESS_STRIDE == 0 {
+            crate::progress::report(
+                "factorial:product-tree",
+                self.done as f32 / self.total.max(1) as f32,
+            );
+        }
+    }
+}
+
+fn product_range(
+    low: u64,
+    high: u64,
+    progress: &mut FactorialProgress,
+) -> Result<Nat, LangError> {
     if lovelace_symbolics::cancel::check() {
         return Err(cancelled());
     }
@@ -80,12 +130,13 @@ fn product_range(low: u64, high: u64) -> Result<Nat, LangError> {
                 return Err(cancelled());
             }
             product = product.mul(&Nat::from_u64(value));
+            progress.advance();
         }
         return Ok(product);
     }
     let middle = low + (high - low) / 2;
-    let left = product_range(low, middle)?;
-    let right = product_range(middle + 1, high)?;
+    let left = product_range(low, middle, progress)?;
+    let right = product_range(middle + 1, high, progress)?;
     if lovelace_symbolics::cancel::check() {
         return Err(cancelled());
     }

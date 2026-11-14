@@ -364,6 +364,14 @@ impl EngineError {
     }
 }
 
+/// A kernel sub-progress observer (RUN-005): the callback an evaluator's long-running kernel
+/// reports a human-readable phase and a fraction in `0.0..=1.0` to.
+///
+/// It is a plain callback rather than a channel so the engine boundary does not choose a
+/// transport: the execution core hands in one that forwards into the run's event queue, and an
+/// evaluator with no such seam ignores it (the default), behaving exactly as before.
+pub type KernelProgressSink = Arc<dyn Fn(&str, f32) + Send + Sync>;
+
 /// An engine instance owned by one document.
 ///
 /// The only required method is the contract's eval. Everything else has a default so that a
@@ -408,6 +416,16 @@ pub trait Evaluator {
     /// engine that has no kernel polling seam ignores it; the statement-boundary token still
     /// applies, so the default is a no-op rather than an error.
     fn set_cancel_flag(&mut self, _flag: Option<Arc<AtomicBool>>) {}
+
+    /// Installs (or clears) the kernel sub-progress observer (RUN-005).
+    ///
+    /// A long-running kernel (`sqrt(2)` at a high precision, `pi(n)`, `n!`) reports a phase plus a
+    /// fraction through this sink while it runs, so the window can show progress *inside* a
+    /// statement instead of only between statements. The engine arms the sink for exactly one
+    /// evaluation, like the live cancellation flag. An engine with no kernel progress seam ignores
+    /// it: the default is a no-op, so a minimal evaluator behaves exactly as before and the
+    /// status strip simply has no kernel segment to paint.
+    fn set_kernel_progress_sink(&mut self, _sink: Option<KernelProgressSink>) {}
 
     /// Sets the directory the engine writes plot files to.
     ///

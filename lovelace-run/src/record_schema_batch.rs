@@ -100,6 +100,7 @@ fn every_produced_record_conforms_to_its_declared_schema() {
         r#"x = symbol("x"); y = symbol("y"); solve_system([x + y == 1, x - y == 3], [x, y])"#,
         r#"x = symbol("x"); simplify_full(x/x)"#,
         r#"x = symbol("x", real); simplify_full(sqrt(x^2))"#,
+        r#"x = symbol("x"); simplify_full(sqrt(x^2))"#,
         r#"x = symbol("x"); solve_full(x^4 - x^2 - 1 == 0, x)"#,
         r#"x = symbol("x"); assume(x == 0); simplify_full(x/x)"#,
         r#"x = symbol("x"); limit_full(1/x, x, 0)"#,
@@ -144,6 +145,7 @@ fn every_produced_record_conforms_to_its_declared_schema() {
         "Binding",
         "TransformResult",
         "RewriteStep",
+        "RuleAttempt",
         "LimitResult",
         "IntegrationResult",
         "OptimizationResult",
@@ -267,6 +269,7 @@ fn solver_schemas_declare_the_structural_kinds() {
             ("changed", "Boolean"),
             ("conditions", "Array"),
             ("steps", "Array"),
+            ("attempts", "Array"),
             ("budget_exceeded", "Boolean"),
             ("budget_kind", "Text"),
             ("diagnostics", "Array"),
@@ -280,6 +283,16 @@ fn solver_schemas_declare_the_structural_kinds() {
             ("before", "Symbolic"),
             ("after", "Symbolic"),
             ("required_conditions", "Array"),
+            ("applicability", "Enum"),
+        ],
+    );
+    assert_schema(
+        "RuleAttempt",
+        &[
+            ("rule_id", "Text"),
+            ("pattern_matched", "Boolean"),
+            ("precondition", "Enum"),
+            ("rejection_reason", "Text"),
         ],
     );
     assert_schema(

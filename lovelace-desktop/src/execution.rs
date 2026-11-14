@@ -27,7 +27,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -128,6 +128,33 @@ pub enum InFlightCancellation {
     Interrupted,
 }
 
+/// One kernel sub-progress report (RUN-005): the phase the engine's kernel is in and how much of
+/// its own work it has finished.
+///
+/// This is deliberately distinct from the statement counter the strip already shows: `1/1` says
+/// one statement committed, while `sqrt:integer-square-root 10%` says where the statement that is
+/// still running is. The strip paints both, side by side, and a reader (or a UIA capture) can tell
+/// which is which because one is a count and the other names the engine's phase.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KernelProgress {
+    /// The engine's human-readable phase (`sqrt:integer-square-root`, `pi:machin-arctan`, ...).
+    pub phase: String,
+    /// Fraction of the kernel's work completed, from 0.0 to 1.0.
+    pub fraction: f32,
+}
+
+impl KernelProgress {
+    /// The whole-number percentage the strip paints.
+    pub fn percent(&self) -> u32 {
+        (self.fraction.clamp(0.0, 1.0) * 100.0).round() as u32
+    }
+
+    /// The strip's label: the engine's phase and the percentage, e.g. `sqrt:truncate 90%`.
+    pub fn label(&self) -> String {
+        format!("{} {}%", self.phase, self.percent())
+    }
+}
+
 /// A typed notification from a running document.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DesktopEvent {
@@ -196,6 +223,23 @@ pub enum DesktopEvent {
         /// Human-readable progress label.
         label: String,
     },
+    /// RUN-005: progress *inside* the statement that is running, reported by the kernel itself.
+    ///
+    /// [`DesktopEvent::SubProgress`] is statement granularity (committed over total); this is the
+    /// kernel's own phase plus the fraction of its work it has finished, so a window watching a
+    /// single long `sqrt(2)`, `pi(n)` or `n!` statement can show that the kernel is inside its
+    /// integer square root instead of appearing hung. The phase is the engine's own wording; the
+    /// desktop never derives one.
+    KernelProgress {
+        /// The document being run.
+        document: DocumentId,
+        /// The run's identity.
+        run: RunId,
+        /// The engine's human-readable phase (`sqrt:integer-square-root`, ...).
+        phase: String,
+        /// Fraction of the kernel's work completed, from 0.0 to 1.0.
+        fraction: f32,
+    },
     /// The run completed normally.
     Finished {
         /// The document that ran.
@@ -252,6 +296,7 @@ impl DesktopEvent {
             | DesktopEvent::StepCommitted { document, .. }
             | DesktopEvent::Output { document, .. }
             | DesktopEvent::SubProgress { document, .. }
+            | DesktopEvent::KernelProgress { document, .. }
             | DesktopEvent::Finished { document, .. }
             | DesktopEvent::Cancelled { document, .. }
             | DesktopEvent::Failed { document, .. } => *document,
@@ -266,6 +311,7 @@ impl DesktopEvent {
             | DesktopEvent::StepCommitted { run, .. }
             | DesktopEvent::Output { run, .. }
             | DesktopEvent::SubProgress { run, .. }
+            | DesktopEvent::KernelProgress { run, .. }
             | DesktopEvent::Finished { run, .. }
             | DesktopEvent::Cancelled { run, .. }
             | DesktopEvent::Failed { run, .. } => *run,
@@ -286,6 +332,7 @@ impl DesktopEvent {
             DesktopEvent::StepCommitted { .. } => "StepCommitted",
             DesktopEvent::Output { .. } => "Output",
             DesktopEvent::SubProgress { .. } => "SubProgress",
+            DesktopEvent::KernelProgress { .. } => "KernelProgress",
             DesktopEvent::Finished { .. } => "Finished",
             DesktopEvent::Cancelled { .. } => "Cancelled",
             DesktopEvent::Failed { .. } => "Failed",
@@ -297,12 +344,13 @@ impl DesktopEvent {
     /// A test constructs one of each variant and asserts this list has no duplicate and that
     /// each event's [`Self::kind`] is in it, so the variant set and its consumers cannot drift.
     #[allow(dead_code)] // used by the ARC-004 variant test
-    pub const KIND_NAMES: [&'static str; 8] = [
+    pub const KIND_NAMES: [&'static str; 9] = [
         "RunStarted",
         "StepStarted",
         "StepCommitted",
         "Output",
         "SubProgress",
+        "KernelProgress",
         "Finished",
         "Cancelled",
         "Failed",
@@ -1058,6 +1106,12 @@ impl RunWorker {
         let _ = panic::catch_unwind(AssertUnwindSafe(|| {
             engine.set_cancel_flag(Some(cancel_flag));
         }));
+        // RUN-005: the kernel sub-progress sink. The engine arms it for each evaluation below, so
+        // a kernel inside the statement reports its phase to the run's event queue while the
+        // statement is still in flight. An engine without the seam ignores it (the trait default).
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            engine.set_kernel_progress_sink(Some(self.kernel_progress_sink()));
+        }));
         // INC-001: the run's source-level dependency tables are built once, and the engine's own
         // registry (a fresh engine, so builtins/plugins only) supplies the pure-callable set the
         // effect classification consults.
@@ -1514,6 +1568,47 @@ impl RunWorker {
             event,
         });
     }
+
+    /// RUN-005: the callback this run's engine reports kernel sub-progress through.
+    ///
+    /// The callback runs on the worker thread INSIDE the evaluation, so it forwards the report
+    /// straight into the run's event queue with the run identity attached: a report can never be
+    /// attributed to another document or another run. Reports are decimated to a resolution the
+    /// strip can use (one event per 0.5 % of kernel work, plus the first one and anything the
+    /// engine reports once the work is done): `2000000!`'s product tree reports every 256
+    /// multiplications, and forwarding all of those would flood the queue with values no pane
+    /// could ever paint. The engine still sees every report — only the queue is decimated, and
+    /// the fraction the strip shows is the engine's own.
+    fn kernel_progress_sink(&self) -> crate::engine::KernelProgressSink {
+        /// Permille between forwarded reports.
+        const RESOLUTION_PERMILLE: u32 = 5;
+        let sender = self.sender.clone();
+        let document = self.document;
+        let run = self.run;
+        let revision = self.revision;
+        let last = Arc::new(AtomicU32::new(0));
+        let first = Arc::new(AtomicBool::new(true));
+        Arc::new(move |phase: &str, fraction: f32| {
+            let permille = (fraction.clamp(0.0, 1.0) * 1000.0) as u32;
+            let previous = last.load(Ordering::Relaxed);
+            if !first.swap(false, Ordering::Relaxed)
+                && permille < previous.saturating_add(RESOLUTION_PERMILLE)
+                && permille < 1000
+            {
+                return;
+            }
+            last.store(permille, Ordering::Relaxed);
+            let _ = sender.send(RawEvent {
+                revision,
+                event: DesktopEvent::KernelProgress {
+                    document,
+                    run,
+                    phase: phase.to_string(),
+                    fraction,
+                },
+            });
+        })
+    }
 }
 
 /// Extracts the text out of a panic payload.
@@ -1713,6 +1808,9 @@ mod tests {
             DesktopEvent::StepCommitted { index, .. } => format!("StepCommitted({index})"),
             DesktopEvent::Output { text, .. } => format!("Output({text:?})"),
             DesktopEvent::SubProgress { .. } => "SubProgress".to_string(),
+            DesktopEvent::KernelProgress {
+                phase, fraction, ..
+            } => format!("KernelProgress({phase} {:.0}%)", fraction * 100.0),
             DesktopEvent::Finished { .. } => "Finished".to_string(),
             DesktopEvent::Cancelled {
                 committed_steps,
@@ -2695,18 +2793,18 @@ mod tests {
         );
     }
 
-    /// RUN-005 evidence, not a pass: the host's only sub-progress is the committed/total
-    /// fraction, and the real engine publishes nothing while a long kernel runs.
+    /// RUN-005 proof: a long kernel publishes sub-progress while the statement is in flight.
     ///
     /// The web Studio reference publishes kernel sub-progress (`Interpreter.SubProgress("sqrt")`
-    /// passed into `Real.SqrtAsync`; `REF-digits`/`REF-precision` capture `subProgress=1,
-    /// subLabel=sqrt`). The Rust engine has no such callback, so the desktop can only report
-    /// statement granularity. This test pins exactly that gap: one single-statement kernel
-    /// delivers **zero** events between `StepStarted` and `StepCommitted`, and the one
-    /// `SubProgress` it does deliver carries `1/1` (the committed fraction), never a phase name.
+    /// passed into `Real.SqrtAsync`). The engine now does too, through the additive
+    /// `lovelace_lang::progress` observer the adapter arms for each evaluation, so this test
+    /// asserts the events the probe used to find absent: at least one `KernelProgress` between
+    /// `StepStarted` and `StepCommitted`, each carrying the engine's phase and a fraction that
+    /// never moves backwards. The committed `1/1` statement fraction still arrives as its own,
+    /// separate `SubProgress` event — the two are distinguishable on the wire and in the strip.
     #[test]
     #[cfg(feature = "real-engine")]
-    fn t10_a_long_sqrt_kernel_publishes_no_kernel_sub_progress() {
+    fn t10_a_long_sqrt_kernel_publishes_kernel_sub_progress() {
         let host = ExecutionHost::new(Box::new(|| Box::new(crate::engine::RealEngine::new())));
         let document = DocumentId(7);
         let started = Instant::now();
@@ -2763,12 +2861,46 @@ mod tests {
             summary(&events)
         );
         let between = &events[step_started + 1..step_committed];
+        let kernel_progress: Vec<(String, f32)> = between
+            .iter()
+            .filter_map(|event| match &event.event {
+                DesktopEvent::KernelProgress {
+                    phase, fraction, ..
+                } => Some((phase.clone(), *fraction)),
+                _ => None,
+            })
+            .collect();
         assert!(
-            between.is_empty(),
-            "the engine published events during the kernel (the missing seam would place a \
-             phase/fraction here): {:?}",
+            !kernel_progress.is_empty(),
+            "the engine published no kernel sub-progress during the kernel: {:?}",
             summary(between)
         );
+        let phases: Vec<&str> = kernel_progress
+            .iter()
+            .map(|(phase, _)| phase.as_str())
+            .collect();
+        assert_eq!(
+            phases,
+            vec![
+                "sqrt:operand",
+                "sqrt:integer-square-root",
+                "sqrt:truncate"
+            ],
+            "the sqrt kernel's phases, in order: {kernel_progress:?}"
+        );
+        for window in kernel_progress.windows(2) {
+            assert!(
+                window[1].1 >= window[0].1,
+                "the fraction must never move backwards: {kernel_progress:?}"
+            );
+        }
+        assert!(
+            kernel_progress.first().map(|(_, fraction)| *fraction)
+                < kernel_progress.last().map(|(_, fraction)| *fraction),
+            "at least one report must advance the fraction: {kernel_progress:?}"
+        );
+        // The statement-level SubProgress is still exactly the committed fraction, distinct from
+        // the kernel's phases: one event, label "1/1", after the commit.
         let sub_progress: Vec<(f32, String)> = events
             .iter()
             .filter_map(|event| match &event.event {
@@ -2781,15 +2913,8 @@ mod tests {
         assert_eq!(
             sub_progress,
             vec![(1.0, "1/1".to_string())],
-            "the only sub-progress must be the committed fraction, with a statement label"
+            "the statement fraction must stay the committed fraction, not the kernel's"
         );
-        // The premise of the probe - that the kernel is long enough to need sub-progress - is a
-        // property of the requested work, not of the machine: the display precision is what makes
-        // the kernel long and the committed result is what proves the engine really computed at
-        // it. A wall-clock floor here would be a machine-speed lottery: in a release build the
-        // 50 000-digit root takes ~0.2 s on an idle machine, below any floor that would still be
-        // meaningful, while the same test in the debug profile or under parallel test load takes
-        // longer. The elapsed time is measured for the probe line below, not asserted.
         let finished = events
             .iter()
             .find_map(|event| match &event.event {
@@ -2812,13 +2937,16 @@ mod tests {
              short value; it carried {committed_digits}"
         );
         println!(
-            "RUN-005 probe: sqrt(2) at 50000 digits took {:.0} ms with {} event(s) between \
-             StepStarted and StepCommitted; the only SubProgress was label={:?} fraction={}; \
-             REF-digits/REF-precision publish subProgress=1 subLabel=sqrt",
+            "RUN-005 proof: sqrt(2) at 50000 digits took {:.0} ms; the kernel published {} \
+             progress event(s) between StepStarted and StepCommitted: {:?}; the statement \
+             SubProgress is still {:?}",
             elapsed.as_secs_f64() * 1000.0,
-            between.len(),
-            sub_progress[0].1,
-            sub_progress[0].0
+            kernel_progress.len(),
+            kernel_progress
+                .iter()
+                .map(|(phase, fraction)| format!("{phase} {:.0}%", fraction * 100.0))
+                .collect::<Vec<String>>(),
+            sub_progress[0].1
         );
     }
 
@@ -2898,6 +3026,12 @@ mod tests {
                 fraction: 1.0 / 3.0,
                 label: "1/3".to_string(),
             },
+            DesktopEvent::KernelProgress {
+                document,
+                run,
+                phase: "sqrt:integer-square-root".to_string(),
+                fraction: 0.25,
+            },
             DesktopEvent::Finished {
                 document,
                 run,
@@ -2942,6 +3076,7 @@ mod tests {
                 | DesktopEvent::StepCommitted { document: d, run: r, .. }
                 | DesktopEvent::Output { document: d, run: r, .. }
                 | DesktopEvent::SubProgress { document: d, run: r, .. }
+                | DesktopEvent::KernelProgress { document: d, run: r, .. }
                 | DesktopEvent::Finished { document: d, run: r, .. }
                 | DesktopEvent::Cancelled { document: d, run: r, .. }
                 | DesktopEvent::Failed { document: d, run: r, .. } => {

@@ -1645,4 +1645,78 @@ mod tests {
             one()
         );
     }
+
+    /// SYM-005: the shipped registry's own protocol already decides the sqrt(w^2) preconditions,
+    /// and [`TransformResult::attempts`] carries the met/unmet distinction the language layer now
+    /// publishes. A rejected rule keeps `NotApplicable` and the engine's reason; the rule that
+    /// fired is not in the rejected list at all.
+    #[test]
+    fn the_shipped_transform_reports_met_and_unmet_preconditions() {
+        // `x` is real but not known nonnegative: the sign rule is rejected, the real-domain rule
+        // fires with its DomainCondition.
+        let met = transform(
+            &sqrt_square(x()),
+            &real_symbol("x"),
+            TransformOptions {
+                trace: true,
+                max_steps: 400,
+                diagnose: true,
+            },
+        );
+        assert_eq!(met.expression, Expr::Fun("abs".to_string(), vec![x()]));
+        let rejected = met
+            .attempts
+            .iter()
+            .find(|attempt| {
+                attempt.rule_id == "pow.sqrt-square-nonnegative" && attempt.pattern_matched
+            })
+            .expect("the sign rule's precondition was rejected");
+        assert!(rejected.pattern_matched);
+        assert_eq!(rejected.precondition, RuleApplicability::NotApplicable);
+        assert_eq!(
+            rejected.rejection_reason.as_deref(),
+            Some("precondition false")
+        );
+        assert!(
+            met.attempts.iter().all(|attempt| !(attempt.rule_id == "pow.sqrt-square-real"
+                && attempt.pattern_matched)),
+            "the rule that fired is not a matched rejection: {:?}",
+            met.attempts
+        );
+
+        // No assumption at all: both sqrt rules are NotApplicable, and nothing fires.
+        let unmet = transform(
+            &sqrt_square(x()),
+            &AssumptionSet::empty(),
+            TransformOptions {
+                trace: true,
+                max_steps: 400,
+                diagnose: true,
+            },
+        );
+        assert_eq!(unmet.expression, sqrt_square(x()));
+        assert!(unmet.steps.is_empty());
+        let preconditions: Vec<(&str, RuleApplicability)> = unmet
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.pattern_matched && attempt.rule_id.starts_with("pow."))
+            .map(|attempt| (attempt.rule_id.as_str(), attempt.precondition))
+            .collect();
+        assert_eq!(
+            preconditions,
+            vec![
+                ("pow.sqrt-square-nonnegative", RuleApplicability::NotApplicable),
+                ("pow.sqrt-square-real", RuleApplicability::NotApplicable),
+            ],
+            "both rules' preconditions were tried and reported"
+        );
+        // The published vocabulary is the reference enum's spelling, which is what the language
+        // layer's RewriteStep.applicability and RuleAttempt.precondition carry on the wire.
+        assert_eq!(RuleApplicability::Applicable.name(), "Applicable");
+        assert_eq!(
+            RuleApplicability::ApplicableWithConditions.name(),
+            "ApplicableWithConditions"
+        );
+        assert_eq!(RuleApplicability::NotApplicable.name(), "NotApplicable");
+    }
 }

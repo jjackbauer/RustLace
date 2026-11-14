@@ -124,6 +124,15 @@ impl Evaluator for RealEngine {
         self.engine.set_cancel_flag(flag);
     }
 
+    /// RUN-005: hands the kernel sub-progress observer to the engine.
+    ///
+    /// The engine stores it and arms it for each evaluation, so a kernel inside `eval` reports
+    /// through the desktop's callback without the adapter polling anything. The desktop-owned and
+    /// engine-owned callback types are the same callback shape, so one clone crosses the boundary.
+    fn set_kernel_progress_sink(&mut self, sink: Option<super::KernelProgressSink>) {
+        self.engine.set_progress_sink(sink);
+    }
+
     fn set_plot_dir(&mut self, dir: &str) {
         self.engine.set_plot_dir(dir);
     }

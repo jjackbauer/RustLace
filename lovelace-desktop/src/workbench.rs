@@ -438,6 +438,13 @@ pub struct WorkbenchDocument {
     /// It is set from `StepStarted`, so the status strip can name what the engine is working on
     /// instead of only counting it. Cleared when the run closes.
     pub current_label: Option<String>,
+    /// RUN-005: the last kernel sub-progress report of the statement that is in flight.
+    ///
+    /// It is set from `KernelProgress` and cleared when that statement commits (or the run ends),
+    /// so the strip can never show a kernel phase that belongs to a statement the workspace
+    /// already has. `None` means the engine published none: either the statement is short, or the
+    /// evaluator has no kernel progress seam.
+    pub kernel_progress: Option<crate::execution::KernelProgress>,
     /// RUN-010: the advisory shown when a Run request was refused while a run was in flight.
     ///
     /// It is the exact sentence the user sees in the status strip, and it is cleared when a run
@@ -538,8 +545,18 @@ impl WorkbenchDocument {
     /// committed: `committed` only moves on `StepCommitted`, and the label comes from the latest
     /// `StepStarted`. While a run is in flight the line describes it; after a terminal state the
     /// same counters describe the result that is displayed. Empty before the first run.
+    ///
+    /// RUN-005: while a statement is in flight and its kernel published sub-progress, the line also
+    /// carries `kernel <phase> <n>%`. It is deliberately a different kind of fact from `n/m` — the
+    /// count is committed statements, this is the running kernel's own phase and its percentage of
+    /// its own work — and it disappears the moment the statement commits, so the strip never
+    /// claims a kernel is inside a statement the workspace already has.
     pub fn progress_text(&self) -> String {
-        if self.total == 0 && self.committed == 0 && self.current_label.is_none() {
+        if self.total == 0
+            && self.committed == 0
+            && self.current_label.is_none()
+            && self.kernel_progress.is_none()
+        {
             return String::new();
         }
         let mut text = format!("{}/{}", self.committed, self.total);
@@ -547,8 +564,22 @@ impl WorkbenchDocument {
             text.push_str(" · ");
             text.push_str(label);
         }
+        if let Some(kernel) = self.kernel_progress() {
+            text.push_str(" · kernel ");
+            text.push_str(&kernel.label());
+        }
         text.push_str(&format!(" · reused {}", self.reused));
         text
+    }
+
+    /// RUN-005: the kernel sub-progress the strip paints, when the in-flight statement's engine
+    /// published one. `None` after the statement commits or the run leaves the running state, so
+    /// a stale phase can never describe the committed workspace.
+    pub fn kernel_progress(&self) -> Option<&crate::execution::KernelProgress> {
+        if !self.state().is_in_flight() {
+            return None;
+        }
+        self.kernel_progress.as_ref()
     }
 
     /// The encoding badge: `"UTF-8 BOM · CRLF"`, `"UTF-8 · LF"`, and so on.
@@ -2813,6 +2844,9 @@ impl Workbench {
                 // RUN-004: the status strip names the statement the engine is working on. The
                 // label belongs to `StepStarted`, the same event the log line comes from.
                 self.docs[index].current_label = Some(label.clone());
+                // RUN-005: a new statement's kernel progress starts empty; the previous
+                // statement's phase must not describe this one.
+                self.docs[index].kernel_progress = None;
                 let line = LogLine::new(
                     LogKind::Progress,
                     format!("statement {}/{}: {}", statement + 1, total, label),
@@ -2852,6 +2886,9 @@ impl Workbench {
                     self.publish_snapshot(index, snapshot.clone());
                 }
                 self.docs[index].committed = snapshot.committed_steps;
+                // RUN-005: the statement's kernel has finished; its last phase belongs to the
+                // statement that just committed, not to the workspace the panes now show.
+                self.docs[index].kernel_progress = None;
                 self.docs[index]
                     .committed_results
                     .push(snapshot.result.clone());
@@ -2870,6 +2907,22 @@ impl Workbench {
                 true
             }
             DesktopEvent::SubProgress { .. } => true,
+            DesktopEvent::KernelProgress {
+                phase, fraction, ..
+            } => {
+                // RUN-005: the running kernel's own sub-progress. It is kept as the latest report
+                // of the statement in flight and painted beside the statement counter; it never
+                // advances `committed` (only `StepCommitted` does that) and a stale run's report
+                // is dropped with the run, so the strip cannot describe another buffer's work.
+                if stale {
+                    return true;
+                }
+                self.docs[index].kernel_progress = Some(crate::execution::KernelProgress {
+                    phase: phase.clone(),
+                    fraction: *fraction,
+                });
+                true
+            }
             DesktopEvent::Finished { snapshot, .. } => {
                 if stale {
                     return self.discard_terminal(
@@ -3390,6 +3443,7 @@ impl WorkbenchDocument {
             committed: 0,
             total: 0,
             current_label: None,
+            kernel_progress: None,
             run_refusal: None,
             submitted_precision: DEFAULT_PRECISION,
             committed_results: Vec::new(),
@@ -7790,6 +7844,72 @@ mod tests {
         assert_eq!(document.reused, 2);
         assert_eq!(document.progress_text(), "3/3 · reused 2");
         assert_eq!(document.current_label, None, "no statement is current once the run ends");
+    }
+
+    /// RUN-005 at the pane boundary: while one long statement is in flight, the progress line the
+    /// status strip paints carries BOTH the statement count and the kernel's own phase/fraction,
+    /// and the kernel segment disappears when that statement commits.
+    #[test]
+    #[cfg(feature = "real-engine")]
+    fn run_progress_shows_kernel_sub_progress_beside_the_statement_count() {
+        let mut workbench = real_workbench();
+        // Statement 1 sets the precision that makes statement 2 a long kernel; statement 2 is the
+        // single `sqrt(2)` whose sub-progress the strip must show while it runs.
+        workbench.set_source(0, "setprecision(20000)\nsqrt(2)\n".to_string());
+        assert!(workbench.run_active());
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let mut observed: Option<(String, String, String)> = None;
+        while Instant::now() < deadline {
+            workbench.poll();
+            let document = &workbench.documents()[0];
+            if document.total == 2
+                && document.committed == 1
+                && document.state() == RunState::Running
+            {
+                if let Some(kernel) = document.kernel_progress() {
+                    observed = Some((
+                        document.progress_text(),
+                        workbench.status_text(1, 1),
+                        kernel.label(),
+                    ));
+                    break;
+                }
+            }
+            if !workbench.active_is_running() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let (progress, status, kernel_label) = observed.expect(
+            "the run never published kernel sub-progress while sqrt(2) was in flight",
+        );
+        assert!(
+            progress.starts_with("1/2"),
+            "the progress line must still carry the statement count: {progress:?}"
+        );
+        assert!(
+            progress.contains("kernel sqrt:"),
+            "the progress line must carry the kernel's own phase: {progress:?}"
+        );
+        assert!(
+            progress.contains(&kernel_label),
+            "the progress line must carry the kernel's label: {progress:?}"
+        );
+        assert!(
+            status.contains("run Running") && status.contains("kernel sqrt:"),
+            "the status strip must show the kernel segment: {status:?}"
+        );
+        println!(
+            "RUN-005 pane: statement count and kernel sub-progress in one line: {progress:?}"
+        );
+        assert!(workbench.wait_until_idle(Duration::from_secs(120)));
+        let document = &workbench.documents()[0];
+        assert_eq!(document.state(), RunState::Finished);
+        assert!(
+            document.kernel_progress().is_none(),
+            "a committed statement must not leave its kernel phase on the strip"
+        );
+        assert_eq!(document.progress_text(), "2/2 · reused 0");
     }
 
     /// RUN-010: a Run request during an in-flight run is refused with an advisory the user can
