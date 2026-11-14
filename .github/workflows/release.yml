@@ -1,0 +1,225 @@
+name: Release
+
+# Automatic release.
+#
+# The workflow starts only when the CI workflow finishes successfully for a
+# push to main, so nothing is ever tagged from a red or unvalidated tree. The
+# triggering run's head SHA is checked out with full history and tags; the next
+# version is a pure function of the commits since the last vX.Y.Z tag (see
+# tools/next-version.ps1 and docs/release.md). If the range warrants no release
+# the job stops. If the target tag already exists the job stops too, which is
+# what makes a re-run or a replayed event harmless.
+#
+# `cargo metadata` refreshes Cargo.lock for the new workspace version, the
+# committed message carries [skip ci] so the release commit cannot start CI
+# again, and main plus the tag are pushed atomically: either both move or
+# neither does.
+#
+# The artifact is the exact lovelace-desktop.exe the successful CI run built
+# and uploaded; it is downloaded from that run (not rebuilt here), hashed into
+# SHA256SUMS, and attached to the GitHub Release together with the notes.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+# Overlapping releases for the same ref queue instead of racing; the tag check
+# in the guard step makes the queued run a no-op.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  release:
+    name: Tag and publish
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: windows-latest
+    steps:
+      - name: Check out the CI-validated commit with full history and tags
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Fetch every tag from origin
+        shell: pwsh
+        run: git fetch --tags --force origin
+
+      - name: Decide the next version from the commit history
+        id: next
+        shell: pwsh
+        run: |
+          $verdict = & ./tools/next-version.ps1 -RepoRoot . -Json | ConvertFrom-Json
+          Write-Output "previous=$($verdict.previous) next=$($verdict.next) bump=$($verdict.bump) reason=`"$($verdict.reason)`" policy=$($verdict.policy)"
+          Write-Output "range=$($verdict.range) commits=$($verdict.inspected)"
+          "previous=$($verdict.previous)" >> $env:GITHUB_OUTPUT
+          "next=$($verdict.next)" >> $env:GITHUB_OUTPUT
+          "bump=$($verdict.bump)" >> $env:GITHUB_OUTPUT
+          "reason=$($verdict.reason)" >> $env:GITHUB_OUTPUT
+          "policy=$($verdict.policy)" >> $env:GITHUB_OUTPUT
+
+      - name: Stop unless this exact commit still needs a release
+        id: guard
+        shell: pwsh
+        env:
+          PREVIOUS: ${{ steps.next.outputs.previous }}
+          NEXT: ${{ steps.next.outputs.next }}
+          BUMP: ${{ steps.next.outputs.bump }}
+          REASON: ${{ steps.next.outputs.reason }}
+        run: |
+          $tag = "v$env:NEXT"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          if ($env:BUMP -eq 'none') {
+            "release=false" >> $env:GITHUB_OUTPUT
+            Write-Output "no bump: $env:REASON - nothing in this range warrants a release; stopping without a tag."
+            exit 0
+          }
+          $existing = git rev-parse -q --verify "refs/tags/$tag"
+          if ($LASTEXITCODE -eq 0 -and $existing) {
+            "release=false" >> $env:GITHUB_OUTPUT
+            Write-Output "idempotency: tag $tag already exists at $($existing.Trim()) - this version is already released; stopping."
+            exit 0
+          }
+          # The release commit is pushed onto main, so it may only be based on
+          # the current tip. A stale CI run must not resurrect an older tree.
+          git fetch --quiet origin main
+          if ($LASTEXITCODE -ne 0) { throw 'could not read origin/main' }
+          $head = (git rev-parse HEAD).Trim()
+          $mainTip = (git rev-parse FETCH_HEAD).Trim()
+          if ($head -ne $mainTip) {
+            "release=false" >> $env:GITHUB_OUTPUT
+            Write-Output "stale run: CI validated $head but main is at $mainTip; the newer commit needs its own green CI run. Stopping."
+            exit 0
+          }
+          "release=true" >> $env:GITHUB_OUTPUT
+          Write-Output "release warranted: previous=$env:PREVIOUS next=$env:NEXT bump=$env:BUMP tag=$tag"
+
+      - name: Download the desktop executable from the triggering CI run
+        if: steps.guard.outputs.release == 'true'
+        shell: pwsh
+        env:
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          REPO: ${{ github.repository }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          gh run download $env:CI_RUN_ID --repo $env:REPO --name lovelace-desktop-windows-x86_64 --dir dist
+          if ($LASTEXITCODE -ne 0) { throw 'artifact download failed' }
+          $exe = Get-ChildItem dist -Recurse -Filter lovelace-desktop.exe | Select-Object -First 1
+          if (-not $exe) { throw 'lovelace-desktop.exe is missing from the artifact' }
+          Write-Output "downloaded $($exe.FullName) ($($exe.Length) bytes)"
+
+      - name: Write SHA256SUMS
+        id: checksum
+        if: steps.guard.outputs.release == 'true'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Recurse -Filter lovelace-desktop.exe | Select-Object -First 1
+          if (-not $exe) { throw 'lovelace-desktop.exe is missing' }
+          $hash = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  lovelace-desktop.exe" | Set-Content -Path SHA256SUMS -Encoding ascii
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          "size=$($exe.Length)" >> $env:GITHUB_OUTPUT
+          Write-Output "sha256 $hash"
+          Write-Output "size   $($exe.Length) bytes"
+          Get-Content SHA256SUMS
+
+      - name: Bump the workspace version and refresh Cargo.lock
+        if: steps.guard.outputs.release == 'true'
+        shell: pwsh
+        env:
+          PREVIOUS: ${{ steps.next.outputs.previous }}
+          NEXT: ${{ steps.next.outputs.next }}
+        run: |
+          $path = Join-Path (Get-Location) 'Cargo.toml'
+          $bytes = [System.IO.File]::ReadAllBytes($path)
+          $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+          # Preserve the file's existing newline convention so the bump commit
+          # changes one line, not every line.
+          $newline = if ($text.Contains("`r`n")) { "`r`n" } elseif ($text.Contains("`n")) { "`n" } else { "`r`n" }
+          $lines = $text -split "`r?`n"
+          $inSection = $false
+          $changed = $false
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line -match '^\s*\[([^\]]+)\]\s*$') {
+              $inSection = ($matches[1].Trim() -eq 'workspace.package')
+              continue
+            }
+            if (-not $inSection) { continue }
+            if ($line -match '^(\s*version\s*=\s*")([^"]+)(".*)$') {
+              if ($matches[2] -ne $env:PREVIOUS) {
+                throw "workspace version is $($matches[2]), but the verdict says $env:PREVIOUS"
+              }
+              $lines[$i] = $matches[1] + $env:NEXT + $matches[3]
+              $changed = $true
+              break
+            }
+          }
+          if (-not $changed) { throw '[workspace.package] version line not found' }
+          [System.IO.File]::WriteAllText($path, ($lines -join $newline), (New-Object System.Text.UTF8Encoding($false)))
+          # Resolve the workspace so Cargo.lock records the new member versions.
+          $metadata = Join-Path $env:TEMP 'rustlace-cargo-metadata.json'
+          cargo metadata --format-version 1 > $metadata
+          if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed after the version bump' }
+          Remove-Item -LiteralPath $metadata -Force
+          Write-Output "Cargo.toml: $((Select-String -Path Cargo.toml -Pattern '^version = "').Line)"
+          git --no-pager diff --stat
+
+      - name: Generate the release notes
+        if: steps.guard.outputs.release == 'true'
+        shell: pwsh
+        env:
+          NEXT: ${{ steps.next.outputs.next }}
+          REPO: ${{ github.repository }}
+          CI_URL: ${{ github.event.workflow_run.html_url }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          SHA256: ${{ steps.checksum.outputs.sha256 }}
+          SIZE: ${{ steps.checksum.outputs.size }}
+        run: |
+          & ./tools/release-notes.ps1 -Version $env:NEXT -OutputPath RELEASE_NOTES.md -Repository $env:REPO -CiUrl $env:CI_URL -CiSha $env:CI_SHA -Sha256 $env:SHA256 -SizeBytes $env:SIZE
+          if ($LASTEXITCODE -ne 0) { throw 'release-notes.ps1 failed' }
+          Get-Content RELEASE_NOTES.md
+
+      - name: Commit the bump, create the tag and push both atomically
+        id: tag
+        if: steps.guard.outputs.release == 'true'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.guard.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): $env:TAG [skip ci]"
+          if ($LASTEXITCODE -ne 0) { throw 'git commit failed' }
+          git tag -a $env:TAG -m "RustLace $env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'git tag failed' }
+          git push --atomic origin "HEAD:main" "refs/tags/$env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'the atomic push of main and the tag failed' }
+          Write-Output "pushed $env:TAG for $((git rev-parse HEAD).Trim())"
+
+      - name: Publish the GitHub Release with the executable and checksum
+        if: steps.guard.outputs.release == 'true'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.guard.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          $exe = Get-ChildItem dist -Recurse -Filter lovelace-desktop.exe | Select-Object -First 1
+          if (-not $exe) { throw 'lovelace-desktop.exe is missing' }
+          gh release create $env:TAG --repo $env:REPO --verify-tag --title "RustLace $env:TAG" --notes-file RELEASE_NOTES.md $exe.FullName SHA256SUMS
+          if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
+          gh release view $env:TAG --repo $env:REPO --json tagName,name,assets
