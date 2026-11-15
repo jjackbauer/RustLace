@@ -3,8 +3,8 @@
 [![CI](https://github.com/jjackbauer/RustLace/actions/workflows/ci.yml/badge.svg)](https://github.com/jjackbauer/RustLace/actions/workflows/ci.yml)
 
 > The Lovelace stack — arbitrary-precision exact arithmetic, an N-dimensional array library, the
-> Lovelace scripting language and a native Windows IDE — in Rust, in one workspace, with no external
-> crates under the engine.
+> Lovelace scripting language and a native desktop IDE for Windows and Linux — in Rust, in one
+> workspace, with no external crates under the engine.
 
 RustLace is the Rust-only successor of the [LovelaceSharp](https://github.com/jjackbauer/LovelaceSharp)
 stack. It keeps the behaviour the C# implementation defined — exact periodic decimals, the rendered
@@ -13,20 +13,36 @@ There is no HTTP server and no browser runtime in the shipped product.
 
 ![First launch of the native workbench, dark theme](docs/images/welcome-dark.png)
 
+The same workbench on Linux (WSLg, X11), captured from the release binary:
+
+![The workbench running on Linux: dark theme, five panes, status strip](docs/images/gui-linux.png)
+
+**Linux support.** The full workbench builds and runs on Linux/X11 as well as on Windows. The Linux
+build selects eframe's `glow` (OpenGL) backend; Windows keeps the default `wgpu` path unchanged.
+Linux CI builds the GUI, runs `--gui-selftest` (20 checks, 0 failed) and the desktop test suite under
+`xvfb-run`, and uploads the binary as the `lovelace-desktop-linux-gui-x86_64` artifact. What is
+verified is X11: Wayland is not tested, and under WSLg `WAYLAND_DISPLAY` must be unset or winit picks
+a Wayland socket WSLg does not provide. The three Win32-only modes (`--legacy-win32`, `--ime-probe`,
+`--platform-parity`) are refused by name on Linux. The release job still publishes the Windows
+executable only; the Linux binary is the CI artifact. See
+[build-and-run.md](docs/build-and-run.md#linux).
+
 ## Three entry points
 
 | Surface | What it is | Start it |
 |---|---|---|
 | **Engine library** | `lovelace-lang`'s `Engine`, over the numeric and array crates | `cargo build --workspace` |
 | **`lovelace-run` CLI** | the non-interactive runner and the agent-facing JSON envelope | `cargo run -p lovelace-run -- --eval "1/3" --text` |
-| **`lovelace-desktop` GUI** | the native Windows IDE (eframe/egui + resvg), with nine headless modes | `cargo run -p lovelace-desktop` |
+| **`lovelace-desktop` GUI** | the native desktop IDE for Windows and Linux (eframe/egui + resvg), with its headless acceptance modes | `cargo run -p lovelace-desktop` |
 
 All three drive the same engine; no host re-implements language behaviour.
 
 ## Quick start
 
-Requires Rust 1.85+ (the tree was built with 1.99.1) and, on Windows, the MSVC build tools. See
-[build-and-run.md](docs/build-and-run.md) for the full prerequisites.
+Requires Rust 1.85+ (the tree was built with 1.99.1) and, on Windows, the MSVC build tools. The
+Linux workbench also needs the X11/GL/font packages listed in
+[build-and-run.md](docs/build-and-run.md#linux); a display-less machine can run the acceptance modes
+under `xvfb-run`.
 
 ```console
 $ cargo build --workspace
@@ -59,8 +75,9 @@ RESULT mul 10000 2.018 1.961
 DIGEST mul 14999:179894059904715401915510
 ```
 
-The desktop writes its state under `%APPDATA%\Lovelace` (`desktop.json`, `plots\`, `recovery\`); set
-`APPDATA` to a writable directory when running headless. The screenshots in `docs/images` are real
+The desktop writes its state under `%APPDATA%\Lovelace` (`desktop.json`, `plots\`, `recovery\`) on
+Windows, and under `$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace` on Linux; point that
+directory somewhere writable when running headless. The screenshots in `docs/images` are real
 frames of the release build — see [docs/images/README.md](docs/images/README.md) for the binary hash,
 the capture method and each frame's provenance.
 
@@ -82,12 +99,13 @@ workspace.
 | `lovelace-know` | the observation-driven behavioural graph | [docs/crates/lovelace-know.md](docs/crates/lovelace-know.md) |
 | `lovelace-corpus` | the documentation-corpus parity gate | [docs/crates/lovelace-corpus.md](docs/crates/lovelace-corpus.md) |
 | `lovelace-bench` | the shaped-like-the-reference micro-benchmark harness | [docs/crates/lovelace-bench.md](docs/crates/lovelace-bench.md) |
-| `lovelace-desktop` | the native Windows IDE and its headless modes | [docs/crates/lovelace-desktop.md](docs/crates/lovelace-desktop.md) |
+| `lovelace-desktop` | the native desktop IDE (Windows and Linux) and its headless acceptance modes | [docs/crates/lovelace-desktop.md](docs/crates/lovelace-desktop.md) |
 | `lovelace-desktop-spike` | the measured UI spike that chose eframe/egui (not a member) | [docs/crates/lovelace-desktop-spike.md](docs/crates/lovelace-desktop-spike.md) |
 
 The engine crates have **no external dependencies**: the contract's `[dependencies]` may only
 reference workspace crates by path, and the desktop's GUI stack (`eframe`/`egui` 0.37,
-`resvg` 0.50) is the only external code, declared Windows-only. See
+`resvg` 0.50) is the only external code, declared in the desktop crate only. eframe keeps its
+default wgpu backend on Windows and adds `glow` on other platforms. See
 [ADR-001](docs/adr/001-no-external-crates.md).
 
 ## Testing
@@ -97,9 +115,13 @@ Five layers, each with its own command — the detail is in [docs/testing.md](do
 ```console
 $ cargo test --workspace          # 6135 tests (1 ignored), across the twelve crates
 $ cargo run --release -p lovelace-corpus   # the 214-record documentation corpus
-$ cargo run -p lovelace-desktop -- --gui-selftest   # 20 headless workbench checks
+$ cargo run -p lovelace-desktop -- --gui-selftest   # 20 workbench checks, Windows and Linux
 $ cargo run -p lovelace-desktop -- --journey J-02   # recorded user journeys
 ```
+
+On Linux, CI runs the same `--gui-selftest` and the desktop suite under `xvfb-run`, so the workbench
+code is machine-checked there without a display; CI does not open or capture a window, and the
+Linux frame in `docs/images` was captured separately on WSLg.
 
 The corpus is the yardstick: `parity/corpus/lang.json` (111 records from the C# language reference,
 99 value / 10 error / 1 prints / 1 plot) plus `parity/corpus/symbolics.json` (103 records). A missing

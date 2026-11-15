@@ -36,14 +36,22 @@ present, `cargo test -p lovelace-know` passes (exit 0) and the total is **6135 p
 If you clone a revision without the fixture, expect those five failures and nothing else.
 
 `cargo test -p lovelace-desktop` alone reports `716 passed; 0 failed; 0 ignored` on Windows, which is
-the desktop verification gate. On Linux the same command reports **423 passed** (420 unit tests plus
-3 CLI integration tests): the `src/ui/**` modules are compiled only on Windows, so the Linux binary
-carries the headless application core without the rendered editor, panes or plot rasteriser.
-Two unit tests are Windows-only by premise and do not run there: the atomic-save read-only-target
-test in `workbench.rs` (Unix renames over a read-only file successfully, because directory
-permissions govern) and the PE-import self-check in `netcheck.rs` (the Linux test binary is ELF,
-not a PE image). The cross-platform failed-write test in `document_io.rs` and the crate-source
-network scan still cover both behaviours on Linux.
+the desktop verification gate. On Linux the same command reports **706 passed** in the binary plus
+**4 passed** in `tests/linux_cli.rs` (710 in total): the `src/ui/**` modules compile there too, and
+the ten tests that do not are Windows by premise or live in a module still gated to Windows:
+
+- `platform_parity` (3 tests): the PLF-010 report drives Win32 modifiers, dialogs, clipboard, the
+  HWND IME state and DPI; the module is `#[cfg(windows)]`.
+- `win32/shell.rs` (3 tests): the legacy Win32 shell is not compiled on Linux.
+- `document_io.rs:856,886` (2 tests): Windows refuses to rename over a read-only target and exposes
+  the hidden file attribute; on Unix a rename over a read-only file succeeds, because directory
+  permissions govern.
+- `workbench.rs:6276` (1 test): the atomic-save failure premise is that same read-only rename.
+- `netcheck.rs:238` (1 test): the test binary is an ELF image, not a PE one.
+
+The cross-platform failed-write test in `document_io.rs` and the crate-source network scan still
+cover both behaviours on Linux, and `--selftest` prints the PE check as a named skip with its
+reason.
 
 ## 2. Oracle and golden tests
 
@@ -80,16 +88,19 @@ The window itself is driven two ways:
   GUI_SELFTEST summary checks=20 failed=0
   ```
 
-  The Linux build reports `checks=19 failed=0`: the editor's undo/redo check is compiled only on
-  Windows, because the editor is part of the egui surface. Everything else in the run path is
-  platform-independent and runs headlessly on Linux.
+  The Linux build reports the same `checks=20 failed=0`: the editor's undo/redo check used to be
+  Windows-only when the egui surface was, and it is unconditional since the Linux GUI port
+  (`gui_selftest.rs`). Linux CI runs this under Xvfb and asserts the exact summary line, so the two
+  platforms cannot silently diverge.
 
-  This needs a writable `APPDATA`; with the default `%APPDATA%` denied, two checks
-  (`plot`, `plot-dir`) fail with "the app-scoped directory is unusable" and the mode exits 1. That
-  is the environment speaking, not the product.
+  This needs a writable application directory (`%APPDATA%` on Windows, `$XDG_CONFIG_HOME/lovelace`
+  or `~/.config/lovelace` on Linux); with it denied, two checks (`plot`, `plot-dir`) fail with "the
+  app-scoped directory is unusable" and the mode exits 1. That is the environment speaking, not the
+  product.
 - **Journeys** — `--journey J-02 J-03 ... --out <dir>` executes the recorded journeys against
   `docs/goal-desktop-v4/journeys.md` and their reference captures under
-  `docs/goal-desktop-v4/reference/`.
+  `docs/goal-desktop-v4/reference/`. The mode and the journey unit tests are cross-platform since
+  the Linux GUI port; CI runs the unit tests, not the `--journey` mode itself.
 
 The screenshots in `docs/images` were captured from the release binary with `PrintWindow`
 (`docs/images/capture.ps1`), which is the only way to get a real frame when the desktop session is
@@ -122,22 +133,27 @@ $ cargo test -p lovelace-run --test repl         # one integration target
 $ cargo test -p lovelace-corpus -- --nocapture   # the property assertions
 ```
 
-## 6. The Linux desktop job
+## 6. The Linux GUI job
 
-The `linux` CI job runs the engine gates and then:
+The `linux` CI job is the Linux acceptance gate. After the engine gates it installs the GUI runtime
+(the packages and why are in [build-and-run.md](build-and-run.md#linux)), then:
 
 ```console
-$ cargo build --release -p lovelace-desktop
-$ cargo test -p lovelace-desktop
+$ cargo build --release -p lovelace-desktop          # the workbench, not a headless stub
+$ xvfb-run -a -s "-screen 0 1600x1000x24" ./target/release/lovelace-desktop --gui-selftest
+GUI_SELFTEST summary checks=20 failed=0
+$ xvfb-run -a -s "-screen 0 1600x1000x24" cargo test -p lovelace-desktop
+# 706 passed (bin) + 4 passed (tests/linux_cli.rs)
 ```
 
-and uploads `target/release/lovelace-desktop` as the artifact **`lovelace-desktop-linux-x86_64`**
-(the Windows job keeps its own `lovelace-desktop-windows-x86_64` executable). The Linux binary is
-the same headless application core: `--help`, `--version`, `--selftest` (14 checks, 0 failed on
-Linux — see below), `--gui-selftest` (19 checks, 0 failed), `--ui-audit`, `--thread-audit`,
-`--shortcuts` and `--platform-claims` all work. It has no window: the GUI stack is declared under
-`[target.'cfg(windows)'.dependencies]`, so no `eframe`/`egui` code is compiled and the binary
-prints the unsupported-platform notice and exits 2 when launched without a mode.
+The selftest step requires exit 0 **and** the exact `checks=20 failed=0` summary, so a Linux build
+that quietly lost the undo/redo check fails CI even if every remaining check passes. The test step
+is what compiles and runs the editor, pane, theme, plot-rasteriser and journey tests on Linux; they
+did not exist there before the port. Both steps run under the same 1600x1000 Xvfb screen.
+
+The job uploads `target/release/lovelace-desktop` as **`lovelace-desktop-linux-gui-x86_64`**
+(renamed from `lovelace-desktop-linux-x86_64`, which described the pre-port headless build). The
+Windows job is untouched and still uploads `lovelace-desktop-windows-x86_64`.
 
 The job exists because the crate had never been compiled on Linux before it: the first
 `cargo build --release -p lovelace-desktop` failed with
@@ -158,20 +174,34 @@ SELFTEST skip no-network-imports: the check reads a PE import table and this bui
 SELFTEST summary checks=14 skipped=1 failed=0
 ```
 
-`--help` on Linux lists only the modes that build actually contains (the Windows-only modes such
-as `--journey` and `--raster-svg` are not advertised), and an unknown flag exits 2 with the usage
-on stderr. `lovelace-desktop/tests/linux_cli.rs` asserts all three.
+`--help` on Linux now advertises every mode the Linux build compiles, including `--journey` and
+`--raster-svg`; it names the three Win32-only modes as needing the Windows build, and an unknown
+flag exits 2 with the usage on stderr. `lovelace-desktop/tests/linux_cli.rs` asserts that help
+contract, the named refusal of each Win32-only mode (exit 2, nothing on stdout) and the usage
+error.
 
 ## What cannot run in CI
 
-- **The GUI and its journeys.** They need a Windows desktop session, a real window and UI Automation.
-  The Linux job builds and unit-tests the headless desktop crate, but the GUI shell, the editor
-  buffer, the plot pane's rasteriser and every `--journey` run are exercised only on Windows. The
-  headless checks are not GUI evidence and are not counted as any.
+The Linux job now covers the workbench code and its run path; these are the boundaries it still does
+not cover.
+
+- **A real Windows window and its captures.** The Windows job compiles and tests the workspace,
+  including the Windows build of the workbench, and builds the release executable, but no CI job
+  opens or captures a window on Windows: the recorded frames and UI Automation captures come from
+  the documenting host. On Linux the job runs the workbench code under Xvfb, not a mapped window;
+  the one real Linux frame is `docs/images/gui-linux.png`, captured on WSLg. A `--gui-selftest` pass
+  is a run-path check, not a window capture, and is not counted as one.
+- **A captured frame from either renderer.** The Windows job compiles and tests the wgpu path and the
+  Linux job proves the glow path's code, but neither job captures a rendered frame. The renderer
+  split is evidenced by the Linux window capture, the Windows release build and the 20-check
+  selftest, not by a per-frame CI image comparison.
+- **The ten Windows-only tests listed above, and the three Win32-only modes on Linux.** They are
+  Win32 premise or Win32 code, gated, and refused by name off Windows.
 - **The PE-import proof off Windows.** `--selftest`'s `no-network-imports` check reads a Windows
   PE import table; on the Linux ELF binary it is reported as a skip with its reason. The
   crate-source scan for networking APIs still runs on both platforms.
 - **Timing-sensitive probes.** The `--measure-*` and `--perf-*` modes report measurements, not
   pass/fail, and the timing assertions inside `precision_default.rs` are generous bounds (2×) rather
   than machine-speed lotteries.
-- **Anything that needs `%APPDATA%` writable** in a locked-down runner: redirect `APPDATA` first.
+- **Anything that needs a writable application directory** in a locked-down runner: redirect
+  `APPDATA` on Windows, or `XDG_CONFIG_HOME`/`HOME` on Linux, first.

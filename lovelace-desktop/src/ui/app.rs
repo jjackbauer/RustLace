@@ -931,6 +931,14 @@ impl WorkbenchApp {
     /// Read-only. `--ime-probe` records these values around a platform IME message sequence, so
     /// the report states what this window's editor actually received rather than what a sibling
     /// test module assumed.
+    ///
+    /// The five `ime_probe_*` seams exist in the Windows build (consumed by `src/ime_probe.rs`).
+    /// `ime_probe_snapshot` and `ime_probe_focus_quick_eval` also exist on every platform for
+    /// tests: the IME-deferral tests drive that focus/snapshot pair from a headless
+    /// `egui::Context`, which keeps the Linux window's A11Y-008 behaviour covered without a Win32
+    /// IME. The other three have no Linux reader, so they are compiled only into the Windows
+    /// binary instead of being dead code there.
+    #[cfg(any(windows, test))]
     pub(crate) fn ime_probe_snapshot(
         &self,
         ctx: &egui::Context,
@@ -960,6 +968,7 @@ impl WorkbenchApp {
 
     /// Round-68 IME probe seam: puts the caret at the start of the buffer and gives the editor
     /// the keyboard focus, the state the first click produces.
+    #[cfg(windows)]
     pub(crate) fn ime_probe_focus_editor(&mut self, ctx: &egui::Context) {
         let active = self.workbench.active();
         if let Some(editor) = self.editors.get_mut(active) {
@@ -971,16 +980,19 @@ impl WorkbenchApp {
 
     /// Round-68 IME probe seam: gives the quick-eval field (an `egui::TextEdit`) the keyboard
     /// focus, which is what makes that widget request IME from the integration.
+    #[cfg(any(windows, test))]
     pub(crate) fn ime_probe_focus_quick_eval(&mut self, ctx: &egui::Context) {
         ctx.memory_mut(|memory| memory.request_focus(quick_eval_id()));
     }
 
     /// Round-68 IME probe seam: the quick-eval field's text.
+    #[cfg(windows)]
     pub(crate) fn ime_probe_quick_eval(&self) -> String {
         self.quick_eval.text().to_string()
     }
 
     /// Round-68 IME probe seam: the active document's run-state label.
+    #[cfg(windows)]
     pub(crate) fn ime_probe_run_state(&self) -> String {
         self.view.run_state.label().to_string()
     }
@@ -9886,6 +9898,14 @@ pub(crate) fn native_options() -> eframe::NativeOptions {
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 600.0])
             .with_title("Lovelace Desktop"),
+        // Renderer selection is deliberate and platform-conditional. Windows keeps eframe's
+        // default (wgpu), which is the backend the shipped product has always used there, so
+        // nothing about the Windows window changes. Linux selects glow (OpenGL): eframe's
+        // default feature set is wgpu-only, and wgpu cannot acquire a device under WSLg (no
+        // /dev/dri; the XWayland/EGL path reports "Parent device is lost") while GLX through
+        // mesa llvmpipe renders. See Cargo.toml for the matching glow feature.
+        #[cfg(not(windows))]
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     }
 }

@@ -29,7 +29,10 @@ pub(crate) use app::native_options;
 pub use app::run;
 // Round-68: the platform IME probe hosts the shipped workbench window in-process (see
 // src/ime_probe.rs) so ImmGetContext, ImmSetCompositionStringW and the WM_IME_* messages run on
-// the thread that owns the window, which is the only thread whose HIMC they can address.
+// the thread that owns the window, which is the only thread whose HIMC they can address. The
+// probe is Win32 code, so this re-export exists in the Windows build only; every other user of
+// the window reaches it through `ui::run` or `super::app::WorkbenchApp`.
+#[cfg(windows)]
 pub(crate) use app::WorkbenchApp;
 
 /// `--visual-audit`: the VIS-004/006/007/008 tables, printed from the same constants and

@@ -101,6 +101,13 @@ the validated commit *before* the version bump; attaching that file is what made
 executable that printed `0.1.0`. Building at the tag and checking `--version` makes the asset and
 the tag agree.
 
+The release job runs on `windows-latest` and publishes the Windows executable only. A Linux asset is
+not attached: the `--version` check, `SHA256SUMS` and the release note are all written over the one
+file the job builds, so a second platform's binary needs the job split into a build matrix plus a
+publish job. The Linux GUI binary is distributed as the CI artifact
+`lovelace-desktop-linux-gui-x86_64`, and it can be built from source with the packages in
+[build-and-run.md](build-and-run.md#linux).
+
 To retry a release, re-run the release workflow that belongs to the triggering CI run
 (`gh run rerun <release-run-id>`). If the tag and the release both exist the guard stops, so a retry
 cannot double-publish. If the tag exists but the release does not, the same re-run rebuilds from the
@@ -127,21 +134,26 @@ published release note and `SHA256SUMS`, not a number copied into this page. For
 
 CI performs the same build in its Windows job and uploads the file as the artifact
 `lovelace-desktop-windows-x86_64` (`.github/workflows/ci.yml`), with `if-no-files-found: error` so a
-silent build failure cannot produce an empty release. That artifact is evidence that the validated
-tree builds; it is not the released file, because CI builds the validated commit before the release
-workflow adds the version bump. The release job rebuilds at the tagged release commit and verifies
-`--version` against the tag before attaching anything.
+silent build failure cannot produce an empty release. The Linux job uploads its GUI binary as
+`lovelace-desktop-linux-gui-x86_64` (renamed from `lovelace-desktop-linux-x86_64` when the Linux
+build became the full workbench). Those artifacts are evidence that the validated tree builds; they
+are not the released file, because CI builds the validated commit before the release workflow adds
+the version bump. The release job rebuilds at the tagged release commit and verifies `--version`
+against the tag before attaching anything.
 
 ## Artifact layout
 
-The repository produces one file and nothing else:
+CI produces two files, one per platform:
 
 ```text
 lovelace-desktop-windows-x86_64/
-  lovelace-desktop.exe      the workbench, its nine headless modes included
+  lovelace-desktop.exe      the workbench, its headless modes included
+lovelace-desktop-linux-gui-x86_64/
+  lovelace-desktop          the same workbench, built and self-tested on Linux
 ```
 
-There is no installer, no MSIX, no side-by-side DLL set and no packaging script in the tree (a
+Neither is a release asset (the release job rebuilds the Windows executable at the tag). There is no
+installer, no MSIX, no side-by-side DLL set and no packaging script in the tree (a
 `git ls-files` search for release/dist/package/xtask tooling finds none). The binary needs the
 Microsoft Visual C++ runtime, like any MSVC-linked Rust executable. The engine, the CLI
 (`lovelace-run`), the corpus gate and the knowledge graph are built from source by consumers who

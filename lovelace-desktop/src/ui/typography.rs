@@ -187,24 +187,89 @@ pub fn family_name(font: EditorFont) -> &'static str {
     }
 }
 
-/// The Windows font directory (`%WINDIR%\Fonts`).
-fn font_dir() -> PathBuf {
-    let windir = std::env::var_os("WINDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-    windir.join("Fonts")
+/// The directories a named font file is looked up in.
+///
+/// Windows has one: `%WINDIR%\Fonts`. Linux distributions install the same files under the
+/// XDG font directories and the two system-wide trees, so all of them are searched; the file
+/// name is matched exactly (case-insensitively), not resolved through fontconfig, because the
+/// settings value is a file name (`consola.ttf`) that fontconfig does not index by.
+fn font_roots() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let windir = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        vec![windir.join("Fonts")]
+    }
+    #[cfg(not(windows))]
+    {
+        let mut roots = Vec::new();
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            roots.push(home.join(".local/share/fonts"));
+            roots.push(home.join(".fonts"));
+        }
+        roots.push(PathBuf::from("/usr/share/fonts"));
+        roots.push(PathBuf::from("/usr/local/share/fonts"));
+        roots
+    }
 }
 
 /// True when the font file exists. Cached: the file system is asked once per name.
 fn settings_font_exists(file: &'static str) -> bool {
-    static EXISTS: OnceLock<Mutex<HashMap<&'static str, bool>>> = OnceLock::new();
-    let cache = EXISTS.get_or_init(|| Mutex::new(HashMap::new()));
+    find_font_file(file).is_some()
+}
+
+/// The absolute path of an installed font file named `file`, searched once per name.
+///
+/// The search is a bounded walk of [`font_roots`]: a distribution puts Consolas under
+/// `truetype/msttcorefonts/` and Cascadia under `truetype/cascadia/`, so a flat `join` would
+/// miss both.
+pub(crate) fn find_font_file(file: &'static str) -> Option<PathBuf> {
+    static FOUND: OnceLock<Mutex<HashMap<&'static str, Option<PathBuf>>>> = OnceLock::new();
+    let cache = FOUND.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().expect("font cache").get(file) {
-        return *cached;
+        return cached.clone();
     }
-    let exists = font_dir().join(file).is_file();
-    cache.lock().expect("font cache").insert(file, exists);
-    exists
+    let found = font_roots()
+        .iter()
+        .find_map(|root| find_in_tree(root, file, 0));
+    cache
+        .lock()
+        .expect("font cache")
+        .insert(file, found.clone());
+    found
+}
+
+/// Recursively looks for `file` under `dir`, at most [`FONT_SEARCH_DEPTH`] levels deep.
+fn find_in_tree(dir: &std::path::Path, file: &str, depth: usize) -> Option<PathBuf> {
+    /// How many directory levels below a font root are searched. The deepest installed layout
+    /// in the wild is `<root>/<vendor>/<family>/<file>`, three levels.
+    const FONT_SEARCH_DEPTH: usize = 4;
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut subdirectories = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            if depth + 1 < FONT_SEARCH_DEPTH {
+                subdirectories.push(path);
+            }
+            continue;
+        }
+        let name_matches = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case(file));
+        if name_matches {
+            return Some(path);
+        }
+    }
+    subdirectories
+        .iter()
+        .find_map(|subdirectory| find_in_tree(subdirectory, file, depth + 1))
 }
 
 /// The bytes of a font file, read once per process.
@@ -214,12 +279,13 @@ fn font_bytes(file: &'static str) -> Option<&'static [u8]> {
     if let Some(cached) = cache.lock().expect("font bytes").get(file) {
         return *cached;
     }
-    let path = font_dir().join(file);
-    let bytes: Option<&'static [u8]> = std::fs::read(path).ok().map(|bytes| {
-        // Leaked once per process: the font data lives for the life of the process by design,
-        // and there are at most a handful of files.
-        Box::leak(bytes.into_boxed_slice()) as &'static [u8]
-    });
+    let bytes: Option<&'static [u8]> = find_font_file(file)
+        .and_then(|path| std::fs::read(path).ok())
+        .map(|bytes| {
+            // Leaked once per process: the font data lives for the life of the process by design,
+            // and there are at most a handful of files.
+            Box::leak(bytes.into_boxed_slice()) as &'static [u8]
+        });
     cache.lock().expect("font bytes").insert(file, bytes);
     bytes
 }
@@ -480,8 +546,9 @@ mod tests {
             );
             if let Some(file) = font_file(font) {
                 assert!(
-                    font_dir().join(file).is_file(),
-                    "{file} must exist when it is reported as resolved"
+                    find_font_file(file).is_some_and(|path| path.is_file()),
+                    "{file} must exist under one of {:?} when it is reported as resolved",
+                    font_roots()
                 );
             }
         }

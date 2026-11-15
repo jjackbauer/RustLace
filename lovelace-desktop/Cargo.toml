@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Native Windows desktop IDE for the Lovelace scripting language."
+description = "Native desktop IDE for the Lovelace scripting language (Windows and Linux)."
 
 [dependencies]
 lovelace-json = { path = "../lovelace-json" }
@@ -16,18 +16,28 @@ lovelace-lang = { path = "../lovelace-lang", optional = true }
 # expression tree the structured value projection does not carry. Only the real adapter uses it.
 lovelace-symbolics = { path = "../lovelace-symbolics", optional = true }
 
-# The new native workbench (round-5 cutover) reuses the measured eframe/egui 0.37 and
-# resvg 0.50 stack from rust/lovelace-desktop-spike. These are Windows-only because the
-# shipped product is the Windows desktop binary; the headless modes and the execution
-# core stay dependency-free on every platform.
-[target.'cfg(windows)'.dependencies]
+# The native workbench (round-5 cutover) reuses the measured eframe/egui 0.37 and resvg 0.50
+# stack from rust/lovelace-desktop-spike. eframe, egui and resvg are windowing/renderer
+# libraries with first-class Windows, Linux and macOS backends, so they are normal
+# dependencies: the GUI is compiled on every desktop platform, and only the Win32 legacy shell
+# (src/win32) and the HWND-based IME probe stay behind cfg(windows).
 eframe = "0.37"
 egui = "0.37"
 resvg = "0.50"
 # Round-68: `--ime-probe` reads the workbench window's HWND from eframe's `CreationContext`
 # instead of enumerating windows (enumeration re-enters winit's window procedure while a frame
 # is being painted). Same version eframe 0.37 already resolves, so no new package is added.
+# The crate is cross-platform; only the Win32 arm of the match is Windows code.
 raw-window-handle = "0.6"
+
+# Renderer backend. eframe 0.37's default feature set is wgpu-only, which is what the shipped
+# Windows binary has always run (Windows has D3D12/Vulkan). Under WSLg there is no /dev/dri and
+# the XWayland/EGL path cannot acquire a wgpu device ("Parent device is lost"), while the GLX
+# path (mesa llvmpipe) works. The Linux build therefore also compiles eframe's glow (OpenGL)
+# backend, and `ui::native_options` selects it explicitly on Linux. Windows is untouched: it
+# keeps the default feature set and the default wgpu renderer.
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.37", features = ["glow"] }
 
 [features]
 default = ["real-engine"]

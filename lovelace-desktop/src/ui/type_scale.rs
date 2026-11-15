@@ -85,8 +85,20 @@ pub const PROSE_LINE_RATIO: f32 = 1.35;
 /// The registered name of the semibold face used by the strong roles.
 pub const STRONG_FAMILY: &str = "ui-strong";
 
-/// The two Windows faces a strong role may be painted with, in preference order.
-const STRONG_FACES: [&str; 2] = ["seguisb.ttf", "segoeuib.ttf"];
+/// The semibold faces a strong role may be painted with, in preference order.
+///
+/// `seguisb.ttf`/`segoeuib.ttf` are the Windows faces. `NimbusSans-Bold.otf` is the URW base35
+/// Helvetica clone that the standard Linux font set (ghostscript's `fonts-urw-base35`) installs;
+/// it is the Linux strong face because its 1.20 em line box meets VIS-005's 1.15x minimum at
+/// every strong size. `DejaVuSans-Bold.ttf` is the last resort: DejaVu is ubiquitous but its
+/// 1.164 em line box rounds to 17 px at the 15 pt pane title, below the scale's minimum, so it
+/// is only used when nothing taller is installed.
+const STRONG_FACES: [&'static str; 4] = [
+    "seguisb.ttf",
+    "segoeuib.ttf",
+    "NimbusSans-Bold.otf",
+    "DejaVuSans-Bold.ttf",
+];
 
 /// The weight axis of the scale.
 ///
@@ -214,12 +226,9 @@ fn strong_bytes() -> Option<&'static [u8]> {
     static BYTES: OnceLock<Option<Vec<u8>>> = OnceLock::new();
     BYTES
         .get_or_init(|| {
-            let windir = std::env::var_os("WINDIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
-            STRONG_FACES
-                .iter()
-                .find_map(|name| std::fs::read(windir.join("Fonts").join(name)).ok())
+            STRONG_FACES.iter().find_map(|name| {
+                super::typography::find_font_file(name).and_then(|path| std::fs::read(path).ok())
+            })
         })
         .as_deref()
 }
