@@ -501,7 +501,7 @@ where
     // The permission bits (including setuid/setgid/sticky) are applied to the replacement.
     #[cfg(unix)]
     if let Some(metadata) = &existing {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         options.mode(metadata.permissions().mode());
     }
 

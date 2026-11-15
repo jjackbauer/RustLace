@@ -283,6 +283,14 @@ fn main() {
 #[cfg(not(windows))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print!("{}", usage());
+        return;
+    }
+    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+        println!("lovelace-desktop {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if args.iter().any(|arg| arg == "--gui-selftest") {
         std::process::exit(gui_selftest::run());
     }
@@ -313,6 +321,13 @@ fn main() {
     // PLF-009: the release matrix is a document, so its claims are checkable on every platform.
     if args.iter().any(|arg| arg == "--platform-claims") {
         std::process::exit(platform_claims::run());
+    }
+    // An unrecognised flag is a usage error: name it, print the usage and exit 2. Only a bare
+    // launch (or a script path) is the unsupported-platform refusal.
+    let unknown: Vec<&String> = args.iter().filter(|arg| arg.starts_with("--")).collect();
+    if !unknown.is_empty() {
+        eprintln!("unknown option {}\n\n{}", unknown[0], usage());
+        std::process::exit(2);
     }
     // PLF-009: a platform without a UI adapter says so by name and refuses to start a placeholder.
     // The text comes from `platform_claims::unsupported_notice`, the same value the test asserts.
@@ -349,6 +364,7 @@ fn shortcuts_cli() -> i32 {
     0
 }
 
+#[cfg(windows)]
 fn usage() -> String {
     let mut text = String::new();
     text.push_str("lovelace-desktop - a native IDE for the Lovelace scripting language\n\n");
@@ -542,6 +558,41 @@ fn usage() -> String {
     );
     text.push_str(
         "  crash a recovery prompt offers the journaled buffers. Nothing is executed by either.\n",
+    );
+    text
+}
+
+/// The usage of a build without a UI adapter: only the headless modes this binary implements.
+#[cfg(not(windows))]
+fn usage() -> String {
+    let mut text = String::new();
+    text.push_str("lovelace-desktop - headless tools for the Lovelace scripting language\n\n");
+    text.push_str("USAGE:\n");
+    text.push_str(
+        "  lovelace-desktop --selftest         headless acceptance of the application core\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --gui-selftest     headless acceptance of the workbench run path\n",
+    );
+    text.push_str("  lovelace-desktop --ui-audit         audit src/ui for ARC-003 separation\n");
+    text.push_str("  lovelace-desktop --thread-audit     audit every thread spawn, sleep and\n");
+    text.push_str("                                      synchronisation primitive (ARC-008)\n");
+    text.push_str(
+        "  lovelace-desktop --shortcuts        print the keyboard map from the binding table\n",
+    );
+    text.push_str(
+        "  lovelace-desktop --platform-claims  print the release matrix's platform verdicts\n",
+    );
+    text.push_str(
+        "                                      and the refusal this build prints (PLF-009)\n",
+    );
+    text.push_str("  lovelace-desktop --help             this message\n");
+    text.push_str("  lovelace-desktop --version          print the version\n\n");
+    text.push_str(
+        "This build has no UI adapter: launching without one of these modes prints the\n",
+    );
+    text.push_str(
+        "unsupported-platform notice and exits 2. The native workbench is a Windows build.\n",
     );
     text
 }

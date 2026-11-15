@@ -35,8 +35,15 @@ reported **6130 passed, 5 failed** before the frozen knowledge-graph fixture was
 present, `cargo test -p lovelace-know` passes (exit 0) and the total is **6135 passed, 1 ignored**.
 If you clone a revision without the fixture, expect those five failures and nothing else.
 
-`cargo test -p lovelace-desktop` alone reports `716 passed; 0 failed; 0 ignored`, which is the desktop
-verification gate.
+`cargo test -p lovelace-desktop` alone reports `716 passed; 0 failed; 0 ignored` on Windows, which is
+the desktop verification gate. On Linux the same command reports **423 passed** (420 unit tests plus
+3 CLI integration tests): the `src/ui/**` modules are compiled only on Windows, so the Linux binary
+carries the headless application core without the rendered editor, panes or plot rasteriser.
+Two unit tests are Windows-only by premise and do not run there: the atomic-save read-only-target
+test in `workbench.rs` (Unix renames over a read-only file successfully, because directory
+permissions govern) and the PE-import self-check in `netcheck.rs` (the Linux test binary is ELF,
+not a PE image). The cross-platform failed-write test in `document_io.rs` and the crate-source
+network scan still cover both behaviours on Linux.
 
 ## 2. Oracle and golden tests
 
@@ -72,6 +79,10 @@ The window itself is driven two ways:
   $ cargo run -p lovelace-desktop -- --gui-selftest
   GUI_SELFTEST summary checks=20 failed=0
   ```
+
+  The Linux build reports `checks=19 failed=0`: the editor's undo/redo check is compiled only on
+  Windows, because the editor is part of the egui surface. Everything else in the run path is
+  platform-independent and runs headlessly on Linux.
 
   This needs a writable `APPDATA`; with the default `%APPDATA%` denied, two checks
   (`plot`, `plot-dir`) fail with "the app-scoped directory is unusable" and the mode exits 1. That
@@ -111,11 +122,55 @@ $ cargo test -p lovelace-run --test repl         # one integration target
 $ cargo test -p lovelace-corpus -- --nocapture   # the property assertions
 ```
 
+## 6. The Linux desktop job
+
+The `linux` CI job runs the engine gates and then:
+
+```console
+$ cargo build --release -p lovelace-desktop
+$ cargo test -p lovelace-desktop
+```
+
+and uploads `target/release/lovelace-desktop` as the artifact **`lovelace-desktop-linux-x86_64`**
+(the Windows job keeps its own `lovelace-desktop-windows-x86_64` executable). The Linux binary is
+the same headless application core: `--help`, `--version`, `--selftest` (14 checks, 0 failed on
+Linux — see below), `--gui-selftest` (19 checks, 0 failed), `--ui-audit`, `--thread-audit`,
+`--shortcuts` and `--platform-claims` all work. It has no window: the GUI stack is declared under
+`[target.'cfg(windows)'.dependencies]`, so no `eframe`/`egui` code is compiled and the binary
+prints the unsupported-platform notice and exits 2 when launched without a mode.
+
+The job exists because the crate had never been compiled on Linux before it: the first
+`cargo build --release -p lovelace-desktop` failed with
+
+```text
+error[E0599]: no method named `mode` found for struct `OpenOptions`
+   --> lovelace-desktop/src/document_io.rs:505:17
+```
+
+on the `#[cfg(unix)]` atomic-save path, which called `OpenOptions::mode` without importing
+`std::os::unix::fs::OpenOptionsExt`. That is a real portability defect the Windows-only job could
+not have found, so the Linux build is not a cosmetic addition.
+
+`--selftest` prints a named skip on Linux instead of silently dropping a check:
+
+```text
+SELFTEST skip no-network-imports: the check reads a PE import table and this build is not a PE image
+SELFTEST summary checks=14 skipped=1 failed=0
+```
+
+`--help` on Linux lists only the modes that build actually contains (the Windows-only modes such
+as `--journey` and `--raster-svg` are not advertised), and an unknown flag exits 2 with the usage
+on stderr. `lovelace-desktop/tests/linux_cli.rs` asserts all three.
+
 ## What cannot run in CI
 
 - **The GUI and its journeys.** They need a Windows desktop session, a real window and UI Automation.
-  The workflow runs the engine, runner, corpus and knowledge suites; the desktop's unit tests build
-  only on Windows because the GUI stack is a Windows-only dependency.
+  The Linux job builds and unit-tests the headless desktop crate, but the GUI shell, the editor
+  buffer, the plot pane's rasteriser and every `--journey` run are exercised only on Windows. The
+  headless checks are not GUI evidence and are not counted as any.
+- **The PE-import proof off Windows.** `--selftest`'s `no-network-imports` check reads a Windows
+  PE import table; on the Linux ELF binary it is reported as a skip with its reason. The
+  crate-source scan for networking APIs still runs on both platforms.
 - **Timing-sensitive probes.** The `--measure-*` and `--perf-*` modes report measurements, not
   pass/fail, and the timing assertions inside `precision_default.rs` are generous bounds (2×) rather
   than machine-speed lotteries.

@@ -2,9 +2,10 @@ name: CI
 
 # Two jobs:
 #   windows - the full workspace: format, clippy, every test, and the release desktop build.
-#   linux   - the portable engine crates only. The desktop crate is a Windows-only product
-#             (its eframe/egui dependencies are declared under cfg(windows)), so it must
-#             NOT be built or tested on Linux; the engine is platform-independent and is.
+#   linux   - the portable engine crates plus the headless desktop build. The desktop crate's
+#             GUI stack (eframe/egui/resvg) is declared under cfg(windows), so the Linux
+#             binary compiles the headless modes only; the GUI and its journeys are exercised
+#             on Windows. The Linux desktop artifact is still a real, tested binary.
 
 on:
   push:
@@ -57,7 +58,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    name: Linux (engine crates)
+    name: Linux (engine crates + headless desktop)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -79,3 +80,19 @@ jobs:
 
       - name: Test engine crates
         run: cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics
+
+      # The desktop crate builds on Linux with the GUI stack absent: the headless modes and the
+      # application core are platform-independent. This is the only CI job that compiles the
+      # crate for Linux, and its unit tests (420) plus the CLI integration tests (3) run here.
+      - name: Build release desktop (headless)
+        run: cargo build --release -p lovelace-desktop
+
+      - name: Test desktop (headless)
+        run: cargo test -p lovelace-desktop
+
+      - name: Upload desktop executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: lovelace-desktop-linux-x86_64
+          path: target/release/lovelace-desktop
+          if-no-files-found: error

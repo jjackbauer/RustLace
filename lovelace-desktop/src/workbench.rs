@@ -6263,7 +6263,13 @@ mod tests {
 
     /// PLF-004: a save that fails at the rename leaves the file, the buffer and the recorded
     /// conflict snapshot exactly as they were; only a completed rename re-records the snapshot.
+    ///
+    /// Windows only: the injection makes the target read-only and expects the rename to fail.
+    /// On Unix a rename over a read-only file succeeds (directory permissions govern), so the
+    /// premise is Windows-specific. `document_io`'s `write_faulted` test is the cross-platform
+    /// coverage of the same "a failed write leaves the original byte-identical" guarantee.
     #[test]
+    #[cfg(windows)]
     fn a_failed_atomic_save_keeps_the_original_and_its_recorded_snapshot() {
         use crate::document_io::{TEMP_SUFFIX, content_hash};
         let path = scratch("atomic-snapshot");

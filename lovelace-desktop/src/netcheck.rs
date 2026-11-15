@@ -231,7 +231,11 @@ mod tests {
         assert!(imported_dlls(&[]).is_err());
     }
 
+    /// Windows only: this parses the process image as a PE file. The Linux test binary is ELF
+    /// and has no MZ/PE import directory, so the reader correctly refuses it. The synthetic-PE
+    /// parser tests above and the crate-source scan below still run on every platform.
     #[test]
+    #[cfg(windows)]
     fn this_test_binary_imports_no_networking_dll() {
         let executable = std::env::current_exe().expect("current executable");
         let imports = file_imports(&executable).expect("PE imports");
