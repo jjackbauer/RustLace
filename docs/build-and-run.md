@@ -79,6 +79,29 @@ already platform-independent.
 
 ![The workbench on Linux: the full five-pane layout, dark theme, on a 1280x720 WSLg screen](images/gui-linux.png)
 
+### The prebuilt artifact needs glibc 2.39
+
+The binary CI publishes (`lovelace-desktop-linux-gui-x86_64`) is built on **Ubuntu 24.04**, the
+current LTS, so it needs **glibc >= 2.39** — it runs on Ubuntu 24.04 and newer, and on any other
+distribution whose libc is at least that new. On a host with an older libc the loader refuses it
+before `main()` (`version 'GLIBC_2.39' not found`), which is the same failure an earlier build gave
+on 24.04 when the runner had moved past the LTS and produced a `GLIBC_2.43` binary. **Older
+distributions should build from source instead**; the packages in [Packages](#packages) are the
+whole requirement, and `cargo build --release -p lovelace-desktop` then uses the host's own libc:
+
+```console
+$ git clone https://github.com/jjackbauer/RustLace
+$ cd RustLace
+$ cargo build --release -p lovelace-desktop
+```
+
+Two guards keep that floor honest. The `linux` job is pinned to `runs-on: ubuntu-24.04` rather than
+`ubuntu-latest`, because the publishing runner fixes the artifact's ABI floor and the `latest` label
+had already moved ahead of the LTS. And a `Guard the artifact's glibc requirement` step reads the
+newest `GLIBC_2.x` in the built binary's dynamic symbol table (`objdump -T`), prints that and the
+runner's own `ldd --version`, and fails when the artifact needs more glibc than the runner provides
+— so "the artifact outruns the LTS" is a CI failure, not a user-facing surprise.
+
 ### Packages
 
 The GUI stack loads X11, GL and xkbcommon at run time (`dlopen` through winit, glutin and
