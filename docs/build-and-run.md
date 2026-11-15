@@ -6,7 +6,7 @@
 |---|---|---|
 | Rust 1.85 or newer | `rust-version = "1.85"`, edition 2024 (`Cargo.toml`) | The documented runs used rustc/cargo 1.99.1 |
 | MSVC build tools (Windows) | `link.exe` for every binary | Present as Visual Studio 2022 Build Tools on the documenting host |
-| A Windows desktop session | the native workbench | `lovelace-desktop` is Windows-only; the engine, CLI and headless modes build anywhere |
+| A desktop session (Windows, or X11 on Linux) | the native workbench | Windows uses eframe's default wgpu renderer, Linux compiles and selects glow; the packages are in [Linux](#linux) |
 | A crate registry reachable once | the desktop's GUI stack | `eframe`/`egui` 0.37, `resvg` 0.50, `raw-window-handle` 0.6; everything else is in-tree |
 
 No registry is needed for the engine, the runner, the corpus gate or the knowledge graph
@@ -31,7 +31,8 @@ $ cargo build --release -p lovelace-desktop
    Finished `release` profile [optimized] target(s) in 1m 34s
 ```
 
-The release binary is `target/release/lovelace-desktop.exe` (24 169 472 bytes for this tree).
+The release binary is `target/release/lovelace-desktop.exe` on Windows and
+`target/release/lovelace-desktop` on Linux (the same command, one `main` for both platforms).
 
 ## Run the CLI
 
@@ -62,17 +63,118 @@ The window writes its start-up line to stderr so a redirected launch still shows
 
 ```text
 lovelace-desktop: plot directory C:\Users\<you>\AppData\Roaming\Lovelace\plots
+lovelace-desktop: plot directory /home/<you>/.config/lovelace/plots        # Linux
 ```
 
-On a display scaled to 300% the window is a 4800x3000 physical window whose logical layout is
-1600x1000; the screenshots in `docs/images` are that frame resampled to 1600x1000 (see
-`docs/images/README.md`).
+On Windows at 300% scale the window is a 4800x3000 physical window whose logical layout is
+1600x1000; the Windows screenshots in `docs/images` are that frame resampled to 1600x1000 (see
+`docs/images/README.md`). The Linux run and capture are in [Linux](#linux).
+
+## Linux
+
+The workbench is not a Windows-only build: `cargo build --release -p lovelace-desktop` produces the
+same workbench on Linux (one `main`, no headless-only refusal path), and CI builds it, runs
+`--gui-selftest` and runs the desktop tests under Xvfb. The engine, the CLI and the corpus gate were
+already platform-independent.
+
+![The workbench on Linux: the full five-pane layout, dark theme, on a 1280x720 WSLg screen](images/gui-linux.png)
+
+### Packages
+
+The GUI stack loads X11, GL and xkbcommon at run time (`dlopen` through winit, glutin and
+xkbcommon-dl), so the **build** does not link against them; a machine that only runs the headless
+modes needs none of this either. To open the window on a Debian/Ubuntu host, install:
+
+```console
+$ sudo apt-get update
+$ sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcursor-dev \
+    libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev libgl1-mesa-dri \
+    libwayland-dev pkg-config fonts-urw-base35 xvfb xauth x11-utils x11-apps
+```
+
+- `fonts-urw-base35` is a real product dependency, not a test detail. The strong type roles need a
+  face whose own line box is at least 1.15x at their size; `NimbusSans-Bold.otf` (URW base35, 1.20
+  em) satisfies it and the DejaVu faces do not. Without it the strong-role test fails with
+  `measured row 17.00 is below 1.15x15.00`, and `--legibility-check` fails on the same roles. The
+  Windows build tries `seguisb.ttf`/`segoeuib.ttf` first and is unchanged (`ui/type_scale.rs:99`).
+- `libgl1-mesa-dri` is mesa's software GL (llvmpipe), the renderer on a machine with no GPU such as
+  a CI runner under Xvfb or WSLg.
+- `xvfb` and `xauth` are for the display-less runs (`xvfb-run`); `x11-utils` (`xwininfo`) and
+  `x11-apps` (`xwd`) are for the capture below.
+
+### The renderer split
+
+`eframe` 0.37's default feature set is wgpu-only, and Windows has always shipped exactly that: the
+Windows build keeps the default feature set and the default `wgpu` renderer, and nothing here
+changes it. The non-Windows build compiles eframe's `glow` (OpenGL) backend as well
+(`lovelace-desktop/Cargo.toml:39`), and `ui::native_options` selects `eframe::Renderer::Glow` there
+(`lovelace-desktop/src/ui/app.rs:9908`).
+
+The reason is the host, not a preference. Under WSLg there is no `/dev/dri`, and the wgpu path dies
+with `WGPU error: Parent device is lost` (`MESA: error: ZINK: failed to choose pdev`), while the GLX
+path through mesa llvmpipe renders. Glow is the backend this tree verifies on Linux; a Linux machine
+with a working Vulkan/EGL device might also run wgpu, but choosing it there would be a claim no run
+in this tree supports. `Renderer::Glow` does not exist in a Windows build (the variant is behind the
+`glow` feature), so the two paths cannot be mixed at compile time.
+
+### Run it, and the WSLg caveat
+
+```console
+$ export DISPLAY=:0
+$ unset WAYLAND_DISPLAY
+$ cargo run --release -p lovelace-desktop -- notes.lv
+```
+
+`WAYLAND_DISPLAY` matters under WSLg: when it is set, winit selects the Wayland backend, WSLg's
+socket is missing, and the process fails with `Io error: Connection reset by peer (os error 104)` and
+`winit EventLoopError: Exit Failure: 1`. With `WAYLAND_DISPLAY` unset the same binary opens its
+window through X11/GLX. A native Wayland session is not tested by this tree; unset the variable only
+where the Wayland socket is missing.
+
+To capture the window with the X11 tools:
+
+```console
+$ ./target/release/lovelace-desktop &
+$ xwininfo -root -tree | grep "Lovelace Desktop"    # the window id and its geometry
+$ xwd -root -display :0 -out /tmp/gui.xwd
+$ xwdtopnm /tmp/gui.xwd | pnmtopng > /tmp/gui.png
+```
+
+`xwd` exits 0 once a window is mapped; WSLg's XWayland answers `BadMatch` when none is. The
+screenshot above is `docs/images/gui-linux.png`, a real root capture of the release binary on WSLg:
+1280x720, the full workbench, with the right edge of the default 1280x800 window clipped by the
+virtual screen.
+
+On a display-less machine, `xvfb-run` supplies an X server. That is how CI accepts the GUI:
+
+```console
+$ xvfb-run -a -s "-screen 0 1600x1000x24" ./target/release/lovelace-desktop --gui-selftest
+GUI_SELFTEST summary checks=20 failed=0
+
+$ xvfb-run -a -s "-screen 0 1600x1000x24" cargo test -p lovelace-desktop
+```
+
+`--gui-selftest` needs no window (it drives the workbench run path directly, exactly as on Windows);
+the writable application directory it uses is `$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace`.
+
+### What stays Windows-only
+
+`--legacy-win32`, `--ime-probe` and `--platform-parity` are Win32 code and are refused by name on
+Linux with exit 2 (`lovelace-desktop/src/main.rs:148`, `:174`, `:287`). Everything else in the
+mode table runs on Linux, including `--journey`, `--raster-svg` and the audit modes; `--selftest`
+reports 14 checks, 0 failed and one named skip (`no-network-imports` reads a PE import table).
+
+File dialogs use `zenity`, then `kdialog`, as a blocking child process
+(`lovelace-desktop/src/platform_dialogs.rs`); the chosen path comes from stdout, and a missing
+chooser returns the same `None` as the Windows `IDCANCEL`, never a fabricated path.
+`LOVELACE_FILE_DIALOG=zenity` or `=kdialog` pins the tool. With neither installed, Open/Save behaves
+as a cancel.
 
 ## Environment
 
 | Variable | Effect | Source |
 |---|---|---|
-| `APPDATA` | Root of the application directory: `desktop.json`, `plots\`, `recovery\` | `lovelace-desktop/src/settings.rs`, `engine.rs:65` |
+| `APPDATA` | Root of the application directory: `desktop.json`, `plots\`, `recovery\`. On Linux the root is `$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace` | `lovelace-desktop/src/settings.rs:1201`, `engine.rs:65` |
 | `LOVELACE_THREADS` | Pins the worker budget for determinism experiments | `lovelace-nat/src/lib.rs:85` |
 | `LOVELACE_NTT_THRESHOLD` | Pins the NTT crossover without rebuilding | `lovelace-nat/src/lib.rs:105` |
 | `LOVELACE_FACTORIAL_LEAF` | Pins the factorial product-tree leaf size | `lovelace-nat/src/lib.rs:811` |
@@ -108,16 +210,22 @@ cargo build --workspace
 **`failed to remove file ... lovelace-desktop.exe: Access is denied`.** A previous desktop process
 still holds the binary. Close it (or `Stop-Process -Name lovelace-desktop`) and rebuild.
 
-**The desktop builds but no window appears.** The windowed `main` is `#[cfg(windows)]`
-(`main.rs:93`). On another platform the headless modes still work:
-`cargo run -p lovelace-desktop -- --gui-selftest`.
+**The desktop builds but no window appears (Linux).** winit probably selected Wayland: under WSLg
+unset `WAYLAND_DISPLAY` and set `DISPLAY=:0` (see [Linux](#linux)). The acceptance mode needs no
+window, so `./target/release/lovelace-desktop --gui-selftest` still runs and tells you whether the
+workbench itself is healthy.
+
+**`--legibility-check` fails on the strong roles on Linux.** No installed face has a line box tall
+enough (the strong-role test reports `measured row 17.00 is below 1.15x15.00`); install
+`fonts-urw-base35` (see [Linux](#linux)).
 
 **`Cannot create the plot directory ... Access is denied`.** The log pane reports it at start-up; the
 process could not create `%APPDATA%\Lovelace\plots`. Set `APPDATA` to a writable directory. Plot
 statements then fail with that message rather than silently writing nowhere (`engine.rs:90`).
 
 **`cargo build` cannot reach a registry.** The engine and the CLI do not need one. The desktop does:
-its GUI stack is the only external dependency, and it is Windows-only.
+its GUI stack is the only external dependency (`eframe`/`egui`, `resvg`, `raw-window-handle`), and
+it is declared in the desktop crate only.
 
 **A settings file written by a newer build.** `Settings::from_json` has no error return: an unknown
 schema, a wrong field type or a corrupt file yields the defaults plus a warning

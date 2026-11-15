@@ -1,7 +1,7 @@
 # `lovelace-desktop`
 
-The native Windows IDE for the Lovelace scripting language: a windowed workbench plus nine headless
-acceptance modes.
+The native desktop IDE for the Lovelace scripting language, on Windows and Linux: a windowed
+workbench plus its headless acceptance modes.
 
 ## Purpose
 
@@ -44,13 +44,15 @@ test drives.
 ## Dependencies
 
 `lovelace-json`; `lovelace-lang` and `lovelace-symbolics` behind the default `real-engine` feature;
-`eframe`/`egui` 0.37, `resvg` 0.50 and `raw-window-handle` 0.6 on Windows only. A
+`eframe`/`egui` 0.37, `resvg` 0.50 and `raw-window-handle` 0.6, declared in this crate only. eframe
+keeps its default wgpu renderer on Windows and adds the `glow` feature on other platforms. A
 `--no-default-features` build keeps the crate usable offline and switches every document to
 `engine::FakeEngine` (`lovelace-desktop/Cargo.toml`).
 
 ## Tests
 
-716 `#[test]` functions run by `cargo test -p lovelace-desktop`. They cover the execution host, the
+716 `#[test]` functions on Windows, 706 plus the 4 in `tests/linux_cli.rs` on Linux, run by
+`cargo test -p lovelace-desktop`. They cover the execution host, the
 incremental cache, statements, documents and files, recovery, settings, the theme and contrast
 checker, the type scale, the editor model, completion, find, the workspace tables, the inspector,
 the plot pane and the UI audits.

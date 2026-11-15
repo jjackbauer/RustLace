@@ -2,7 +2,8 @@
 
 RustLace is the Rust-only successor of the LovelaceSharp stack: arbitrary-precision exact
 arithmetic, an N-dimensional array library, the Lovelace scripting language, a non-interactive
-runner and a native Windows IDE, all in one workspace with no external crates under the engine.
+runner and a native desktop IDE for Windows and Linux, all in one workspace with no external crates
+under the engine.
 The engine is `lovelace-lang`'s `Engine`, and every host drives the same engine rather than
 re-implementing language behaviour. This file is the portable entry point; task skills are in
 `.dsh/skills/` and are indexed at [docs/skills.md](docs/skills.md).
@@ -13,12 +14,13 @@ re-implementing language behaviour. This file is the portable entry point; task 
 |---|---|---|
 | Engine library | `Engine`, the values, lexer, parser, interpreter, builtins and plugins | `cargo build --workspace`; source: `lovelace-lang/src/lib.rs` |
 | `lovelace-run` CLI | non-interactive runner and the stable JSON wire envelope | `cargo run -p lovelace-run -- --eval "1/3" --text`; source: `lovelace-run/src/main.rs` |
-| `lovelace-desktop` GUI | native Windows workbench plus headless acceptance modes | `cargo run -p lovelace-desktop`; source: `lovelace-desktop/src/main.rs` |
+| `lovelace-desktop` GUI | native workbench (Windows and Linux) plus headless acceptance modes | `cargo run -p lovelace-desktop`; source: `lovelace-desktop/src/main.rs` |
 
 ## Commands that matter
 
-Run from the repository root. The engine crates build anywhere; the desktop builds anywhere but
-its GUI shell is Windows-only, so a Linux build carries the headless modes only.
+Run from the repository root. The engine crates build anywhere; the desktop workbench builds and
+runs on Windows and on Linux (X11). Linux needs the X11/GL/font packages and, on a display-less
+machine, Xvfb - see [Build on Linux](#build-on-linux).
 Requires Rust 1.85+ (the tree was built with 1.99.1) and, on Windows, the MSVC build tools.
 
 ```console
@@ -60,11 +62,42 @@ cargo run -p lovelace-desktop -- --help
 
 Observed counts on this tree: `cargo test --workspace` gives 6135 passed and 1 ignored (the
 ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in place);
-`cargo test -p lovelace-desktop` gives 716 passed on Windows and 423 passed on Linux (the UI
-modules are `cfg(windows)`, and two Windows-only premises are gated there); `--gui-selftest` gives
-20 checks, 0 failed on Windows and 19 on Linux; `--selftest` gives 15 checks on Windows and 14 plus
-a named `no-network-imports` skip on Linux; the corpus gives 214 passed, 0 failed. A run that needs `%APPDATA%\Lovelace` needs that directory
-writable: set `APPDATA` to a scratch directory first.
+`cargo test -p lovelace-desktop` gives 716 passed on Windows and 710 on Linux (706 in the binary
+plus 4 CLI integration tests; the ten tests that do not compile there are the Windows-only
+`platform_parity` module and `win32/shell.rs`, and four Windows-premise tests in `document_io.rs`,
+`workbench.rs` and `netcheck.rs`); `--gui-selftest` gives 20 checks, 0 failed on both platforms;
+`--selftest` gives 15 checks on Windows and 14 plus a named `no-network-imports` skip on Linux; the
+corpus gives 214 passed, 0 failed. A run that needs the application directory needs it writable:
+set `APPDATA` on Windows, or `XDG_CONFIG_HOME`/`HOME` on Linux, to a scratch directory first.
+
+### Build on Linux
+
+The GUI stack loads X11, GL and xkbcommon through `dlopen`, so the build itself needs no X11
+headers; opening the window does. On Debian/Ubuntu:
+
+```console
+sudo apt-get update
+sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcursor-dev \
+    libxrandr-dev libxi-dev libgl1-mesa-dev libegl1-mesa-dev libgl1-mesa-dri \
+    libwayland-dev pkg-config fonts-urw-base35 xvfb xauth x11-utils
+```
+
+- `fonts-urw-base35` is the strong-face dependency (`NimbusSans-Bold.otf`, 1.20 em); without it
+  `--legibility-check` and the strong-role test fail.
+- `libgl1-mesa-dri` is mesa's software GL (llvmpipe) for a host with no GPU, such as WSLg or a CI
+  runner under Xvfb.
+- The renderer is deliberately split: Windows keeps eframe's default wgpu renderer, non-Windows
+  compiles and selects `glow` (`lovelace-desktop/Cargo.toml:39`,
+  `lovelace-desktop/src/ui/app.rs:9908`). Do not "unify" it: wgpu cannot acquire a device under
+  WSLg (no `/dev/dri`), which is why the Linux window uses GLX/llvmpipe.
+- Under WSLg, `unset WAYLAND_DISPLAY` and `export DISPLAY=:0`; otherwise winit selects Wayland and
+  the process dies with `Io error: Connection reset by peer (os error 104)`.
+- Windowless acceptance and tests:
+
+  ```console
+  xvfb-run -a -s "-screen 0 1600x1000x24" ./target/release/lovelace-desktop --gui-selftest
+  xvfb-run -a -s "-screen 0 1600x1000x24" cargo test -p lovelace-desktop
+  ```
 
 ### CI jobs
 
@@ -74,15 +107,17 @@ dispatch:
 | Job | Commands |
 |---|---|
 | Windows (full workspace) | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `cargo build --release -p lovelace-desktop`, then upload `target/release/lovelace-desktop.exe` as `lovelace-desktop-windows-x86_64` |
-| Linux (engine crates + headless desktop) | `cargo fmt --all -- --check`, `cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics`, `cargo build --release -p lovelace-desktop`, `cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-x86_64` |
+| Linux (engine crates + GUI desktop under Xvfb) | `cargo fmt --all -- --check`, the Linux GUI runtime, `cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics`, `cargo build --release -p lovelace-desktop`, `xvfb-run ... --gui-selftest` (exit 0 and `checks=20 failed=0`), `xvfb-run ... cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-gui-x86_64` |
 
-The Linux job builds and tests the desktop crate, but the GUI stack (eframe/egui/resvg) is declared
-under `[target.'cfg(windows)'.dependencies]`, so that artifact has no window, no editor and no
-journeys: the GUI and all `--journey` runs are exercised only on Windows. The Linux job is what
-compiles the headless application core on Linux; it found the missing
-`std::os::unix::fs::OpenOptionsExt` import in the atomic-save path the first time the crate was
-built there. Clippy is run without `-D warnings` because the workspace has pre-existing warnings;
-do not add new ones silently.
+The Linux job is the GUI acceptance gate: it compiles the workbench, runs the 20-check selftest and
+the full desktop suite (editor, panes, theme, plot rasteriser, journeys) under Xvfb, and uploads the
+GUI binary. The Windows job is untouched: it still runs the workspace suite, builds the release
+executable and uploads `lovelace-desktop-windows-x86_64`. Neither job captures a window: the
+Windows frames come from the documenting host and the one Linux frame is
+`docs/images/gui-linux.png` (WSLg). A `--gui-selftest` pass is a run-path check, not a GUI journey
+pass. The Linux job was also the first to compile the desktop crate there; it found the missing
+`std::os::unix::fs::OpenOptionsExt` import in the atomic-save path. Clippy is run without
+`-D warnings` because the workspace has pre-existing warnings; do not add new ones silently.
 
 ## Layout
 
@@ -101,7 +136,7 @@ One line per crate, and what it owns:
 | `lovelace-know` | the observation-driven behavioural graph, JSON persistence and convergence tests |
 | `lovelace-corpus` | the documentation-corpus parity gate over `parity/corpus/*.json` |
 | `lovelace-bench` | the micro-benchmark harness shaped like the C# reference harness |
-| `lovelace-desktop` | the native workbench, execution host, incremental cache, persistence, accessibility and headless acceptance modes |
+| `lovelace-desktop` | the native workbench (Windows and Linux), execution host, incremental cache, persistence, accessibility and headless acceptance modes |
 | `lovelace-desktop-spike` | the measured UI spike that chose eframe/egui; deliberately outside the workspace |
 
 `docs/` is the long-form documentation: start at `docs/README.md`, then `docs/architecture.md`,
@@ -207,14 +242,16 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
 - Never commit build outputs (`target/`, `.tmp/`), `%APPDATA%` state, certificates, `.pfx` files,
   private keys or secrets. Screenshots belong in `docs/images/` only when they document a shipped
   state.
-- Never hand-edit generated or captured artifacts without regenerating them: `docs/images/*.png`
-  come from `docs/images/capture.ps1`; the golden wire fixtures are rewritten only with
+- Never hand-edit generated or captured artifacts without regenerating them: the Windows frames in
+  `docs/images/` come from `docs/images/capture.ps1`, `gui-linux.png` is an `xwd` capture (provenance
+  in `docs/images/README.md`); the golden wire fixtures are rewritten only with
   `LOVELACE_RECORD_GOLDENS=1`; `docs/goal-desktop-v4/reference/REF-*.json` are captured from a real
   run. Re-run the consuming test after regenerating.
 - Never push a feature branch to `main` without a green CI run. Branch, open a pull request, and let
   the Windows and Linux jobs pass; `main` moves only through that gate.
 - No external crate may enter an engine crate (ADR-001). The desktop's GUI stack is the only
-  external dependency, and it is Windows-only.
+  external dependency, declared in the desktop crate only: eframe's default wgpu on Windows, plus
+  glow on Linux.
 - No floating point in a value path, and no `unsafe` outside the documented Win32 lane.
 - The UI never evaluates, constructs an engine or compiles: `--ui-audit` enforces this. Pane data
   arrives through `WorkspaceSnapshot` / `DocumentView`.

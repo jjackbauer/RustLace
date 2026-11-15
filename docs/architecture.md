@@ -167,8 +167,9 @@ rasterises those bytes with resvg — it never regenerates the plot.
 ## Persistence
 
 Everything the application writes outside a document lives under one application directory:
-`%APPDATA%\Lovelace\desktop.json` (settings), `plots\`, `recovery\`
-(`lovelace-desktop/src/settings.rs`, `engine.rs:65`, `recovery.rs`). Saves are atomic – a temporary
+`%APPDATA%\Lovelace\desktop.json` (settings), `plots\`, `recovery\` on Windows;
+`$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace` on Linux
+(`lovelace-desktop/src/settings.rs:1201`, `engine.rs:65`, `recovery.rs`). Saves are atomic – a temporary
 file in the target's own directory, flushed, `sync_all`ed, then renamed over the target
 (`lovelace-desktop/src/document_io.rs:438`). The recovery journal applies the same write-then-rename
 discipline to `LOVELACE-RECOVERY` records (`recovery.rs:32`).
