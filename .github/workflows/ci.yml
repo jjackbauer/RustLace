@@ -62,7 +62,13 @@ jobs:
 
   linux:
     name: Linux (engine crates + GUI desktop under Xvfb)
-    runs-on: ubuntu-latest
+    # Pinned to the current Ubuntu LTS, deliberately NOT ubuntu-latest: this job publishes the
+    # Linux GUI artifact, so its runner fixes the artifact's ABI floor. The artifact has to run on
+    # Ubuntu 24.04 (glibc 2.39), and ubuntu-latest had already moved ahead of the LTS: run
+    # 43674629253 produced a binary that died on 24.04 with
+    #   /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.43' not found
+    # Move this pin only when a newer LTS becomes the supported floor, never back to "latest".
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,6 +111,35 @@ jobs:
       # rasteriser and journeys the Windows binary carries, rendered through glow.
       - name: Build release desktop (GUI)
         run: cargo build --release -p lovelace-desktop
+
+      # ABI guard, cheap and right after the build. The artifact is built on the runner, so the
+      # newest glibc symbol it references is the newest glibc any user must have - and that is
+      # exactly how run 43674629253 shipped a GLIBC_2.43 binary to users on 24.04 (glibc 2.39).
+      # Print both versions, then fail when the artifact needs more glibc than the runner that
+      # publishes it provides. That turns "artifact outruns the LTS" into a CI failure instead of
+      # a user-facing `version GLIBC_2.43 not found`, and it catches a future ubuntu-24.04 image
+      # refresh as well as an accidental return to a newer label.
+      - name: Guard the artifact's glibc requirement
+        run: |
+          set -euo pipefail
+          exe=target/release/lovelace-desktop
+          # Highest GLIBC_2.x referenced by the dynamic symbol table (empty if none found).
+          required=$(objdump -T "$exe" | grep -o 'GLIBC_2\.[0-9]*' | sort -u -V | tail -1 || true)
+          required=${required#GLIBC_}
+          runner=$(ldd --version | head -1 | grep -oE '[0-9]+\.[0-9]+$' || true)
+          echo "artifact:          $exe"
+          echo "requires glibc <=  ${required:-unknown}"
+          echo "runner provides    ${runner:-unknown}  ($(ldd --version | head -1))"
+          if [ -z "$required" ] || [ -z "$runner" ]; then
+            echo "::error title=glibc ABI::could not determine the artifact's or the runner's glibc version"
+            exit 1
+          fi
+          highest=$(printf '%s\n%s\n' "$required" "$runner" | sort -V | tail -1)
+          if [ "$highest" != "$runner" ]; then
+            echo "::error title=glibc ABI::$exe requires glibc $required but this runner provides only $runner"
+            exit 1
+          fi
+          echo "glibc ABI OK: $required <= $runner"
 
       # --gui-selftest drives the shipped Workbench through the same run path the window calls.
       # checks=20 is the Windows count: the undo/redo check used to be Windows-only on this
