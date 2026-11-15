@@ -35,6 +35,17 @@ when that workflow cannot run; do not hand-tag while the workflow is available.
    --version` prints the same version. A tag is never created on a dirty tree or on an unmerged
    feature branch.
 
+   Also confirm the licence file and the package declaration agree. From the repository root:
+
+   ```console
+   Select-String -Path Cargo.toml -Pattern '^license'
+   ```
+
+   It must print `license = "MIT"` from `[workspace.package]`; the root `LICENSE` must exist and
+   carry the MIT permission text; and every member `Cargo.toml` must either inherit it
+   (`license.workspace = true`) or declare the same `MIT`. A missing `LICENSE`, a different
+   identifier, or a member overriding it with something else stops the release.
+
 2. **Run the release gate.** Every command in `docs/release.md` is expected to pass on the release
    commit, in this order:
 

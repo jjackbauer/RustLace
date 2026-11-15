@@ -129,9 +129,13 @@ overflows its main-thread stack at `lang/061`, while the release build of the sa
 
 ## Licence and attribution
 
-The workspace declares `license = "MIT"` (`[workspace.package]` in `Cargo.toml`); there is no
-`LICENSE` file in the tree yet, so the `Cargo.toml` declaration is the operative statement for this
-revision.
+RustLace is released under the [MIT licence](LICENSE). The full text, including the copyright line
+`Copyright (c) 2025 The RustLace Authors`, is in [`LICENSE`](LICENSE). MIT permits use, modification
+and redistribution, including commercially, provided the copyright notice and permission notice are
+retained. The project began as the C# LovelaceSharp stack; that codebase is a separate work, and the
+Rust port in this repository is the licensed work here. The workspace declares `license = "MIT"`
+(`[workspace.package]` in `Cargo.toml`) and every member crate inherits it with
+`license.workspace = true`.
 
 RustLace is the Rust-only successor of LovelaceSharp, which in turn descends from a C++ codebase
 (`Legacy/`, originally in Portuguese) and is named after

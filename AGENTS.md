@@ -185,6 +185,11 @@ contains `release: 1.0.0` (or a `BREAKING CHANGE:` footer carrying `major: 1` on
 nothing else moves the major version. `.github/workflows/release.yml` releases automatically after a
 green CI run on `main`, so do not tag by hand. The full table is [docs/release.md](docs/release.md).
 
+### Licence
+
+RustLace is released under the MIT licence ([LICENSE](LICENSE)); contributions are accepted under
+the same terms (inbound = outbound), with no separate contributor licence agreement.
+
 ## Guardrails
 
 - Never weaken a test to make a change pass: do not delete it, `#[ignore]` it, relax an assertion,
