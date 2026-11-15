@@ -126,10 +126,12 @@ jobs:
           # Highest GLIBC_2.x referenced by the dynamic symbol table (empty if none found).
           required=$(objdump -T "$exe" | grep -o 'GLIBC_2\.[0-9]*' | sort -u -V | tail -1 || true)
           required=${required#GLIBC_}
-          runner=$(ldd --version | head -1 | grep -oE '[0-9]+\.[0-9]+$' || true)
+          # sed, not `head -1`: ldd writes several lines and head would SIGPIPE it, which prints
+          # "printf: write error: Broken pipe" into the log and reads like a guard failure.
+          runner=$(ldd --version | sed -n 1p | grep -oE '[0-9]+\.[0-9]+$' || true)
           echo "artifact:          $exe"
           echo "requires glibc <=  ${required:-unknown}"
-          echo "runner provides    ${runner:-unknown}  ($(ldd --version | head -1))"
+          echo "runner provides    ${runner:-unknown}  ($(ldd --version | sed -n 1p))"
           if [ -z "$required" ] || [ -z "$runner" ]; then
             echo "::error title=glibc ABI::could not determine the artifact's or the runner's glibc version"
             exit 1
