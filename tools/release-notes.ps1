@@ -32,7 +32,7 @@
     Commit SHA the artifact was built from.
 
 .PARAMETER Sha256
-    SHA-256 of the released executable.
+    SHA-256 of the released Windows executable.
 
 .PARAMETER SizeBytes
     Size of the released executable in bytes.
@@ -247,13 +247,19 @@ if ($sections.other.Count -gt 0) {
 [void] $out.Add('')
 if ($Sha256) {
     $sizeText = if ($SizeBytes) { "$SizeBytes bytes" } else { 'size not recorded' }
-    [void] $out.Add("- ``lovelace-desktop.exe`` - $sizeText, SHA-256 ``$Sha256``")
+    [void] $out.Add("- ``lovelace-desktop.exe`` - Windows x86_64, $sizeText, SHA-256 ``$Sha256``")
 } else {
-    [void] $out.Add('- `lovelace-desktop.exe`')
+    [void] $out.Add('- `lovelace-desktop.exe` - Windows x86_64')
 }
-[void] $out.Add('- `SHA256SUMS` - the same hash in `sha256sum` format')
+[void] $out.Add('- `SHA256SUMS.windows` - the Windows hash in `sha256sum` format')
+[void] $out.Add('- `lovelace-desktop-linux-x86_64` - Linux x86_64, built at the same tag; its size and SHA-256 are in `SHA256SUMS.linux`')
+[void] $out.Add('- `SHA256SUMS.linux` - the Linux hash in `sha256sum` format')
 [void] $out.Add('')
-[void] $out.Add('The build is unsigned: Windows SmartScreen shows "Unknown publisher" until the')
+[void] $out.Add('The Linux binary is built on Ubuntu 24.04 and needs glibc >= 2.39. It is verified')
+[void] $out.Add('with software rendering (llvmpipe); no GPU driver is claimed. Run')
+[void] $out.Add('`chmod +x lovelace-desktop-linux-x86_64` before launching it.')
+[void] $out.Add('')
+[void] $out.Add('The builds are unsigned: Windows SmartScreen shows "Unknown publisher" until the')
 [void] $out.Add('hash earns reputation. The hash identifies the exact file, not a signer.')
 
 if ($tag -and $Repository) {

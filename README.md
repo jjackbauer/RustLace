@@ -23,9 +23,24 @@ Linux CI builds the GUI, runs `--gui-selftest` (20 checks, 0 failed) and the des
 `xvfb-run`, and uploads the binary as the `lovelace-desktop-linux-gui-x86_64` artifact. What is
 verified is X11: Wayland is not tested, and under WSLg `WAYLAND_DISPLAY` must be unset or winit picks
 a Wayland socket WSLg does not provide. The three Win32-only modes (`--legacy-win32`, `--ime-probe`,
-`--platform-parity`) are refused by name on Linux. The release job still publishes the Windows
-executable only; the Linux binary is the CI artifact. See
+`--platform-parity`) are refused by name on Linux. See
 [build-and-run.md](docs/build-and-run.md#linux).
+
+**Release assets.** Every release carries both executables and one checksum file per platform:
+
+| Asset | Platform | Notes |
+|---|---|---|
+| `lovelace-desktop.exe` | Windows x86_64 | needs the Microsoft Visual C++ runtime; unsigned |
+| `SHA256SUMS.windows` | -- | `"<sha256>  lovelace-desktop.exe"` |
+| `lovelace-desktop-linux-x86_64` | Linux x86_64 | glibc >= 2.39; `chmod +x` before running |
+| `SHA256SUMS.linux` | -- | `"<sha256>  lovelace-desktop-linux-x86_64"` |
+
+Both binaries are rebuilt at the tagged release commit and must print the tag's version before they
+are attached. The Linux one is built on Ubuntu 24.04 and verified there with software rendering
+(mesa's llvmpipe); no GPU driver is claimed. On Linux, download the asset, run
+`chmod +x lovelace-desktop-linux-x86_64`, then `./lovelace-desktop-linux-x86_64 --version`; verify
+it with `sha256sum -c SHA256SUMS.linux`. The checksum choice and the retry path are in
+[docs/release.md](docs/release.md).
 
 ## Three entry points
 

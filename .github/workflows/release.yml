@@ -23,13 +23,26 @@ name: Release
 # again, and main plus the tag are pushed atomically: either both move or
 # neither does.
 #
-# The attached executable is built HERE, at the release commit the job creates
-# and tags, with `cargo build --release -p lovelace-desktop`, so the version
-# compiled in from [workspace.package] is the version in the tag. The job runs
-# the built file with --version and fails unless it prints the tagged version,
+# Every release carries TWO executables, both built from the tagged commit:
+#
+#   lovelace-desktop.exe            Windows x86_64, attached by the `release` job
+#   SHA256SUMS.windows              its digest, written by the `release` job
+#   lovelace-desktop-linux-x86_64   Linux x86_64, attached by the `linux` job
+#   SHA256SUMS.linux                its digest, written by the `linux` job
+#
+# The `release` job creates the tag and the GitHub Release on windows-latest.
+# The `linux` job needs it, reads the tag from its job outputs, checks that tag
+# out again (never main) and uploads its two files with `gh release upload`;
+# it never creates the release. Each job hashes only the file it built, so no
+# checksum can describe the other platform's bytes and no job has to download
+# the other's asset.
+#
+# Each executable is built HERE, at the release commit the job creates and
+# tags, with `cargo build --release -p lovelace-desktop`, so the version
+# compiled in from [workspace.package] is the version in the tag. Both jobs run
+# the built file with --version and fail unless it prints the tagged version,
 # which is what makes an asset that disagrees with its tag impossible. The
-# pre-bump CI artifact is deliberately not attached. SHA256SUMS is written over
-# the attached file.
+# pre-bump CI artifact is deliberately not attached.
 
 on:
   workflow_run:
@@ -57,6 +70,13 @@ jobs:
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: windows-latest
+
+    # Consumed by the `linux` job. `released` is false on every guard stop, so
+    # the Linux job runs only when this job created (or recovered) the release.
+    outputs:
+      released: ${{ steps.guard.outputs.release }}
+      tag: ${{ steps.guard.outputs.tag }}
+
     steps:
       - name: Check out the CI-validated commit with full history and tags
         uses: actions/checkout@v4
@@ -272,7 +292,7 @@ jobs:
           "version=$env:NEXT" >> $env:GITHUB_OUTPUT
           Write-Output "verified: the built executable prints the tagged version $env:NEXT"
 
-      - name: Write SHA256SUMS over the built executable
+      - name: Write SHA256SUMS.windows over the built executable
         id: checksum
         if: steps.guard.outputs.release == 'true'
         shell: pwsh
@@ -281,12 +301,14 @@ jobs:
           if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
           $item = Get-Item -LiteralPath $exe
           $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  lovelace-desktop.exe" | Set-Content -Path SHA256SUMS -Encoding ascii
+          # Platform-qualified name: the release also carries SHA256SUMS.linux, and a bare
+          # SHA256SUMS cannot say which executable it describes.
+          "$hash  lovelace-desktop.exe" | Set-Content -Path SHA256SUMS.windows -Encoding ascii
           "sha256=$hash" >> $env:GITHUB_OUTPUT
           "size=$($item.Length)" >> $env:GITHUB_OUTPUT
           Write-Output "sha256 $hash"
           Write-Output "size   $($item.Length) bytes"
-          Get-Content SHA256SUMS
+          Get-Content SHA256SUMS.windows
 
       - name: Generate the release notes
         if: steps.guard.outputs.release == 'true'
@@ -319,7 +341,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'release-notes.ps1 failed' }
           Get-Content RELEASE_NOTES.md
 
-      - name: Publish the GitHub Release with the executable and checksum
+      - name: Publish the GitHub Release with the Windows executable and checksum
         if: steps.guard.outputs.release == 'true'
         shell: pwsh
         env:
@@ -327,9 +349,190 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           $exe = Join-Path (Get-Location) 'target/release/lovelace-desktop.exe'
-          foreach ($asset in @($exe, (Join-Path (Get-Location) 'SHA256SUMS'))) {
+          foreach ($asset in @($exe, (Join-Path (Get-Location) 'SHA256SUMS.windows'))) {
             if (-not (Test-Path -LiteralPath $asset)) { throw "missing release asset $asset" }
           }
-          gh release create $env:TAG --repo $env:REPO --verify-tag --title "RustLace $env:TAG" --notes-file RELEASE_NOTES.md $exe SHA256SUMS
+          gh release create $env:TAG --repo $env:REPO --verify-tag --title "RustLace $env:TAG" --notes-file RELEASE_NOTES.md $exe SHA256SUMS.windows
           if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
           gh release view $env:TAG --repo $env:REPO --json tagName,name,assets
+
+  # ---------------------------------------------------------------------------
+  # The Linux executable.
+  #
+  # `needs: release` is the ordering AND the gate: the job runs only after the
+  # `release` job has created the tag and the GitHub Release, and only when the
+  # guard's `released` output is true. It checks the tag out itself, so the
+  # Linux binary is built from exactly the released commit -- not from main and
+  # not from CI's pre-bump artifact. It never creates a release; it uploads the
+  # two files it built to the release the other job created.
+  # ---------------------------------------------------------------------------
+  linux:
+    name: Publish the Linux executable
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    # Same pin as the Linux job in ci.yml, deliberately not ubuntu-latest: the
+    # runner fixes the glibc floor of the binary users download. ubuntu-24.04
+    # provides glibc 2.39 (docs/release.md states the floor). Move this pin only
+    # when the supported floor moves.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the release tag, not main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          fetch-depth: 0
+
+      # The checkout action already resolves the tag; this step proves the
+      # property the release depends on rather than trusting the ref input.
+      - name: Prove the checkout is the tagged commit
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            echo "::error title=linux release::the release job produced no tag"
+            exit 1
+          fi
+          git fetch --tags --force origin
+          head=$(git rev-parse HEAD)
+          tag_commit=$(git rev-list -n 1 "refs/tags/$TAG")
+          echo "HEAD        $head"
+          echo "$TAG ->     $tag_commit"
+          if [ "$head" != "$tag_commit" ]; then
+            echo "::error title=linux release::HEAD $head is not the commit of tag $TAG ($tag_commit)"
+            exit 1
+          fi
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      # Exactly the package list ci.yml installs for the Linux GUI build. The GUI
+      # stack loads X11, GL and xkbcommon through dlopen, so these are the build
+      # and runtime dependencies; libgl1-mesa-dri supplies llvmpipe for a runner
+      # with no GPU. `libegl1-mesa-dev` is the package name (not libegl-mesa-dev),
+      # and ci.yml is the source of truth for this list.
+      - name: Install the Linux GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-0 \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgl1-mesa-dri \
+            libwayland-dev pkg-config \
+            fonts-urw-base35 \
+            xvfb xauth x11-utils
+
+      - name: Build the Linux executable at the tagged commit
+        run: cargo build --release -p lovelace-desktop
+
+      # The same guard the Windows job runs: the released file must print the
+      # tag's version. A mismatch fails the job, so the release cannot gain a
+      # Linux asset that disagrees with its tag.
+      - name: Verify the Linux executable reports the tagged version
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          exe=target/release/lovelace-desktop
+          if [ ! -x "$exe" ]; then
+            echo "::error title=linux release::the build did not produce $exe"
+            exit 1
+          fi
+          version=${TAG#v}
+          expected="lovelace-desktop $version"
+          status=0
+          output=$("$exe" --version 2>&1) || status=$?
+          echo "$exe --version -> '$output' (exit $status)"
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=linux release::--version exited $status"
+            exit 1
+          fi
+          if [ "$output" != "$expected" ]; then
+            echo "::error title=linux release::asset/tag version mismatch: tag $TAG requires '$expected' but the Linux executable printed '$output'"
+            exit 1
+          fi
+          echo "verified: the Linux executable prints the tagged version $version"
+
+      - name: Rename the executable and write SHA256SUMS.linux
+        id: checksum
+        run: |
+          set -euo pipefail
+          src=target/release/lovelace-desktop
+          asset=lovelace-desktop-linux-x86_64
+          cp "$src" "$asset"
+          chmod +x "$asset"
+          size=$(stat -c %s "$asset")
+          hash=$(sha256sum "$asset" | awk '{print $1}')
+          # Same sha256sum format as the Windows file, and a platform-qualified
+          # name so the two checksum files cannot be confused.
+          printf '%s  %s\n' "$hash" "$asset" > SHA256SUMS.linux
+          echo "wrote $asset ($size bytes, sha256 $hash)"
+          cat SHA256SUMS.linux
+          # The checksum file must describe the bytes that will be uploaded.
+          sha256sum -c SHA256SUMS.linux
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+          echo "sha256=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the Linux executable and its checksum to the release
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # --clobber makes a re-run of this job safe: it replaces only these two
+          # Linux-named assets and never creates or edits the release itself.
+          gh release upload "$TAG" --repo "$REPO" --clobber \
+            lovelace-desktop-linux-x86_64 SHA256SUMS.linux
+
+      # The bytes in the release, not the bytes on the build disk, are what users
+      # get: download them back, check the checksum and run --version once more.
+      - name: Verify the uploaded asset against SHA256SUMS.linux
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p verify-linux
+          cd verify-linux
+          gh release download "$TAG" --repo "$REPO" \
+            --pattern lovelace-desktop-linux-x86_64 \
+            --pattern SHA256SUMS.linux \
+            --dir .
+          sha256sum -c SHA256SUMS.linux
+          chmod +x lovelace-desktop-linux-x86_64
+          status=0
+          output=$(./lovelace-desktop-linux-x86_64 --version 2>&1) || status=$?
+          echo "downloaded asset --version -> '$output' (exit $status)"
+          expected="lovelace-desktop ${TAG#v}"
+          if [ "$status" -ne 0 ] || [ "$output" != "$expected" ]; then
+            echo "::error title=linux release::the uploaded asset does not print '$expected' (got '$output', exit $status)"
+            exit 1
+          fi
+
+      # The job's success must mean the release really carries the files. This
+      # reads the release back through the API, so an upload that reported success
+      # but did not attach both files fails here.
+      - name: Verify the release carries both Linux assets
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          REPO: ${{ github.repository }}
+          EXPECTED_SIZE: ${{ steps.checksum.outputs.size }}
+        run: |
+          set -euo pipefail
+          assets=$(gh release view "$TAG" --repo "$REPO" --json assets \
+            --jq '.assets[] | "\(.name) \(.size)"')
+          echo "$assets"
+          printf '%s\n' "$assets" | grep -qx "lovelace-desktop-linux-x86_64 $EXPECTED_SIZE" \
+            || { echo "::error title=linux release::lovelace-desktop-linux-x86_64 is missing or has the wrong size"; exit 1; }
+          printf '%s\n' "$assets" | grep -q '^SHA256SUMS.linux ' \
+            || { echo "::error title=linux release::SHA256SUMS.linux is missing"; exit 1; }
+          printf '%s\n' "$assets" | grep -q '^lovelace-desktop.exe ' \
+            || { echo "::error title=linux release::the Windows executable is missing from the release"; exit 1; }
+          printf '%s\n' "$assets" | grep -q '^SHA256SUMS.windows ' \
+            || { echo "::error title=linux release::SHA256SUMS.windows is missing from the release"; exit 1; }
+          echo "release $TAG carries the Windows and Linux executables and both checksum files"
