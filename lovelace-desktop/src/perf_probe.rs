@@ -94,9 +94,54 @@ impl Distribution {
     }
 }
 
-/// The current process's (working set, peak working set) in bytes, when Windows reports them.
+/// The current process's (working set, peak working set) in bytes, when the OS reports them.
+///
+/// Windows asks the kernel (K32GetProcessMemoryInfo); Linux reads the same two numbers from
+/// `/proc/self/status` (`VmRSS` and `VmHWM`, in kB), which is the kernel's own accounting. A
+/// platform that reports neither returns `None` and the report omits the memory row.
 fn process_memory() -> Option<(usize, usize)> {
-    crate::win32::ffi::process_memory_bytes()
+    imp::process_memory()
+}
+
+/// Windows: the kernel's process memory counters through the Win32 FFI lane.
+#[cfg(windows)]
+mod imp {
+    pub(super) fn process_memory() -> Option<(usize, usize)> {
+        crate::win32::ffi::process_memory_bytes()
+    }
+}
+
+/// Linux: the same two counters, read from the kernel's `/proc/self/status`.
+#[cfg(unix)]
+mod imp {
+    /// The value of one `status` line in bytes; `kB` is the unit `/proc` prints.
+    fn bytes_of(line: &str, key: &str) -> Option<usize> {
+        let value = line.strip_prefix(key)?.trim();
+        let value = value.strip_suffix("kB").unwrap_or(value).trim();
+        value.parse::<usize>().ok().map(|kb| kb * 1024)
+    }
+
+    pub(super) fn process_memory() -> Option<(usize, usize)> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let mut working_set = None;
+        let mut peak = None;
+        for line in status.lines() {
+            if let Some(value) = bytes_of(line, "VmRSS:") {
+                working_set = Some(value);
+            } else if let Some(value) = bytes_of(line, "VmHWM:") {
+                peak = Some(value);
+            }
+        }
+        working_set.zip(peak)
+    }
+}
+
+/// Any other platform: no process-memory API is wired, so the row is omitted.
+#[cfg(not(any(windows, unix)))]
+mod imp {
+    pub(super) fn process_memory() -> Option<(usize, usize)> {
+        None
+    }
 }
 
 fn write_report(path: &std::path::Path, text: &str) -> bool {

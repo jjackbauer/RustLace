@@ -20,7 +20,6 @@
 //! no plot stays empty and the UI renders its empty state.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -3475,11 +3474,16 @@ impl WorkbenchDocument {
 /// Wraps an engine factory so every run gets its own writable plot directory.
 ///
 /// One engine is created per run, so a monotonically increasing `run-N` directory also stops
-/// concurrent documents from writing the same `plot.svg` at the same time.
+/// concurrent documents from writing the same `plot.svg` at the same time. The counter is
+/// process-wide (not per factory): the plot root is the process's own application directory, so
+/// two workbenches in one process - the shipped window plus a headless acceptance mode, or two
+/// tests - must not both write `run-1/plot.svg`. A per-factory counter allows exactly that
+/// collision, and CON-007 observed it on Linux when the test binary scheduled the GUI tests and
+/// the journey test in a different order than on Windows.
 fn plot_scoped_factory(inner: EvaluatorFactory, root: PathBuf) -> EvaluatorFactory {
-    let sequence = Arc::new(AtomicU64::new(0));
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     Box::new(move || {
-        let run = sequence.fetch_add(1, Ordering::SeqCst) + 1;
+        let run = SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
         let directory = root.join(format!("run-{run}"));
         let mut evaluator = inner();
         evaluator.set_plot_dir(&directory.to_string_lossy());

@@ -70,15 +70,12 @@ pub fn run() -> i32 {
         ("session-recovery", check_session_recovery),
         ("recovery-corrupt", check_recovery_corrupt),
     ];
-    // The editor's own history is a Windows-only surface (egui is a Windows dependency), so the
-    // check joins the list exactly when that surface is compiled in.
-    #[cfg(windows)]
+    // The editor's own history is part of the same egui surface, so the check runs wherever the
+    // workbench is compiled (Windows and Linux); it reads the shipped TextEditor, no window.
     let checks: Vec<(&str, Check)> = checks
         .into_iter()
         .chain([("undo-redo", check_undo_redo as Check)])
         .collect();
-    #[cfg(not(windows))]
-    let checks: Vec<(&str, Check)> = checks.into_iter().collect();
 
     let mut failed = 0usize;
     for &(name, check) in &checks {
@@ -806,7 +803,6 @@ fn check_keyboard() -> Result<String, String> {
 /// The check performs two typed edits with a newline between them (so they are two separate
 /// bursts and the buffer is `ab\ncd`), then a Ctrl+Z / Ctrl+Y round trip and a second
 /// Ctrl+Z / Ctrl+Shift+Z round trip. Every step prints the observed buffer and 0-based caret.
-#[cfg(windows)]
 fn check_undo_redo() -> Result<String, String> {
     use crate::history::{HistoryCommand, command_for_shortcut};
     use crate::ui::editor::TextEditor;

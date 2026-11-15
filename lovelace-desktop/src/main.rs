@@ -1,4 +1,9 @@
-//! Lovelace Desktop: a native Windows IDE for the Lovelace scripting language.
+//! Lovelace Desktop: a native desktop IDE for the Lovelace scripting language.
+//!
+//! The same binary and the same UI code run on Windows and Linux; eframe/egui and resvg are
+//! ordinary dependencies with a backend on each platform. Only the Win32 legacy shell
+//! (`src/win32`), the HWND-based IME probe and the Windows platform report stay behind
+//! `cfg(windows)`.
 //!
 //! The binary has four modes:
 //!
@@ -37,15 +42,12 @@ mod app;
 #[cfg(test)]
 mod cancel_parity;
 mod completion;
-#[cfg(windows)]
 mod diagnostic_map;
 mod document_io;
 mod engine;
 mod execution;
 mod find;
-#[cfg(windows)]
 mod frame_probe;
-#[cfg(windows)]
 mod glyph_audit;
 mod glyphs;
 mod gui_selftest;
@@ -54,16 +56,13 @@ mod history;
 mod ime_probe;
 mod incremental;
 mod inspector;
-#[cfg(windows)]
 mod journey;
 mod keyboard;
 mod language;
 mod log_kind;
 mod netcheck;
-#[cfg(windows)]
 mod perf_probe;
 mod platform_claims;
-#[cfg(windows)]
 mod platform_dialogs;
 #[cfg(windows)]
 mod platform_parity;
@@ -82,7 +81,6 @@ mod statements;
 mod svg;
 mod symbolic_status;
 mod thread_audit;
-#[cfg(windows)]
 mod ui;
 mod ui_audit;
 #[cfg(windows)]
@@ -90,7 +88,6 @@ mod win32;
 mod workbench;
 mod workspace_table;
 
-#[cfg(windows)]
 fn main() {
     // EDT-016: the measurement window reports the open time from this point, so the number
     // includes process entry and the native window's creation, not only the app constructor.
@@ -142,9 +139,17 @@ fn main() {
         std::process::exit(gui_selftest::run());
     }
     // PLF-010: the platform-specific behaviour report (modifiers, dialogs, clipboard, caret/IME,
-    // DPI) for this advertised platform. Exits non-zero when an area fails.
+    // DPI) for this advertised platform. Exits non-zero when an area fails. The report is the
+    // Windows half of PLF-010 (Windows 11 x64 is the one advertised platform) and calls
+    // GetDpiForSystem itself, so it stays gated with that module.
     if args.iter().any(|arg| arg == "--platform-parity") {
+        #[cfg(windows)]
         std::process::exit(platform_parity::run());
+        #[cfg(not(windows))]
+        {
+            eprintln!("--platform-parity requires the Windows build");
+            std::process::exit(2);
+        }
     }
     // PLF-009: the release matrix's platform claims and the refusal a non-Windows build prints.
     // It reads a document, so it runs on every build.
@@ -153,15 +158,25 @@ fn main() {
     }
     // Round-68/69 (EDT-017 / A11Y-008): the platform IME probe. It opens the shipped workbench
     // window and drives imm32 and the WM_IME_* messages on the window's own thread, because an
-    // HIMC is per-process. The default launch path never constructs it.
+    // HIMC is per-process. The default launch path never constructs it. imm32, HIMC and the
+    // WM_IME_* message numbers are Win32, so the mode is gated with `src/ime_probe.rs`.
     if let Some(index) = args.iter().position(|arg| arg == "--ime-probe") {
-        let mode = args.get(index + 1).cloned().unwrap_or_default();
-        let document = args.get(index + 2).map(std::path::PathBuf::from);
-        let report = args
-            .get(index + 3)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("ime-probe.log"));
-        std::process::exit(ime_probe::run(&mode, document, report));
+        #[cfg(windows)]
+        {
+            let mode = args.get(index + 1).cloned().unwrap_or_default();
+            let document = args.get(index + 2).map(std::path::PathBuf::from);
+            let report = args
+                .get(index + 3)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("ime-probe.log"));
+            std::process::exit(ime_probe::run(&mode, document, report));
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = index;
+            eprintln!("--ime-probe requires the Windows build (imm32/HWND)");
+            std::process::exit(2);
+        }
     }
     if let Some(index) = args.iter().position(|arg| arg == "--journey") {
         std::process::exit(journey::run(&args[index + 1..]));
@@ -260,9 +275,20 @@ fn main() {
         println!("lovelace-desktop {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    // The pre-cutover Win32 EDIT-control shell. `win32` is Win32 FFI (user32/gdi32/comdlg32/
+    // imm32) and is compiled only on Windows, so the mode is gated with it. On Linux the
+    // workbench above is the only shell.
     if args.iter().any(|arg| arg == "--legacy-win32") {
-        let initial = args.iter().find(|arg| !arg.starts_with("--")).cloned();
-        std::process::exit(win32::shell::run(initial.as_deref()));
+        #[cfg(windows)]
+        {
+            let initial = args.iter().find(|arg| !arg.starts_with("--")).cloned();
+            std::process::exit(win32::shell::run(initial.as_deref()));
+        }
+        #[cfg(not(windows))]
+        {
+            eprintln!("--legacy-win32 requires the Windows build (the Win32 shell)");
+            std::process::exit(2);
+        }
     }
 
     let unknown: Vec<&String> = args.iter().filter(|arg| arg.starts_with("--")).collect();
@@ -278,64 +304,6 @@ fn main() {
         engine::default_plot_dir().display()
     );
     std::process::exit(ui::run(initial.map(std::path::PathBuf::from)));
-}
-
-#[cfg(not(windows))]
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print!("{}", usage());
-        return;
-    }
-    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
-        println!("lovelace-desktop {}", env!("CARGO_PKG_VERSION"));
-        return;
-    }
-    if args.iter().any(|arg| arg == "--gui-selftest") {
-        std::process::exit(gui_selftest::run());
-    }
-    if args.iter().any(|arg| arg == "--journey") {
-        eprintln!("--journey requires the Windows build");
-        std::process::exit(2);
-    }
-    if args.iter().any(|arg| arg == "--measure-large") {
-        eprintln!("--measure-large requires the Windows build");
-        std::process::exit(2);
-    }
-    if args.iter().any(|arg| arg == "--selftest") {
-        std::process::exit(selftest::run());
-    }
-    // ARC-003 / ARC-008: the two source audits are platform-independent and read the shipped
-    // source tree, so they print on every build.
-    if args.iter().any(|arg| arg == "--ui-audit") {
-        std::process::exit(ui_audit::run());
-    }
-    if args.iter().any(|arg| arg == "--thread-audit") {
-        std::process::exit(thread_audit::run());
-    }
-    // A11Y-007: the binding table and the reference are window-independent, so the map prints on
-    // every platform even where the native workbench is unavailable.
-    if args.iter().any(|arg| arg == "--shortcuts") {
-        std::process::exit(shortcuts_cli());
-    }
-    // PLF-009: the release matrix is a document, so its claims are checkable on every platform.
-    if args.iter().any(|arg| arg == "--platform-claims") {
-        std::process::exit(platform_claims::run());
-    }
-    // An unrecognised flag is a usage error: name it, print the usage and exit 2. Only a bare
-    // launch (or a script path) is the unsupported-platform refusal.
-    let unknown: Vec<&String> = args.iter().filter(|arg| arg.starts_with("--")).collect();
-    if !unknown.is_empty() {
-        eprintln!("unknown option {}\n\n{}", unknown[0], usage());
-        std::process::exit(2);
-    }
-    // PLF-009: a platform without a UI adapter says so by name and refuses to start a placeholder.
-    // The text comes from `platform_claims::unsupported_notice`, the same value the test asserts.
-    match platform_claims::unsupported_notice(std::env::consts::OS, std::env::consts::ARCH) {
-        Some(notice) => eprintln!("{notice}"),
-        None => eprintln!("this build targets Windows; the native workbench is unavailable"),
-    }
-    std::process::exit(2);
 }
 
 /// A11Y-007: prints the keyboard map, generated from [`keyboard::BINDINGS`].
@@ -364,7 +332,6 @@ fn shortcuts_cli() -> i32 {
     0
 }
 
-#[cfg(windows)]
 fn usage() -> String {
     let mut text = String::new();
     text.push_str("lovelace-desktop - a native IDE for the Lovelace scripting language\n\n");
@@ -496,6 +463,14 @@ fn usage() -> String {
     );
     text.push_str("  lovelace-desktop --help             this message\n");
     text.push_str("  lovelace-desktop --version          print the version\n\n");
+    // The Win32-only modes exist in the Windows build only: `src/win32` (the legacy shell) and
+    // `src/ime_probe` (imm32/HWND) are compiled there, and `--platform-parity` reads
+    // GetDpiForSystem from that same FFI. A Linux build refuses each by name.
+    #[cfg(not(windows))]
+    text.push_str(
+        "NOTE: --legacy-win32, --ime-probe and --platform-parity need the Windows build;\n\
+         this build refuses them by name instead of starting a Win32 shell it does not contain.\n\n",
+    );
     text.push_str("SHORTCUTS:\n");
     text.push_str("  Ctrl+N                              new document tab\n");
     text.push_str("  Ctrl+O                              open a Lovelace script from disk\n");
@@ -558,41 +533,6 @@ fn usage() -> String {
     );
     text.push_str(
         "  crash a recovery prompt offers the journaled buffers. Nothing is executed by either.\n",
-    );
-    text
-}
-
-/// The usage of a build without a UI adapter: only the headless modes this binary implements.
-#[cfg(not(windows))]
-fn usage() -> String {
-    let mut text = String::new();
-    text.push_str("lovelace-desktop - headless tools for the Lovelace scripting language\n\n");
-    text.push_str("USAGE:\n");
-    text.push_str(
-        "  lovelace-desktop --selftest         headless acceptance of the application core\n",
-    );
-    text.push_str(
-        "  lovelace-desktop --gui-selftest     headless acceptance of the workbench run path\n",
-    );
-    text.push_str("  lovelace-desktop --ui-audit         audit src/ui for ARC-003 separation\n");
-    text.push_str("  lovelace-desktop --thread-audit     audit every thread spawn, sleep and\n");
-    text.push_str("                                      synchronisation primitive (ARC-008)\n");
-    text.push_str(
-        "  lovelace-desktop --shortcuts        print the keyboard map from the binding table\n",
-    );
-    text.push_str(
-        "  lovelace-desktop --platform-claims  print the release matrix's platform verdicts\n",
-    );
-    text.push_str(
-        "                                      and the refusal this build prints (PLF-009)\n",
-    );
-    text.push_str("  lovelace-desktop --help             this message\n");
-    text.push_str("  lovelace-desktop --version          print the version\n\n");
-    text.push_str(
-        "This build has no UI adapter: launching without one of these modes prints the\n",
-    );
-    text.push_str(
-        "unsupported-platform notice and exits 2. The native workbench is a Windows build.\n",
     );
     text
 }

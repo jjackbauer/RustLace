@@ -129,6 +129,11 @@ impl eframe::App for ProbeApp {
             return;
         }
         if self.compositor_flush {
+            // DwmFlush is the Windows compositor's frame barrier. Linux reaches the compositor
+            // through the GL swap the eframe backend already performs, so there is no equivalent
+            // call here and the flag is a no-op on that platform (the probe's own intervals show
+            // the pacing either way).
+            #[cfg(windows)]
             crate::win32::ffi::flush_compositor();
         }
     }

@@ -580,6 +580,75 @@ impl Default for Plot {
     }
 }
 
+/// Points fontdb's generic families at faces that are installed on this machine.
+///
+/// `fontdb::Database` defaults the CSS generics to the Windows faces Arial, Times New Roman and
+/// Courier New, which is right on Windows and leaves every `<text font-family="sans-serif">`
+/// unpainted on a Linux install (no family matches, so the element produces no glyphs). Each
+/// class keeps the Windows name first and then the standard free families, so a machine with
+/// Arial renders exactly as before while a machine with Nimbus/DejaVu/Liberation paints the same
+/// labels with the equivalent face. `default_family` is the family for text with no
+/// `font-family` at all (usvg's own default is Times New Roman).
+///
+/// The engine's plot SVGs label their axes with `sans-serif`, so without this the PLT-002
+/// in-canvas text is invisible on Linux even though the geometry renders.
+fn install_generic_families(db: &mut usvg::fontdb::Database, default_family: &mut String) {
+    let installed: Vec<String> = db
+        .faces()
+        .flat_map(|face| face.families.iter().map(|(family, _)| family.clone()))
+        .collect();
+    let first = |candidates: &[&str]| -> Option<String> {
+        candidates
+            .iter()
+            .find(|candidate| {
+                installed
+                    .iter()
+                    .any(|family| family.eq_ignore_ascii_case(candidate))
+            })
+            .map(|candidate| (*candidate).to_string())
+    };
+    let sans = first(&[
+        "Arial",
+        "Nimbus Sans",
+        "Liberation Sans",
+        "DejaVu Sans",
+        "Noto Sans",
+        "Ubuntu",
+    ]);
+    let serif = first(&[
+        "Times New Roman",
+        "Nimbus Roman",
+        "Liberation Serif",
+        "DejaVu Serif",
+        "Noto Serif",
+        "P052",
+    ]);
+    let mono = first(&[
+        "Courier New",
+        "Nimbus Mono PS",
+        "Liberation Mono",
+        "DejaVu Sans Mono",
+        "Noto Sans Mono",
+        "Noto Mono",
+    ]);
+    if let Some(family) = &sans {
+        db.set_sans_serif_family(family);
+    }
+    if let Some(family) = &serif {
+        db.set_serif_family(family);
+    }
+    if let Some(family) = &mono {
+        db.set_monospace_family(family);
+    }
+    // `cursive`/`fantasy` and the no-`font-family` default use the same face, so a document
+    // cannot ask for a family nothing on the machine can draw.
+    if let Some(family) = sans.or_else(|| installed.first().cloned()) {
+        db.set_cursive_family(&family);
+        db.set_fantasy_family(&family);
+        *default_family = family;
+    }
+}
+
 impl Plot {
     /// Creates an empty plot pane and loads the system fonts used by engine SVG text.
     pub fn new() -> Plot {
@@ -587,6 +656,14 @@ impl Plot {
         let mut options = usvg::Options::default();
         // resvg/usvg do not load system fonts by default; the usvg CLI does this explicitly.
         options.fontdb_mut().load_system_fonts();
+        // PLT-002: usvg resolves the CSS generic families (`font-family="sans-serif"`) through
+        // fontdb's generic map, whose defaults are the Windows faces Arial, Times New Roman and
+        // Courier New. On a machine without them (a Linux install) every text element would
+        // silently paint nothing, so the map is pointed at faces that are actually installed.
+        // The Windows names stay first, so Windows renders exactly as before.
+        let mut default_family = options.font_family.clone();
+        install_generic_families(options.fontdb_mut(), &mut default_family);
+        options.font_family = default_family;
         // PLT-002: an engine plot is self-contained. usvg's default string resolver would open
         // an absolute path (`<image href="C:/...">`), so refuse every non-data href instead of
         // letting a hostile document make the renderer read the local disk. Data URLs still
@@ -1341,9 +1418,9 @@ pub const SVG_FILTER: (&str, &str) = ("SVG document (*.svg)", "*.svg");
 /// The window owns the dialog (see `ui/app.rs`); this helper only supplies the plot-specific
 /// filter, title, extension and starting folder. `initial_dir` is the directory the engine
 /// wrote the capture into: it is writable by construction, so a plain Save works even when the
-/// shell's remembered folder is not writable (a redirected profile folder, for example). It is
-/// Windows-only because the whole pane is.
-#[cfg(windows)]
+/// shell's remembered folder is not writable (a redirected profile folder, for example). The
+/// dialog itself is the platform chooser in `platform_dialogs`, so this is the same code on
+/// Windows and Linux.
 pub fn save_plot_dialog(
     title: &str,
     filter: (&str, &str),

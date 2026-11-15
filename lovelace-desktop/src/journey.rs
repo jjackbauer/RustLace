@@ -20,8 +20,10 @@
 //! J-07 and J-08 certify the incremental cache (INC-001..INC-010): they read the per-statement
 //! `StepCommitted { reused }` flags and the document's reuse counter from the same typed event
 //! stream the window consumes, and compare the resulting values with the reference captures.
-
-#![cfg(windows)]
+//!
+//! The journeys drive the workbench and the plot pane, not a window, so they run on every
+//! platform the workbench compiles for (Windows and Linux). No path, handle or dialog here is
+//! platform-specific.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
