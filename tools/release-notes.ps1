@@ -252,7 +252,7 @@ if ($Sha256) {
     [void] $out.Add('- `lovelace-desktop.exe` - Windows x86_64')
 }
 [void] $out.Add('- `SHA256SUMS.windows` - the Windows hash in `sha256sum` format')
-[void] $out.Add('- `lovelace-desktop-linux-x86_64` - Linux x86_64, built at the same tag; its size and SHA-256 are in `SHA256SUMS.linux`')
+[void] $out.Add('- `lovelace-desktop-linux-x86_64` - Linux x86_64, built at the same tag; its SHA-256 is in `SHA256SUMS.linux`')
 [void] $out.Add('- `SHA256SUMS.linux` - the Linux hash in `sha256sum` format')
 [void] $out.Add('')
 [void] $out.Add('The Linux binary is built on Ubuntu 24.04 and needs glibc >= 2.39. It is verified')
