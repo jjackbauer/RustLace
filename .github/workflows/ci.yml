@@ -2,10 +2,13 @@ name: CI
 
 # Two jobs:
 #   windows - the full workspace: format, clippy, every test, and the release desktop build.
-#   linux   - the portable engine crates plus the headless desktop build. The desktop crate's
-#             GUI stack (eframe/egui/resvg) is declared under cfg(windows), so the Linux
-#             binary compiles the headless modes only; the GUI and its journeys are exercised
-#             on Windows. The Linux desktop artifact is still a real, tested binary.
+#   linux   - the portable engine crates, then the desktop GUI itself: built, accepted by
+#             --gui-selftest and unit-tested under Xvfb. The GUI stack (eframe/egui/resvg) is
+#             cross-platform; on Linux eframe compiles its glow (OpenGL) backend and the
+#             workbench selects it, because wgpu cannot acquire a device on a runner with no
+#             /dev/dri (the same failure WSLg shows). Windows keeps eframe's default wgpu
+#             renderer untouched. Both artifacts are real GUI builds; the Linux one is accepted
+#             headlessly because a CI runner has no desktop session.
 
 on:
   push:
@@ -58,7 +61,7 @@ jobs:
           if-no-files-found: error
 
   linux:
-    name: Linux (engine crates + headless desktop)
+    name: Linux (engine crates + GUI desktop under Xvfb)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -72,6 +75,23 @@ jobs:
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
 
+      # The GUI stack loads X11, GL and xkbcommon through dlopen (winit, glutin, xkbcommon-dl),
+      # so none of these is a link-time build dependency: they are the window, GL and font
+      # runtime the GUI needs on a runner with no desktop session. Two entries are additions to
+      # the documented list: libgl1-mesa-dri supplies mesa's llvmpipe (the GL implementation
+      # Xvfb has, because a runner has no GPU), and libxkbcommon-x11-0 is the X11 keyboard
+      # backend winit dlopens (libxkbcommon-dev only pulls libxkbcommon0).
+      - name: Install Linux GUI runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libxkbcommon-x11-0 \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgl1-mesa-dri \
+            libwayland-dev pkg-config \
+            fonts-urw-base35 \
+            xvfb xauth x11-utils
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -81,18 +101,31 @@ jobs:
       - name: Test engine crates
         run: cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics
 
-      # The desktop crate builds on Linux with the GUI stack absent: the headless modes and the
-      # application core are platform-independent. This is the only CI job that compiles the
-      # crate for Linux, and its unit tests (420) plus the CLI integration tests (3) run here.
-      - name: Build release desktop (headless)
+      # The desktop builds as the product on Linux: the same workbench, editor, panes, plot
+      # rasteriser and journeys the Windows binary carries, rendered through glow.
+      - name: Build release desktop (GUI)
         run: cargo build --release -p lovelace-desktop
 
-      - name: Test desktop (headless)
-        run: cargo test -p lovelace-desktop
+      # --gui-selftest drives the shipped Workbench through the same run path the window calls.
+      # checks=20 is the Windows count: the undo/redo check used to be Windows-only on this
+      # build, so the count is asserted rather than only "failed=0" - Linux must not quietly
+      # lose a check. The summary is teed so the log keeps the per-check lines.
+      - name: Run the workbench self-test under Xvfb
+        run: |
+          unset WAYLAND_DISPLAY
+          xvfb-run -a -s "-screen 0 1600x1000x24" ./target/release/lovelace-desktop --gui-selftest | tee gui-selftest.log
+          grep -q 'GUI_SELFTEST summary checks=20 failed=0' gui-selftest.log
 
+      # The GUI-dependent unit and integration tests (editor, panes, themes, plot rasteriser,
+      # journeys) only compile when the egui surface does; they run under the same Xvfb screen.
+      - name: Test desktop under Xvfb
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" cargo test -p lovelace-desktop
+
+      # Renamed from lovelace-desktop-linux-x86_64: that name described the old headless build.
+      # This is the GUI binary the Linux port produced.
       - name: Upload desktop executable
         uses: actions/upload-artifact@v4
         with:
-          name: lovelace-desktop-linux-x86_64
+          name: lovelace-desktop-linux-gui-x86_64
           path: target/release/lovelace-desktop
           if-no-files-found: error
