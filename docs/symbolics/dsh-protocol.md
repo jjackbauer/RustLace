@@ -312,7 +312,7 @@ has `det` is told so in the envelope it already receives:
 ```json
 { "ok": false, "code": "UnknownFunction", "category": "UnsupportedOperation", "recoverable": true,
   "message": "Unknown function 'determinant'. Did you mean 'det'?",
-  "suggestions": ["det"], "registrySize": 123,
+  "suggestions": ["det"], "registrySize": 124,
   "diagnostics": [ { "message": "Unknown function 'determinant'. Did you mean 'det'?",
                      "position": 38, "line": 2, "column": 1 } ] }
 ```

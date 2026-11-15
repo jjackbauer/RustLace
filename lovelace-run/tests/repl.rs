@@ -22,7 +22,7 @@ fn help_overview() -> String {
         "  Symbolics        40 function(s)",
         "  Calculus         10 function(s)",
         "  Solving          4 function(s)",
-        "  Linear Algebra   7 function(s)",
+        "  Linear Algebra   8 function(s)",
         "  Optimization     2 function(s)",
         "  Compilation      5 function(s)",
         "  DSP              16 function(s)",
