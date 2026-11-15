@@ -11,6 +11,7 @@ Start with the [README](../README.md). This directory holds the long-form docume
 | [parity-with-studio.md](parity-with-studio.md) | you need to know what the port preserves from the C# Studio and where it deliberately differs |
 | [release.md](release.md) | you are cutting a release |
 | [contributing.md](contributing.md) | you are opening a change |
+| [LICENSE](../LICENSE) | you need the terms this repository is released under |
 | [glossary.md](glossary.md) | a term is unfamiliar |
 | [language/](language/) | you are writing a script and need the syntax, semantics and the builtin catalogue |
 | [extensions/](extensions/) | you are using the DSP, Symbolics or MathIR family and need its builtins and limits |
