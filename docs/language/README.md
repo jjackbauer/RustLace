@@ -1,0 +1,154 @@
+# The Lovelace Language Reference
+
+This is the language reference for **RustLace**, the Rust implementation of the Lovelace
+scripting language. It documents the syntax and semantics of the language as implemented by the
+`lovelace-lang` engine and exercised by the `lovelace-run` command-line runner. Every example in
+these pages is a real script, and every `text` block under an example is the output observed from
+that script on this tree.
+
+The reference is organised as a set of focused pages rather than one enormous file. Read the
+first four in order if you are new to the language; the remaining pages are reference material
+that can be consulted independently.
+
+## What RustLace is
+
+RustLace is a complete scripting language for arbitrary-precision mathematics. One engine serves
+the interactive REPL, the headless `lovelace-run` runner and the native Windows desktop. The
+engine has no external crates under it and uses exact arithmetic: there is no floating-point type
+in the value path, no fixed-width integer hiding behind the syntax, and no silent rounding.
+`1 / 3` is the exact periodic decimal `0.(3)`, `2 ^ 100` is a 31-digit natural, and `sqrt(2)` is
+computed to the precision you ask for.
+
+The language is dynamically typed. Values are inspected with `type()` and `inspect()` rather than
+declared, and the numeric kinds widen automatically (`Natural` → `Integer` → `Real`). Arrays are
+first-class: a nested list literal is a rank-`k` array, arithmetic broadcasts, and a large
+builtin catalogue covers linear algebra, calculus, symbolic manipulation, polynomial solving,
+digital signal processing and MathIR compilation.
+
+## Running a script
+
+The runner accepts an inline script, a file, or standard input:
+
+```console
+cargo build -p lovelace-run
+target/debug/lovelace-run.exe --eval "1 / 3"
+target/debug/lovelace-run.exe --file script.lv
+target/debug/lovelace-run.exe --file script.lv --text
+```
+
+JSON is the default output mode; `--text` selects the human rendering used by the examples in
+this reference. A successful run prints the result (and any captured `print` output), a failed
+run exits with status `1` and publishes the typed error envelope. `--functions` lists the builtin
+registry and `--function <name>` describes one entry.
+
+`--eval` is convenient for shell one-liners, but embedded double quotes are mangled by some
+shells (notably Windows PowerShell 5.1). The examples here were produced through `--file`, which
+is also what the example runner uses.
+
+## Running the examples
+
+Every page has been executed by the runner in `examples/run-examples.ps1`. From the repository
+root:
+
+```console
+pwsh -File docs/language/examples/run-examples.ps1
+```
+
+The script extracts every `lovelace` fenced block from `docs/language/*.md`, runs it with
+`--file` and `--text`, and compares the normalised output with the `text` block that follows. It
+prints the number of examples that passed and exits non-zero on the first mismatch. Set
+`LOVELACE_RUN` to point at a different binary if you do not want the default
+`target/debug/lovelace-run.exe`. On a host with a restrictive PowerShell execution policy, run it
+as `pwsh -ExecutionPolicy Bypass -File docs/language/examples/run-examples.ps1` (or sign the
+script).
+
+## The language in ten lines
+
+1. A program is a sequence of statements separated by `;` or a newline; the value of the program
+   is the value of its last statement, also stored in `_`.
+2. Numbers are exact: `Natural`, `Integer`, and `Real` (arbitrary-precision decimal with exact
+   repeating-period metadata). They widen `Natural → Integer → Real`.
+3. A value is one of those numerics, `Boolean`, `Text`, `Vector` (rank 1), `Array` (rank ≥ 2),
+   `Complex`, `Symbolic`, `Record`, `Domain`, `Enum`, `Function`, or `Void`.
+4. `=` assigns; it is not equality. Assignment yields the assigned value and is right-associative.
+   `==`, `!=`, `<`, `<=`, `>`, `>=` compare and produce `Boolean`.
+5. `func f(x) = expr` and `func f(x) { … }` define functions. Calls are by name; functions are
+   recursive and have lexical locals but no closures.
+6. Control flow is `if`/`else`, `while`, `for … in`, `return`, `break`, `continue`. Conditions
+   must be `Boolean`; there is no truthiness.
+7. Expressions are parsed by precedence, tightest first: postfix `!`/index/member, unary
+   `-`/`+`/`not`, range `..`, power `^`, `* / %`, `+ -`, comparisons, assignment.
+8. `1..5` is an inclusive range with step 1; `1..2..7` uses step 2. Ranges and list literals are
+   vectors; `[[1,2],[3,4]]` is a rank-2 array.
+9. The engine ships 124 builtins in 11 categories, from `abs` and `sum` to `diff`, `solve`,
+   `fft`, `compile` and `plot`. See [builtins.md](builtins.md).
+10. Failures are a typed envelope with a stable `code`, a frozen `category`, a sentence, and a
+    1-based `line`/`column`; precision is session state, and the default differs between the CLI
+    engine and the desktop.
+
+## A quick tour
+
+```lovelace
+2 ^ 100
+```
+```text
+= 1267650600228229401496703205376 (Natural)
+  _ = 1267650600228229401496703205376
+```
+
+```lovelace
+1 / 3
+```
+```text
+= 0.(3) (Real)
+  _ = 0.(3)
+```
+
+```lovelace
+func fib(n) { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }; fib(10)
+```
+```text
+= 55 (Natural)
+  _ = 55
+```
+
+```lovelace
+1..5
+```
+```text
+= [1, 2, 3, 4, 5] (Vector)
+  _ = [1, 2, 3, 4, 5]
+```
+
+## Table of contents
+
+| Page | What it covers |
+|---|---|
+| [Lexical structure](lexical-structure.md) | Source encoding, whitespace, comments (there are none), identifiers, every literal form, separators, and the complete token set. |
+| [Values and types](values-and-types.md) | Every runtime value kind, exactness, periodic decimals, widening, truthiness, and the names `type()` reports. |
+| [Expressions and operators](expressions-and-operators.md) | The full prefix/infix/postfix operator set, the precedence table derived from the parser, associativity, indexing, slicing, calls, and member access. |
+| [Statements and control flow](statements-and-control-flow.md) | Assignment versus definition, blocks, `if`/`else`, `while`, `for`, `return`, `break`, `continue`, `print`, `plot`, `setprecision`, and what the last expression means. |
+| [Functions and scope](functions-and-scope.md) | User functions, parameters, recursion, lexical scopes, shadowing, arity errors, and how a user function differs from a builtin. |
+| [Builtins](builtins.md) | The complete 124-entry catalogue in 11 categories, with arity and parameter names, plus prose for each family. |
+| [Errors and diagnostics](errors-and-diagnostics.md) | The error envelope, the seven frozen categories, stable codes, positions, exit statuses, and five fully quoted failures. |
+| [Precision and formatting](precision-and-formatting.md) | Computation versus display precision, `setprecision`, `pi(n)`/`e(n)`, truncation, periodic rendering, and number formatting. |
+| [Plots](plots.md) | `plot(x, y, title)`, the SVG contract, the returned path, and the plot artifact in the JSON envelope. |
+
+## Scope and conventions
+
+The pages describe the engine tree at commit `2152218` (the `feat/eig-sym` merge on `main`) and
+were verified with a debug
+binary built from that tree. The engine's defaults are 1000 computation digits and 100 display
+digits; the desktop starts new documents at 30 digits. Those host differences are called out in
+[Precision and formatting](precision-and-formatting.md), because they change what a fresh session
+prints without changing the language itself.
+
+Examples show the complete `--text` output. That output always starts with `= <value>`; a line
+`_ = …` repeats the value stored in the `_` variable, and any other `name = …` lines are the
+session's variables. For a `Void` result the first line is `= (void)`. Error examples show the
+one-line `--text` failure and, where the exact wire envelope matters, the JSON that
+`--json` produced.
+
+For the implementation rather than the language, see the repository documentation:
+[architecture](../architecture.md), [the `lovelace-lang` crate](../crates/lovelace-lang.md), and
+[build and run](../build-and-run.md).
