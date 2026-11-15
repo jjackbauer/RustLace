@@ -4,11 +4,14 @@
 //! uses, then asserts on the pane models. Nothing here needs a message pump, a desktop session
 //! or a window station, which is what makes it usable on a build machine. The final check is the
 //! structural one: the executable that is running must not import any DLL that can open a socket.
+//! That proof reads a PE import table, so on a non-Windows build it is reported as a named skip
+//! with its reason instead of being silently dropped or run against an image it cannot parse.
 
 use std::path::PathBuf;
 
 use crate::app::{AppState, Command, Effect, LOG_CAP, LogLevel, RunState};
 use crate::engine::RunOutput;
+#[cfg(windows)]
 use crate::netcheck;
 use crate::settings::{SCHEMA_VERSION, Settings};
 use crate::svg;
@@ -23,7 +26,7 @@ pub fn run() -> i32 {
         env!("CARGO_PKG_VERSION"),
         engine_name
     );
-    let checks: [(&str, Check); 15] = [
+    let checks: Vec<(&str, Check)> = vec![
         ("new-document", check_new_document),
         ("insert-text", check_insert_text),
         ("open-file", check_open_file),
@@ -38,11 +41,29 @@ pub fn run() -> i32 {
         ("log-cap", check_log_cap),
         ("svg-parse", check_svg_parse),
         ("engine-plot", check_engine_plot),
-        ("no-network-imports", check_no_network_imports),
     ];
+    // The PE-import proof only means something for a PE image. On a platform whose executable
+    // is ELF the check is skipped by name, with the reason, and counted in the summary; it is
+    // never silently dropped and never run against bytes it cannot parse.
+    #[cfg(windows)]
+    let checks: Vec<(&str, Check)> = checks
+        .into_iter()
+        .chain([("no-network-imports", check_no_network_imports as Check)])
+        .collect();
+    #[cfg(not(windows))]
+    let skipped: Vec<(&str, &str)> = vec![(
+        "no-network-imports",
+        "the check reads a PE import table and this build is not a PE image",
+    )];
+    #[cfg(windows)]
+    let skipped: Vec<(&str, &str)> = Vec::new();
+
+    for (name, reason) in &skipped {
+        println!("SELFTEST skip {name}: {reason}");
+    }
 
     let mut failed = 0usize;
-    for (name, check) in checks {
+    for &(name, check) in &checks {
         match check() {
             Ok(()) => println!("SELFTEST ok {name}"),
             Err(reason) => {
@@ -51,7 +72,15 @@ pub fn run() -> i32 {
             }
         }
     }
-    println!("SELFTEST summary checks={} failed={failed}", checks.len());
+    if skipped.is_empty() {
+        println!("SELFTEST summary checks={} failed={failed}", checks.len());
+    } else {
+        println!(
+            "SELFTEST summary checks={} skipped={} failed={failed}",
+            checks.len(),
+            skipped.len()
+        );
+    }
     if failed == 0 { 0 } else { 1 }
 }
 
@@ -576,6 +605,7 @@ fn check_engine_plot() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn check_no_network_imports() -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("cannot locate the running executable: {error}"))?;

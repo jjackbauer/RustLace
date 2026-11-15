@@ -17,7 +17,8 @@ re-implementing language behaviour. This file is the portable entry point; task 
 
 ## Commands that matter
 
-Run from the repository root. The engine crates build anywhere; the desktop is Windows-only.
+Run from the repository root. The engine crates build anywhere; the desktop builds anywhere but
+its GUI shell is Windows-only, so a Linux build carries the headless modes only.
 Requires Rust 1.85+ (the tree was built with 1.99.1) and, on Windows, the MSVC build tools.
 
 ```console
@@ -59,8 +60,10 @@ cargo run -p lovelace-desktop -- --help
 
 Observed counts on this tree: `cargo test --workspace` gives 6135 passed and 1 ignored (the
 ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in place);
-`cargo test -p lovelace-desktop` gives 716 passed; `--gui-selftest` gives 20 checks, 0 failed;
-the corpus gives 214 passed, 0 failed. A run that needs `%APPDATA%\Lovelace` needs that directory
+`cargo test -p lovelace-desktop` gives 716 passed on Windows and 423 passed on Linux (the UI
+modules are `cfg(windows)`, and two Windows-only premises are gated there); `--gui-selftest` gives
+20 checks, 0 failed on Windows and 19 on Linux; `--selftest` gives 15 checks on Windows and 14 plus
+a named `no-network-imports` skip on Linux; the corpus gives 214 passed, 0 failed. A run that needs `%APPDATA%\Lovelace` needs that directory
 writable: set `APPDATA` to a scratch directory first.
 
 ### CI jobs
@@ -71,11 +74,15 @@ dispatch:
 | Job | Commands |
 |---|---|
 | Windows (full workspace) | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `cargo build --release -p lovelace-desktop`, then upload `target/release/lovelace-desktop.exe` as `lovelace-desktop-windows-x86_64` |
-| Linux (engine crates) | `cargo fmt --all -- --check`, `cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics` |
+| Linux (engine crates + headless desktop) | `cargo fmt --all -- --check`, `cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics`, `cargo build --release -p lovelace-desktop`, `cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-x86_64` |
 
-The Linux job deliberately does not build or test `lovelace-desktop`: its eframe/egui stack is a
-Windows-only dependency. Clippy is run without `-D warnings` because the workspace has pre-existing
-warnings; do not add new ones silently.
+The Linux job builds and tests the desktop crate, but the GUI stack (eframe/egui/resvg) is declared
+under `[target.'cfg(windows)'.dependencies]`, so that artifact has no window, no editor and no
+journeys: the GUI and all `--journey` runs are exercised only on Windows. The Linux job is what
+compiles the headless application core on Linux; it found the missing
+`std::os::unix::fs::OpenOptionsExt` import in the atomic-save path the first time the crate was
+built there. Clippy is run without `-D warnings` because the workspace has pre-existing warnings;
+do not add new ones silently.
 
 ## Layout
 

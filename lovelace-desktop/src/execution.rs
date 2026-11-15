@@ -1012,12 +1012,17 @@ impl RunWorker {
                         diagnostic,
                         snapshot,
                     });
+                    progress.ended = true;
                 }
             }
         }
-        // Idempotent: a terminal path already handed the cache back, so this is only the fallback
-        // for the paths above that never reached one.
-        self.return_cache(&mut cache);
+        // Every terminal path hands the cache back before it publishes the terminal event, so a
+        // second hand-back from here is not harmless: it can run after the next run's
+        // `take_cache` and install an empty slot, which makes the run after that miss every
+        // entry. Only a path that never reached a terminal hand-back needs this fallback.
+        if !progress.ended {
+            self.return_cache(&mut cache);
+        }
     }
 
     /// Takes this document's cache out of the host table for the run.
