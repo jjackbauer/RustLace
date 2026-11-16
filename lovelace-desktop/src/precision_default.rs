@@ -125,12 +125,7 @@ fn movingavg_is_precision_independent_after_the_fixed_width_emulation_was_remove
     // was a defect, not a representation worth preserving, and the emulation has been removed.
     // `2.5 / 3` is `5/6` at every precision, so the result no longer depends on the digit budget:
     // the 30-digit default is a performance choice that costs no correctness.
-    for (precision, value) in [
-        (30, &at_30),
-        (37, &at_37),
-        (38, &at_38),
-        (1000, &at_1000),
-    ] {
+    for (precision, value) in [(30, &at_30), (37, &at_37), (38, &at_38), (1000, &at_1000)] {
         assert_eq!(
             value, "[0.8(3)]",
             "movingavg([2.5], 3) is 5/6 at {precision} digits"

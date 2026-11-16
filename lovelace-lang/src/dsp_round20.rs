@@ -163,7 +163,13 @@ fn movingavg_matches_exact_division_at_every_precision() {
     assert_eq!(typed("2.5/3"), "0.8(3) (Real)");
     assert_eq!(typed("0.1/3"), "0.0(3) (Real)");
 
-    for precision in ["", "setprecision(30); ", "setprecision(37); ", "setprecision(38); ", "setprecision(1000); "] {
+    for precision in [
+        "",
+        "setprecision(30); ",
+        "setprecision(37); ",
+        "setprecision(38); ",
+        "setprecision(1000); ",
+    ] {
         assert_eq!(
             typed(&format!("{precision}movingavg([2.5], 3)")),
             "[0.8(3)] (Vector)",
@@ -177,10 +183,7 @@ fn movingavg_matches_exact_division_at_every_precision() {
     }
 
     // A window of 7 over one third: 1/21 = 0.(047619).
-    assert_eq!(
-        typed("movingavg([1/3], 7)"),
-        "[0.(047619)] (Vector)"
-    );
+    assert_eq!(typed("movingavg([1/3], 7)"), "[0.(047619)] (Vector)");
 }
 
 // ---------------------------------------------------------------------------

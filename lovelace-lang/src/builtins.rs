@@ -5618,7 +5618,6 @@ fn dsp_complex_pow_int(base: &(Real, Real), exponent: i64) -> (Real, Real) {
     result
 }
 
-
 fn dsp_movingavg(engine: &Engine, args: &[Value]) -> Result<Value, LangError> {
     dsp_arity("movingavg", args.len(), 2, 2)?;
     let window = dsp_integer(&args[1], "movingavg", "w", 2, DspIntBounds::Positive)?;
