@@ -350,12 +350,12 @@
 - **Task**: In `tools/check-crate-examples.sh` (and any sibling that writes a path into a file), convert the path with `cygpath -w` when available so the generated manifest is `D:\a\RustLace\...` on Git Bash, leaving Linux untouched.
 - **Priority**: P0 (blocks C13)
 - **Depends on**: none
-- **Status**: Done in round 8 and reproduced against a real Git Bash host in round 9. The generated
-  manifest now records `F:\\dev\\RustLace\\lovelace-array`, which decodes to
-  `F:\dev\RustLace\lovelace-array` and resolves through the native Windows API; the pre-fix
-  `/f/dev/RustLace/...` shape does not resolve there. The hosted Windows run that decides C13 is
-  still outstanding, so this is a local diagnosis of the cause, not the hosted record.
-- **Related**: OBS-012, EVD-057, RQ-013.4, C13
+- **Status**: Done in round 8, reproduced against a real Git Bash host in round 9, and confirmed by a
+  hosted Windows run in the same round. The generated manifest now records
+  `F:\\dev\\RustLace\\lovelace-array`, which decodes to `F:\dev\RustLace\lovelace-array` and resolves
+  through the native Windows API; the pre-fix `/f/dev/RustLace/...` shape does not resolve there.
+  Hosted run 43902955424 at `b0ed8f5` then passed the step that had failed.
+- **Related**: OBS-012, OBS-013, EVD-057, EVD-059, RQ-013.4, C13
 
 ### DEC-001: All 24 requirements gate completion
 
@@ -382,3 +382,34 @@
 - **Priority**: P1 important
 - **Raised by**: Round 0, Intent Auditor
 - **Related**: RQ-013, C13
+
+### OBS-013: Hosted run 43902955424 at `b0ed8f5` is green 4/4 and closes C13
+
+- **Source**: GitHub Actions run 43902955424, ref `docs/documentation-quality-remediation`, head
+  SHA `b0ed8f5e27f6223c105e1ceed5d5dbcbcfddb522`
+- **Fact**: All four jobs succeeded — `Windows (full workspace)` 8m8s (job 133424152063), `Linux
+  (engine crates + GUI desktop under Xvfb)` 5m18s (job 133424152489), `Documentation examples
+  (ubuntu-latest)` 1m10s (job 133424152456), `Documentation examples (windows-latest)` 6m13s (job
+  133424153047). The Windows documentation job passed `Compile and run the crate-page examples`,
+  the step that failed at `89ea5c7` (EVD-057), and both documentation transcripts end with
+  `DOCREPORT total gates=4 ok=4 failed=0 commit=b0ed8f5` (`os=Linux` and
+  `os=MINGW64_NT-10.0-26100`).
+- **Implications**: C13 is met and the definition of done reaches 24/24. The failure that hosted
+  CI found at `89ea5c7` is now a passing step at the next commit, on the same host spelling
+  (`/d/a/RustLace/RustLace`) that produced it.
+- **Confidence**: High
+- **Agent**: orchestrator
+- **Related**: EVD-059, EVD-060, EVD-061, RQ-013, OBS-012, C13
+
+### OQ-002: Does C13 require a pull request, or is a dispatched run enough?
+
+- **Question**: OQ-001's resolution text says "one commit is pushed and a PR opened", but C13's
+  expected observable is "`gh run list` / `gh pr checks` at the final commit". The user asked for
+  a branch to inspect, not for a merge.
+- **Needed evidence**: none outstanding — the check names both routes. Run 43902955424 was produced
+  by `workflow_dispatch` on the branch, so `gh run list` answers it; no pull request was opened,
+  because C13 does not require one and the user asked to inspect the branch rather than merge it.
+  Opening a PR remains available to the user and would trigger the same `pull_request` jobs.
+- **Priority**: P3 minor
+- **Raised by**: Round 9, on reading OQ-001 against C13
+- **Related**: RQ-013, C13, OQ-001

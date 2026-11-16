@@ -1,13 +1,12 @@
 # Harness State — goal-docs-v2
 
-- **Round**: 8 complete (landed, uncommitted at the time of the move); round 9 = land + hosted
-  verification (C13)
+- **Round**: 9 complete — rounds 7–8 landed at `b0ed8f5` and the hosted run is green 4/4
 - **Goal**: The branch satisfies RQ-001…RQ-024 with reproduced evidence, including green hosted
   GitHub Actions runs on Ubuntu and Windows at a named commit, with no requirement closed as a
   residual.
-- **Definition of done**: 23/24 met (C1–C12, C14–C24); **C13 open**
-- **Stop criteria**: (1) C1–C24 all reproduce — 23/24; (2) hosted runs recorded — **unmet**;
-  (3) no residual — **met** (every C14–C24 item has evidence of its own)
+- **Definition of done**: **24/24 met** (C1–C24)
+- **Stop criteria**: (1) C1–C24 all reproduce — **met**; (2) hosted runs recorded — **met**
+  (run 43902955424, 4/4 jobs, at `b0ed8f5`); (3) no residual — **met**
 
 ## Gate status
 
@@ -16,7 +15,7 @@
 | G0 Intent | PASS | audit 27/27 KEPT; DEC-001 (all 24 gate) |
 | G1 Evidence | PASS | 58 EVD rows, each reproduced by the orchestrator |
 | G2 Falsification | PASS | VAL-002, VAL-004, VAL-009 falsified; each remediated or superseded |
-| G3 Coverage | FAIL | C13 open (hosted runs) |
+| G3 Coverage | PASS | 24/24 checks met; hosted run 43902955424 green 4/4 at `b0ed8f5` |
 | G4 Reproduction | PASS | rounds 1–8 re-run; every mutation restored hash-identically |
 | G5 Honesty | PASS | two hosted-CI failures that local gates called green are recorded (EVD-029, EVD-057) |
 
@@ -51,6 +50,26 @@ native Windows API (`Test-Path` → True for all seven crates). The pre-fix shap
 which is the hosted defect. `cygpath -w` returns the same native spelling. All 11 local gates pass
 at the new checkout location.
 
+## Round 9 outcome — C13 closed
+
+Rounds 7–8 were committed as `b0ed8f5` and pushed, and `CI` run **43902955424** ran at that exact
+commit with **4 of 4 jobs successful**:
+
+| Job | Result | Job id |
+|---|---|---|
+| Windows (full workspace) | success (8m8s) | 133424152063 |
+| Linux (engine crates + GUI desktop under Xvfb) | success (5m18s) | 133424152489 |
+| Documentation examples (ubuntu-latest) | success (1m10s) | 133424152456 |
+| Documentation examples (windows-latest) | success (6m13s) | 133424153047 |
+
+The Windows documentation job is the leg that failed at `89ea5c7`; it now passes the same step,
+`Compile and run the crate-page examples`, and its downloaded transcript records
+`check-crate-examples: 13 page(s), 7 rust fence(s): 7 compiled and ran, 0 excluded` while the
+tutorial gate resolves its runner at `/d/a/RustLace/RustLace/target/debug/lovelace-run.exe` — the
+POSIX host spelling that caused the original defect. Both transcripts end with
+`DOCREPORT total gates=4 ok=4 failed=0 commit=b0ed8f5`, `os=Linux` and `os=MINGW64_NT-10.0-26100`.
+This is EVD-059 and EVD-060.
+
 ## Dimension status
 
 | # | Check | Status |
@@ -67,7 +86,7 @@ at the new checkout location.
 | C10 | Rust reference fences compile | **Met** (EVD-022, EVD-034) |
 | C11 | test-count provenance | **Met** (EVD-020, EVD-021) |
 | C12 | release instructions | **Met** (round 1 report; release skill covers three jobs, both OSes, both binaries and checksums) |
-| C13 | hosted runs at the final commit | **Open** — run 43878298949 was 3/4 green; the Windows manifest cause is fixed and locally reproduced, the hosted re-run is the remaining evidence |
+| C13 | hosted runs at the final commit | **Met** — run 43902955424 at `b0ed8f5`: Windows workspace, Linux GUI, Ubuntu docs and Windows docs all **success**; job IDs 133424152063 / 133424152489 / 133424152456 / 133424153047; both docs artifacts read (`DOCREPORT total gates=4 ok=4 failed=0`) |
 | C14 | builtin-catalogue sync | **Met** (EVD-045) |
 | C15 | root Markdown + anchors | **Met** (EVD-041, EVD-056 → fixed, EVD-058) |
 | C16 | two-way reference manifest | **Met** (EVD-042) |
@@ -93,10 +112,10 @@ at the new checkout location.
 | 6 | RQ-017, 019, 020, 021, 023, 024 | Probe | 2 | 6 | 0 | G1✓ G2✓ G4✓ | **verified** |
 | 7 | checker gaps (directory paths, retired terms) | Probe | 1 | 2 | 0 | G1✓ G2✓ G4✓ | **verified** |
 | 8 | native Cargo manifest for Git Bash | Probe | 1 | 1 | 0 | G1✓ G2✓ G4✓ | **verified locally** |
-| 9 | land rounds 7–8, hosted re-run, close C13 | Verify | 0 | — | — | pending | this round |
+| 9 | land rounds 7–8, hosted re-run, close C13 | Verify | 0 | 4 | 0 | G1✓ G2✓ G3✓ G4✓ | **verified** |
 
 ## Next objective
 
-Commit rounds 7–8, push `docs/documentation-quality-remediation`, dispatch the `CI` workflow, and
-record the run IDs for all four jobs at the final commit. C13 closes only on a run whose Ubuntu
-**and** Windows documentation jobs and both platform build/test jobs are green.
+None. All 24 checks are met and stop criterion 2 is satisfied by hosted run 43902955424 at
+`b0ed8f5` (4/4 jobs). The branch is ready for the user to inspect; merging to `main` is the user's
+decision and is not part of this goal.
