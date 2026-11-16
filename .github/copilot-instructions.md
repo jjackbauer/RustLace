@@ -4,7 +4,7 @@
 
 RustLace is the Rust-only successor of the LovelaceSharp stack: arbitrary-precision exact
 arithmetic, an N-dimensional array library, the Lovelace scripting language, the `lovelace-run` CLI
-and the native Windows IDE `lovelace-desktop`. The C# sources are **not here** — they remain in the
+and the native desktop IDE `lovelace-desktop`, which builds and runs on Windows and on Linux (X11). The C# sources are **not here** — they remain in the
 LovelaceSharp repository. Comments that say "the reference's …" cite that implementation on purpose:
 they are receipts for behaviour this port reproduces, not leftovers to clean up.
 
@@ -23,13 +23,18 @@ cargo run -p lovelace-desktop -- --gui-selftest
 ```
 
 Toolchain: Rust 1.85+, edition 2024, MSVC linker on Windows. The engine builds offline; the desktop
-needs a crate registry once for `eframe`/`egui` 0.37 and `resvg` 0.50. The debug build of the corpus
+needs a crate registry once for `eframe`/`egui` 0.37 and `resvg` 0.50. On Linux the workbench also
+needs the X11/GL/font packages and, with no display, `xvfb-run` (see `docs/build-and-run.md#linux`);
+non-Windows targets compile eframe's `glow` backend and `ui::native_options` selects it, because wgpu
+cannot acquire a device on the certified Linux path. The debug build of the corpus
 gate overflows its main-thread stack at `lang/061` on some hosts; the release build passes.
 
 ## Architectural rules (do not break these)
 
 1. **No external crates in the engine.** `[dependencies]` may reference workspace members by path
-   only. Only `lovelace-desktop` has third-party dependencies, and only under `cfg(windows)`.
+   only. Only `lovelace-desktop` has third-party dependencies (`eframe`/`egui`, `resvg`,
+   `raw-window-handle`), and they are declared for every target, not under `cfg(windows)`: non-Windows
+   targets add eframe's `glow` backend. The desktop is not Windows-only.
 2. **No floating point in a value path.** Reals are `int * 10^exp` plus exact period metadata.
    `1/3` is `0.(3)`, never a rounding.
 3. **No `unsafe` outside `lovelace-desktop/src/win32`.** The four `#![forbid(unsafe_code)]` crates

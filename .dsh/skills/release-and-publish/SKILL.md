@@ -1,20 +1,32 @@
 ---
 name: release-and-publish
-description: Build, test, optionally sign with the documented self-signed caveat, tag and publish the Windows artifact, and verify the CI run that backs it.
+description: Build, test, optionally sign with the documented self-signed caveat, tag and publish the Windows and Linux artifacts, and verify the CI run that backs them.
 whenToUse: Use when cutting a RustLace release, bumping the workspace version, publishing the desktop executable, or checking what the CI workflow must prove before a tag is announced.
 ---
 
 # Release and publish
 
-The release artifact is one Windows executable, built from the workspace root. There is no
-installer, no MSIX, no side-by-side DLL set and no packaging script. The version lives in one place
-(`[workspace.package] version` in `Cargo.toml`), the release workflow builds the file at the tagged
+A release carries **two** executables — Windows x86_64 and Linux x86_64 (X11) — each with its own
+platform-qualified checksum file, built from the workspace root. There is no installer, no MSIX, no
+side-by-side DLL set and no packaging script. The version lives in one place
+(`[workspace.package] version` in `Cargo.toml`), the release workflow builds each file at the tagged
 release commit and checks its `--version`, and the honest release note is an unsigned build with a
 published hash unless someone signs it.
 
+| Asset | Platform | Checksum file |
+|---|---|---|
+| `lovelace-desktop.exe` | Windows x86_64 | `SHA256SUMS.windows` |
+| `lovelace-desktop-linux-x86_64` | Linux x86_64 | `SHA256SUMS.linux` |
+
+The Linux executable is **not** optional and is **not** a placeholder: CI builds it, runs the
+20-check `--gui-selftest` and the desktop suite under `xvfb-run`, and uploads it. Do not omit it, and
+do not drop the Linux job because a local Windows host cannot run it — the Linux job is the gate that
+compiles and exercises the GUI there.
+
 **The normal path is automatic.** `.github/workflows/release.yml` runs after a green CI run on
 `main`, derives the version from conventional commits with `tools/next-version.ps1`, tags it, builds
-the executable at that tag, verifies `--version`, and publishes the executable plus `SHA256SUMS`.
+both executables at that tag, verifies each `--version`, and publishes them with `SHA256SUMS.windows`
+and `SHA256SUMS.linux`.
 When the tag already exists without a release the same workflow recovers by building from the tag;
 when both exist it stops without creating anything. The manual procedure below is the fallback for
 when that workflow cannot run; do not hand-tag while the workflow is available.
@@ -121,10 +133,12 @@ when that workflow cannot run; do not hand-tag while the workflow is available.
    git checkout --detach v0.1.0
    cargo build --release -p lovelace-desktop
    .\target\release\lovelace-desktop.exe --version
-   gh release create v0.1.0 .\target\release\lovelace-desktop.exe .\SHA256SUMS --title "RustLace v0.1.0" --notes-file .\release-notes.md --verify-tag
+   gh release create v0.1.0 .\target\release\lovelace-desktop.exe .\SHA256SUMS.windows --title "RustLace v0.1.0" --notes-file .\release-notes.md --verify-tag
    ```
 
-   If the CLI is not installed, create the same release in the GitHub UI and attach both files.
+   If the CLI is not installed, create the same release in the GitHub UI and attach the same files.
+   On Linux build `target/release/lovelace-desktop`, write `SHA256SUMS.linux`, and attach both; a
+   release that carries only the Windows asset is incomplete.
    A build that did not come from the tagged commit is not the release path: an asset whose
    `--version` disagrees with the tag is wrong even when the tag is right.
 
@@ -133,12 +147,18 @@ when that workflow cannot run; do not hand-tag while the workflow is available.
    - "Windows (full workspace)" ran `cargo fmt --all -- --check`, `cargo clippy --workspace
      --all-targets`, `cargo test --workspace`, `cargo build --release -p lovelace-desktop`, and
      uploaded `lovelace-desktop-windows-x86_64` with `if-no-files-found: error`;
-   - "Linux (engine crates)" ran the format check, the engine clippy selection and the engine tests
-     (`lovelace-lang`, `lovelace-real`, `lovelace-symbolics`).
-   The desktop crate is Windows-only and must not be built or tested on Linux. The release commit
-   carries `[skip ci]`, so the CI run that matters is the validated commit before the bump. Then
-   read the Release run's log: it must state the guard branch, print the built executable's
-   `--version`, and show the assets. If either job is red, do not publish; fix and re-tag only if
+   - "Linux (engine crates + GUI desktop under Xvfb)" ran the format check, the engine clippy
+     selection, the engine tests (`lovelace-lang`, `lovelace-real`, `lovelace-symbolics`),
+     `cargo build --release -p lovelace-desktop`, `xvfb-run … --gui-selftest` (must exit 0 with
+     `checks=20 failed=0`), and `xvfb-run … cargo test -p lovelace-desktop`, then uploaded
+     `lovelace-desktop-linux-gui-x86_64`.
+   Both platforms are supported and both are released: do not omit, skip or weaken the Linux job, and
+   do not treat "it only needs to build on Windows" as true — the Linux job is what compiles and
+   exercises the GUI there. A `--gui-selftest` pass is a run-path check, not a GUI journey pass; the
+   journey captures are Windows-only and the release note must not imply otherwise. The release
+   commit carries `[skip ci]`, so the CI run that matters is the validated commit before the bump.
+   Then read the Release run's log: it must state the guard branch, print both executables'
+   `--version`, and show all four assets. If either job is red, do not publish; fix and re-tag only if
    the tag has not been announced.
 
 8. **Write the release note from observations.** State the version, the commit, the artifact name,
@@ -159,7 +179,8 @@ git ls-remote --tags origin
 ```
 
 Observable success: every command exits 0; the corpus prints `214 passed, 0 failed, 214 total`; the
-desktop suite reports 716 passed; the release binary exists and its SHA-256 is the hash in the
+desktop suite reports its platform's counts (716 passed on Windows, 710 on Linux — take them from the
+run, do not copy them from here); the release binary exists and its SHA-256 is the hash in the
 release note; `git ls-remote --tags origin` lists the new `v<version>` tag at the release commit;
-the CI run for the validated commit has both jobs green; and the Release run logs the guard branch,
+both CI jobs are green; and the Release run logs the guard branch,
 the built executable printing the tagged version, and the published asset hashes.

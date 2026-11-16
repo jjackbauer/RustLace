@@ -14,7 +14,9 @@ target/debug/lovelace-run.exe --functions --function-limit 500
 The observed envelope reports `"total": 124`, `"returned": 124`, `"truncated": false`. The
 category counts below sum to 124.
 
-## Registry at a glance
+## Purpose
+
+### Registry at a glance
 
 | Category | Builtins | Main families |
 |---|---:|---|
@@ -31,7 +33,9 @@ category counts below sum to 124.
 | Optimization | 2 | expression optimization and its structured form |
 | **Total** | **124** | |
 
-## Reading the catalogue
+## Inputs
+
+### Reading the catalogue
 
 The arity column is derived from the registry's `minArity` and `parameterCount`:
 
@@ -64,378 +68,9 @@ function with the same name shadows the builtin because user functions are resol
 runner's engine loads every plugin, so all 124 names are available. A bare engine created through
 `Engine::new_bare()` exposes only core builtins until a plugin is loaded.
 
-## Numerics (10)
+### Full catalogue
 
-The numeric builtins preserve exactness where they can and compute at the session's computation
-precision where they cannot.
-
-| Builtin | What it does |
-|---|---|
-| `abs(x)` | Absolute value; preserves Natural/Integer/Real, complex magnitude for Complex. |
-| `divrem(a, b)` | Quotient and remainder as a `DivRemResult` record. |
-| `e([digits])` | Euler's number at the requested precision (capped by the engine precision). |
-| `evalf(f, digits)` | Numerically evaluates a symbolic expression to `digits` decimal places (capped at 1000). |
-| `is_even(x)`, `is_odd(x)` | Integer predicates returning Boolean. |
-| `pi([digits])` | π at the requested precision (capped by the engine precision). |
-| `setprecision(n)` | Sets computation and display precision; returns `Void`. |
-| `sign(x)` | `-1`, `0`, or `1` as an Integer. |
-| `sqrt(x)` | Principal square root; perfect squares are exact Reals, symbolic arguments stay symbolic. |
-
-```lovelace
-abs(-5)
-```
-```text
-= 5 (Integer)
-  _ = 5
-```
-
-```lovelace
-divrem(17, 5)
-```
-```text
-= DivRemResult(quotient: 3, remainder: 2) (DivRemResult)
-  _ = DivRemResult(quotient: 3, remainder: 2)
-```
-
-```lovelace
-sqrt(4)
-```
-```text
-= 2 (Real)
-  _ = 2
-```
-
-`pi(n)` and `e(n)` compute at most the engine's current computation precision; requesting more is
-an `InvalidArgument` / `TypeMismatch` refusal naming the cap. `evalf` has its own 1000-place
-computation cap and marks a clamped inexact result with `truncated` metadata on the wire.
-Precision is covered in [Precision and formatting](precision-and-formatting.md).
-
-## Symbolics (40)
-
-The Symbolics category is the largest. It supplies:
-
-- elementary functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`,
-  `asinh`, `acosh`, `atanh`, `exp`, `log`, `abs`;
-- algebra: `simplify`, `simplify_full`, `expand`, `factor`, `collect`, `apart`, `cancel`,
-  `cancel_full`;
-- assumptions: `assume`, `assume_clear`, `assume_integer`, `assume_negative`,
-  `assume_nonnegative`, `assume_positive`, `assume_real`, `assumptions`;
-- domains and symbols: `symbol`, `real`, `complex`, `integer`, `rational`, `inf`;
-- relations and substitution: `and`, `or`, `not`, `subs`, `evalf`.
-
-Creating a symbolic variable is explicit; there is no implicit single-letter symbol:
-
-```lovelace
-x = symbol("x"); simplify(sin(x)^2 + cos(x)^2)
-```
-```text
-= 1 (Symbolic)
-  _ = 1
-  x = x
-```
-
-```lovelace
-x = symbol("x"); factor(x^4 - 5*x^2 + 4)
-```
-```text
-= (x - 2)*(x - 1)*(x + 1)*(x + 2) (Symbolic)
-  _ = (x - 2)*(x - 1)*(x + 1)*(x + 2)
-  x = x
-```
-
-`simplify` applies only universally valid rules and rules whose side conditions the active
-assumptions prove. `simplify_full` returns a `TransformResult` recording the applied rules and
-their conditions. `cancel` removes common factors without carrying side conditions; use
-`cancel_full` when the definedness delta matters. `integrate_full`, `solve_full`,
-`linsolve_full`, `inv_full`, and `limit_full` expose structured records for the same operations.
-
-`and`, `or`, and `not` operate on symbolic relations, not on two Boolean values. `subs(f, x, v)`
-substitutes a value; `evalf` numerically evaluates. `inf` is the positive-infinity symbolic
-constant.
-
-## Arrays (23)
-
-Array builtins cover construction (`zeros`, `ones`, `eye`), shape (`shape`, `rank`, `ndims`,
-`numel`, `len`), reductions (`sum`, `prod`, `min`, `max`, `mean`, `norm`), manipulation
-(`reshape`, `flatten`, `squeeze`, `transpose`, `concat`, `append`), and vector/matrix helpers
-(`dot`, `cross`, `matmul`). Reductions accept an optional `axis`; `zeros`, `ones`, and `reshape`
-are variadic over their shape arguments.
-
-```lovelace
-sum([[1, 2], [3, 4]])
-```
-```text
-= 10 (Natural)
-  _ = 10
-```
-
-```lovelace
-shape(zeros(2, 3))
-```
-```text
-= [2, 3] (Vector)
-  _ = [2, 3]
-```
-
-```lovelace
-matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])
-```
-```text
-= [[19, 22], [43, 50]] (Array)
-  _ = [[19, 22], [43, 50]]
-```
-
-`len` returns the first dimension; `numel` the product of all dimensions; `norm` the Euclidean
-norm. `reshape` requires the element count to agree with the new shape. Array arithmetic itself
-is not a builtin: `+ - * / % ^` are language operators with right-aligned broadcasting, described
-in [Expressions and operators](expressions-and-operators.md#arrays-and-broadcasting).
-
-## Linear Algebra (8)
-
-`det`, `inv`, `trace`, `linsolve`, `matrix_rank`, the symmetric eigensolver `eig_sym`, plus the
-structured `inv_full` and `linsolve_full`. The short forms are exact where the inputs are exact;
-`inv` of a scalar is a Real reciprocal, and `inv` of a matrix uses exact elimination.
-`linsolve(a, b)` solves `a * x = b` and is valid under the side condition `det(a) != 0`;
-`linsolve_full` returns that condition in a `MatrixSolveResult`.
-
-```lovelace
-det([[1, 2], [3, 4]])
-```
-```text
-= -2 (Integer)
-  _ = -2
-```
-
-```lovelace
-inv([[1, 2], [3, 4]])
-```
-```text
-= [[-2, 1], [1.5, -0.5]] (Array)
-  _ = [[-2, 1], [1.5, -0.5]]
-```
-
-`eig_sym(a)` takes a real symmetric square matrix and returns an `EigenResult` record: `values`
-(ascending eigenvalues), `vectors` (`vectors[i][j]` is component `i` of eigenvector `j`), `sweeps`
-(Jacobi sweeps used), `residual` (the largest `||A v_j - lambda_j v_j||` recomputed from the
-original matrix) and `exact` (always `false`, because the rotations introduce square roots). It is a
-RustLace-only builtin and it is core, so it works on a bare engine.
-
-```lovelace
-setprecision(30); eig_sym([[2, 1], [1, 2]])
-```
-```text
-= EigenResult(values: [1, 3], vectors: [[0.707106781186547524400844362104, 0.707106781186547524400844362104], [-0.707106781186547524400844362104, 0.707106781186547524400844362104]], sweeps: 1, residual: 0, exact: False) (EigenResult)
-  _ = EigenResult(values: [1, 3], vectors: [[0.707106781186547524400844362104, 0.707106781186547524400844362104], [-0.707106781186547524400844362104, 0.707106781186547524400844362104]], sweeps: 1, residual: 0, exact: False)
-```
-
-```lovelace
-setprecision(30); eig_sym([[4, 1], [1, 3]]).values
-```
-```text
-= [2.381966011250105151795413165634, 4.618033988749894848204586834365] (Vector)
-  _ = [2.381966011250105151795413165634, 4.618033988749894848204586834365]
-```
-
-The solver is real-symmetric only: a non-square matrix, an asymmetric one, a complex entry or a 0x0
-matrix is an `InvalidArgument` / `TypeMismatch` refusal naming the offending shape or entry. The
-residual tracks the ambient computation precision, so a higher `setprecision` buys a smaller
-residual.
-
-`matrix_rank` is computed exactly over a symbolic matrix, and `trace` sums the diagonal entries.
-Symbolic matrices take the same builtins; `det([[x, 1], [y, x]])` is `x^2 - y` symbolically.
-
-## Calculus (10)
-
-`diff`, `integrate`, `integrate_full`, `limit`, `limit_full`, `limit_left`, `limit_right`,
-`series`, `jacobian`, and `hessian`. `diff` differentiates with respect to a symbolic variable;
-`integrate` returns an antiderivative and self-verifies closed forms; `series` returns a power
-series with an O-term; `jacobian` and `hessian` take a vector of expressions and a vector of
-variables.
-
-```lovelace
-x = symbol("x"); diff(x^3, x)
-```
-```text
-= 3*x^2 (Symbolic)
-  _ = 3*x^2
-  x = x
-```
-
-```lovelace
-x = symbol("x"); integrate(2*x*cos(x^2), x)
-```
-```text
-= sin(x^2) (Symbolic)
-  _ = sin(x^2)
-  x = x
-```
-
-```lovelace
-x = symbol("x"); series(sin(x)/x, x, 0, 6)
-```
-```text
-= 1 - 1/6*x^2 + 1/120*x^4 + O(x^6) (Symbolic)
-  _ = 1 - 1/6*x^2 + 1/120*x^4 + O(x^6)
-  x = x
-```
-
-`limit` returns the same `LimitResult` record as `limit_full`; `limit_left`/`limit_right`
-return the same record with one-sided values. A limit that does not exist is represented in the
-record (status/exists), not necessarily as an exception.
-
-## Solving (4)
-
-`solve`, `solve_full`, `solve_system`, and `solve_system_full`. `solve(f, x [, domain])` solves
-an equation and returns a `SolveResult` record: status, variable, domain, completeness, solution
-list (each with conditions, multiplicity, exactness), parametric families, counts, and
-diagnostics. The default domain is Complex; pass `real` for real solutions only. `solve_system`
-uses Gröbner elimination and returns a `SystemSolveResult` with bindings.
-
-```lovelace
-x = symbol("x"); solve(x^2 - 4 == 0, x).status
-```
-```text
-= Solved
-  _ = Solved
-  x = x
-```
-
-```lovelace
-x = symbol("x"); solve(x^2 - 4 == 0, x).represented_count
-```
-```text
-= 2 (Integer)
-  _ = 2
-  x = x
-```
-
-`SolveStatus` values include `Solved`, `NoSolutions`, and `Unevaluated`; `Completeness` reports
-whether the represented set is complete. An inconsistent real-domain equation such as
-`solve(x^2 + 1 == 0, x, real)` is a `NoSolutions` result with a diagnostic, not an exception.
-See [Values and types](values-and-types.md#record) for the record shape.
-
-## Compilation (5)
-
-`lower`, `compile`, `compile_full`, `evalir`, and `evalir_batch`. `lower(f, params)` produces
-MathIR text; `compile` produces a validated serialized kernel; `compile_full` returns a
-`CompilationResult` with parameter domains, result type, precision and optimization policy, target,
-MathIR version, and exactness. `evalir` evaluates one point; `evalir_batch` evaluates flat
-row-major values.
-
-```lovelace
-x = symbol("x"); evalir(compile(x^2 + 1, [x]), [3], 40)
-```
-```text
-= 10 (Integer)
-  _ = 10
-  x = x
-```
-
-The IR header is `#!mathir 2`; the registry reports `"mathIrVersion": 2` and
-`"symbolicFormatVersion": "#!lovelace-sym 1"`. Compilation is exactness-aware: a kernel records
-its parameter domains and result domain rather than assuming floating point.
-
-## DSP (16)
-
-`fft`, `dft`, `conv`, `filter`, `movingavg`, `impulse`, `step`, `cosine`, `exponential`,
-`powerseries`, `noise`, `delay`, `scale`, `re`, `im`, and `conj`. Signals are Vectors; transforms
-and filters return Complex or Real vectors. The DSP family computes at the engine's precision once
-`setprecision` has been used explicitly, and at a 30-place fast default before that. A complex
-value has no literal; it enters the language through these builtins and is bridged back with
-`re`, `im`, `conj`, and `abs`.
-
-```lovelace
-fft([1, 0, 0, 0])
-```
-```text
-= [1, 1, 1, 1] (Vector)
-  _ = [1, 1, 1, 1]
-```
-
-```lovelace
-abs(fft([0, 1, 0, 0]))
-```
-```text
-= [1, 1, 1, 1] (Vector)
-  _ = [1, 1, 1, 1]
-```
-
-`fft` requires a power-of-two length; `dft` does not and accepts an optional output length.
-`conv(x, h)` is linear convolution. `filter(a, b, x)` is the difference equation; when the third
-argument is a count it produces the impulse response of that length (`filter([1], [1], 4)` is
-`[1, 0, 0, 0]`). `noise` is deterministic for a given seed; its declared parameters are
-`scale`, `disp`, `n`, `seed`, with the shorter call forms filling in the defaults. `cosine`,
-`exponential`, and `powerseries` are sequence constructors.
-
-## Introspection (5)
-
-`type(x)` returns the value-kind name (or record/enum type name). `inspect(x)` returns an
-`Inspection` record with type, domain, exactness, free symbols, node count, canonical and pretty
-forms, shape, rank, element domain, assumptions, and members. `latex(expr)` renders a symbolic
-expression as LaTeX source using the same printer decisions as the pretty form. `print(values…)`
-writes display forms separated by spaces and returns `Void`; with a Symbolic first argument and a
-mode string as the second argument it selects `"pretty"`, `"canonical"`, `"debug"`, or `"latex"`.
-`capabilities()` returns a large `CapabilitiesResult` describing accepted solver domains and known
-unsupported operation classes.
-
-```lovelace
-type(42)
-```
-```text
-= Natural
-  _ = Natural
-```
-
-```lovelace
-x = symbol("x"); y = symbol("y"); latex((x + 1)/y)
-```
-```text
-= \frac{x + 1}{y}
-  _ = \frac{x + 1}{y}
-  x = x
-  y = y
-```
-
-`inspect` is the reliable way to ask whether a Real is exact; the display form does not carry
-that bit. `capabilities()` is intentionally verbose on the wire; prefer reading its record fields
-rather than parsing its prose.
-
-## Language (1)
-
-`plot` is the only Language-category builtin. It renders a 2-D line plot to an SVG file and
-returns the absolute path as Text. See [Plots](plots.md) for the full contract.
-
-```lovelace
-type(plot([1, 2, 3]))
-```
-```text
-= Text
-  _ = Text
-```
-
-## Optimization (2)
-
-`optimize(f, params)` applies equivalence-preserving transformations for evaluation: common
-subexpression elimination and policy-gated Hornerization. `optimize_full` returns an
-`OptimizationResult` with the original and optimized expressions, estimated costs before and
-after, shared subtrees, Horner rewrites, and the applied transformation list.
-
-```lovelace
-x = symbol("x"); optimize(x^2 + x, [x])
-```
-```text
-= x*(x + 1) (Symbolic)
-  _ = x*(x + 1)
-  x = x
-```
-
-Optimization is a symbolic rewrite, not a numeric approximation; exactness is preserved. The
-structured form records the target (`mathir`) and policy, so a caller can inspect what changed
-before compiling the expression.
-
-## Full catalogue
-
-### Numerics (10 builtins)
+#### Numerics (10 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -450,7 +85,7 @@ before compiling the expression.
 | `sign` | 1 | x |
 | `sqrt` | 1 | x |
 
-### Symbolics (40 builtins)
+#### Symbolics (40 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -495,7 +130,7 @@ before compiling the expression.
 | `tan` | 1 | x |
 | `tanh` | 1 | x |
 
-### Arrays (23 builtins)
+#### Arrays (23 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -523,7 +158,7 @@ before compiling the expression.
 | `transpose` | 1-2 | a, perm |
 | `zeros` | 1+ | dims |
 
-### Linear Algebra (8 builtins)
+#### Linear Algebra (8 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -536,7 +171,7 @@ before compiling the expression.
 | `matrix_rank` | 1 | a |
 | `trace` | 1 | m |
 
-### Calculus (10 builtins)
+#### Calculus (10 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -551,7 +186,7 @@ before compiling the expression.
 | `limit_right` | 3 | f, x, x0 |
 | `series` | 4 | f, x, x0, order |
 
-### Solving (4 builtins)
+#### Solving (4 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -560,7 +195,7 @@ before compiling the expression.
 | `solve_system` | 2 | eqs, vars |
 | `solve_system_full` | 2 | eqs, vars |
 
-### Compilation (5 builtins)
+#### Compilation (5 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -570,7 +205,7 @@ before compiling the expression.
 | `evalir_batch` | 3 | ir, values, digits |
 | `lower` | 2 | f, params |
 
-### DSP (16 builtins)
+#### DSP (16 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -591,7 +226,7 @@ before compiling the expression.
 | `scale` | 2 | x, c |
 | `step` | 1 | n |
 
-### Introspection (5 builtins)
+#### Introspection (5 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
@@ -601,15 +236,483 @@ before compiling the expression.
 | `print` | 0+ | values |
 | `type` | 1 | x |
 
-### Language (1 builtin)
+#### Language (1 builtin)
 
 | Name | Arity | Parameters |
 |---|---|---|
 | `plot` | 1-3 | x, y, title |
 
-### Optimization (2 builtins)
+#### Optimization (2 builtins)
 
 | Name | Arity | Parameters |
 |---|---|---|
 | `optimize` | 2 | f, params |
 | `optimize_full` | 2 | f, params |
+
+## Outputs
+
+### Numerics (10)
+
+The numeric builtins preserve exactness where they can and compute at the session's computation
+precision where they cannot.
+
+| Builtin | What it does |
+|---|---|
+| `abs(x)` | Absolute value; preserves Natural/Integer/Real, complex magnitude for Complex. |
+| `divrem(a, b)` | Quotient and remainder as a `DivRemResult` record. |
+| `e([digits])` | Euler's number at the requested precision (capped by the engine precision). |
+| `evalf(f, digits)` | Numerically evaluates a symbolic expression to `digits` decimal places (capped at 1000). |
+| `is_even(x)`, `is_odd(x)` | Integer predicates returning Boolean. |
+| `pi([digits])` | π at the requested precision (capped by the engine precision). |
+| `setprecision(n)` | Sets computation and display precision; returns `Void`. |
+| `sign(x)` | `-1`, `0`, or `1` as an Integer. |
+| `sqrt(x)` | Principal square root; perfect squares are exact Reals, symbolic arguments stay symbolic. |
+
+`pi(n)` and `e(n)` compute at most the engine's current computation precision; requesting more is
+an `InvalidArgument` / `TypeMismatch` refusal naming the cap. `evalf` has its own 1000-place
+computation cap and marks a clamped inexact result with `truncated` metadata on the wire.
+Precision is covered in [Precision and formatting](precision-and-formatting.md).
+
+### Symbolics (40)
+
+The Symbolics category is the largest. It supplies:
+
+- elementary functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`,
+  `asinh`, `acosh`, `atanh`, `exp`, `log`, `abs`;
+- algebra: `simplify`, `simplify_full`, `expand`, `factor`, `collect`, `apart`, `cancel`,
+  `cancel_full`;
+- assumptions: `assume`, `assume_clear`, `assume_integer`, `assume_negative`,
+  `assume_nonnegative`, `assume_positive`, `assume_real`, `assumptions`;
+- domains and symbols: `symbol`, `real`, `complex`, `integer`, `rational`, `inf`;
+- relations and substitution: `and`, `or`, `not`, `subs`, `evalf`.
+
+`simplify` applies only universally valid rules and rules whose side conditions the active
+assumptions prove. `simplify_full` returns a `TransformResult` recording the applied rules and
+their conditions. `cancel` removes common factors without carrying side conditions; use
+`cancel_full` when the definedness delta matters. `integrate_full`, `solve_full`,
+`linsolve_full`, `inv_full`, and `limit_full` expose structured records for the same operations.
+
+`and`, `or`, and `not` operate on symbolic relations, not on two Boolean values. `subs(f, x, v)`
+substitutes a value; `evalf` numerically evaluates. `inf` is the positive-infinity symbolic
+constant.
+
+### Arrays (23)
+
+Array builtins cover construction (`zeros`, `ones`, `eye`), shape (`shape`, `rank`, `ndims`,
+`numel`, `len`), reductions (`sum`, `prod`, `min`, `max`, `mean`, `norm`), manipulation
+(`reshape`, `flatten`, `squeeze`, `transpose`, `concat`, `append`), and vector/matrix helpers
+(`dot`, `cross`, `matmul`). Reductions accept an optional `axis`; `zeros`, `ones`, and `reshape`
+are variadic over their shape arguments.
+
+`len` returns the first dimension; `numel` the product of all dimensions; `norm` the Euclidean
+norm. `reshape` requires the element count to agree with the new shape. Array arithmetic itself
+is not a builtin: `+ - * / % ^` are language operators with right-aligned broadcasting, described
+in [Expressions and operators](expressions-and-operators.md#arrays-and-broadcasting).
+
+### Linear Algebra (8)
+
+`det`, `inv`, `trace`, `linsolve`, `matrix_rank`, the symmetric eigensolver `eig_sym`, plus the
+structured `inv_full` and `linsolve_full`. The short forms are exact where the inputs are exact;
+`inv` of a scalar is a Real reciprocal, and `inv` of a matrix uses exact elimination.
+`linsolve(a, b)` solves `a * x = b` and is valid under the side condition `det(a) != 0`;
+`linsolve_full` returns that condition in a `MatrixSolveResult`.
+
+`eig_sym(a)` takes a real symmetric square matrix and returns an `EigenResult` record: `values`
+(ascending eigenvalues), `vectors` (`vectors[i][j]` is component `i` of eigenvector `j`), `sweeps`
+(Jacobi sweeps used), `residual` (the largest `||A v_j - lambda_j v_j||` recomputed from the
+original matrix) and `exact` (always `false`, because the rotations introduce square roots). It is a
+RustLace-only builtin and it is core, so it works on a bare engine.
+
+The solver is real-symmetric only: a non-square matrix, an asymmetric one, a complex entry or a 0x0
+matrix is an `InvalidArgument` / `TypeMismatch` refusal naming the offending shape or entry. The
+residual tracks the ambient computation precision, so a higher `setprecision` buys a smaller
+residual.
+
+`matrix_rank` is computed exactly over a symbolic matrix, and `trace` sums the diagonal entries.
+Symbolic matrices take the same builtins; `det([[x, 1], [y, x]])` is `x^2 - y` symbolically.
+
+### Calculus (10)
+
+`diff`, `integrate`, `integrate_full`, `limit`, `limit_full`, `limit_left`, `limit_right`,
+`series`, `jacobian`, and `hessian`. `diff` differentiates with respect to a symbolic variable;
+`integrate` returns an antiderivative and self-verifies closed forms; `series` returns a power
+series with an O-term; `jacobian` and `hessian` take a vector of expressions and a vector of
+variables.
+
+`limit` returns the same `LimitResult` record as `limit_full`; `limit_left`/`limit_right`
+return the same record with one-sided values. A limit that does not exist is represented in the
+record (status/exists), not necessarily as an exception.
+
+### Solving (4)
+
+`solve`, `solve_full`, `solve_system`, and `solve_system_full`. `solve(f, x [, domain])` solves
+an equation and returns a `SolveResult` record: status, variable, domain, completeness, solution
+list (each with conditions, multiplicity, exactness), parametric families, counts, and
+diagnostics. The default domain is Complex; pass `real` for real solutions only. `solve_system`
+uses Gröbner elimination and returns a `SystemSolveResult` with bindings.
+
+`SolveStatus` values include `Solved`, `NoSolutions`, and `Unevaluated`; `Completeness` reports
+whether the represented set is complete. An inconsistent real-domain equation such as
+`solve(x^2 + 1 == 0, x, real)` is a `NoSolutions` result with a diagnostic, not an exception.
+See [Values and types](values-and-types.md#record) for the record shape.
+
+### Compilation (5)
+
+`lower`, `compile`, `compile_full`, `evalir`, and `evalir_batch`. `lower(f, params)` produces
+MathIR text; `compile` produces a validated serialized kernel; `compile_full` returns a
+`CompilationResult` with parameter domains, result type, precision and optimization policy, target,
+MathIR version, and exactness. `evalir` evaluates one point; `evalir_batch` evaluates flat
+row-major values.
+
+The IR header is `#!mathir 2`; the registry reports `"mathIrVersion": 2` and
+`"symbolicFormatVersion": "#!lovelace-sym 1"`. Compilation is exactness-aware: a kernel records
+its parameter domains and result domain rather than assuming floating point.
+
+### DSP (16)
+
+`fft`, `dft`, `conv`, `filter`, `movingavg`, `impulse`, `step`, `cosine`, `exponential`,
+`powerseries`, `noise`, `delay`, `scale`, `re`, `im`, and `conj`. Signals are Vectors; transforms
+and filters return Complex or Real vectors. The DSP family computes at the engine's precision once
+`setprecision` has been used explicitly, and at a 30-place fast default before that. A complex
+value has no literal; it enters the language through these builtins and is bridged back with
+`re`, `im`, `conj`, and `abs`.
+
+`fft` requires a power-of-two length; `dft` does not and accepts an optional output length.
+`conv(x, h)` is linear convolution. `filter(a, b, x)` is the difference equation; when the third
+argument is a count it produces the impulse response of that length (`filter([1], [1], 4)` is
+`[1, 0, 0, 0]`). `noise` is deterministic for a given seed; its declared parameters are
+`scale`, `disp`, `n`, `seed`, with the shorter call forms filling in the defaults. `cosine`,
+`exponential`, and `powerseries` are sequence constructors.
+
+### Introspection (5)
+
+`type(x)` returns the value-kind name (or record/enum type name). `inspect(x)` returns an
+`Inspection` record with type, domain, exactness, free symbols, node count, canonical and pretty
+forms, shape, rank, element domain, assumptions, and members. `latex(expr)` renders a symbolic
+expression as LaTeX source using the same printer decisions as the pretty form. `print(values…)`
+writes display forms separated by spaces and returns `Void`; with a Symbolic first argument and a
+mode string as the second argument it selects `"pretty"`, `"canonical"`, `"debug"`, or `"latex"`.
+`capabilities()` returns a large `CapabilitiesResult` describing accepted solver domains and known
+unsupported operation classes.
+
+`inspect` is the reliable way to ask whether a Real is exact; the display form does not carry
+that bit. `capabilities()` is intentionally verbose on the wire; prefer reading its record fields
+rather than parsing its prose.
+
+### Language (1)
+
+`plot` is the only Language-category builtin. It renders a 2-D line plot to an SVG file and
+returns the absolute path as Text. See [Plots](plots.md) for the full contract.
+
+### Optimization (2)
+
+`optimize(f, params)` applies equivalence-preserving transformations for evaluation: common
+subexpression elimination and policy-gated Hornerization. `optimize_full` returns an
+`OptimizationResult` with the original and optimized expressions, estimated costs before and
+after, shared subtrees, Horner rewrites, and the applied transformation list.
+
+Optimization is a symbolic rewrite, not a numeric approximation; exactness is preserved. The
+structured form records the target (`mathir`) and policy, so a caller can inspect what changed
+before compiling the expression.
+
+## Precision behaviour
+
+The catalogue publishes numbers under the three claim kinds of the
+[editorial guide](../editorial.md#the-three-kinds-of-claim); the per-family sections above state
+which case a builtin is in.
+
+| Claim kind | Where it appears in this catalogue |
+|---|---|
+| **Exact** | `Natural`/`Integer` arithmetic and rationals; integer predicates and `divrem`; array reductions over exact elements; a `Real` whose decimal expansion terminates or recurs within the computation budget, rendered with its period (`1/3` is `0.(3)`, never a rounding). |
+| **Precision-bounded** | `sqrt`, `pi`, `e`, `evalf`, `norm` and every irrational or transcendental result: the value is computed to a decimal-place budget and the error is bounded by that budget. |
+| **Parity** | A rendering that reproduces the C# reference, including a defect. The live case in this workspace is the DSP `movingavg` defect, documented on the [DSP page](../extensions/dsp.md#known-defect-movingavg-below-38-digits); a parity value is evidence about the reference, not a mathematical result. |
+
+- `setprecision(n)` sets the engine's computation and display precision. `pi(n)` and `e(n)` compute
+  at most the current computation precision; requesting more is an `InvalidArgument` /
+  `TypeMismatch` refusal naming the cap.
+- `evalf(f, digits)` has its own 1000-place computation cap. A result that was cut at the cap is
+  marked `truncated` with `truncationReason: digit-cap` and `budget: 1000` on the wire; a request
+  the builtin can honour in full is not reduced.
+- `format` and `format_typed` are renderings. The display does not carry the exactness bit: for a
+  `Real`, ask `inspect` (its record reports exactness) rather than reading the printed form.
+- The catalogue has no binary floating-point value type: every numeric value is decimal-backed.
+  That is a statement about representation, not a correctness guarantee, and it does not make a
+  precision-bounded result exact.
+
+## Errors
+
+Builtins report failures as `LangError`, whose message, position, code and category are published
+on the wire. The position is a UTF-16 code-unit offset into the caller's source. The seven
+categories in `lovelace-lang/src/diagnostic.rs` are frozen: `ParseError`, `DomainError`,
+`UnsupportedOperation`, `BudgetExceeded`, `NoSolution`, `TypeMismatch`,
+`InternalInvariantFailure`.
+
+| Failure | Code / category |
+|---|---|
+| Argument count outside the declared range | `InvalidArgument` / `TypeMismatch`, refused at one call site from the registry declaration before the implementation runs, with the declared signature on the envelope |
+| Argument of the wrong kind | `InvalidArgument` / `TypeMismatch`, a sentence naming the parameter and the kind that arrived |
+| Value outside the operation's domain | `InvalidOperation` / `DomainError` |
+| A `pi`/`e` request above the engine computation precision | `InvalidArgument` / `TypeMismatch`, naming the cap |
+| `eig_sym` of a non-square, asymmetric or 0x0 matrix, or a matrix with a complex entry | `InvalidArgument` / `TypeMismatch`, naming the offending shape or entry |
+| A builtin used as a value (`sqrt` without a call) | `InvalidOperation` / `DomainError`, the undefined-variable failure |
+| A name from an unloaded plugin family | `UnknownFunction` / `UnsupportedOperation`, with suggestions, hints and the registry size on the error |
+
+Three outcomes that look like errors are documented results:
+
+- An inconsistent real-domain equation such as `solve(x^2 + 1 == 0, x, real)` is a `NoSolutions`
+  `SolveResult` with a diagnostic, not an exception.
+- A limit that does not exist is represented in the `LimitResult` (`status`/`exists`), not thrown.
+- An integral with no closed form is returned as the unevaluated `integrate(...)` value, and the
+  process exits 0.
+
+The arity refusal is demonstrated in the Inputs section (`sqrt(1, 2)`); the shape refusals and the
+non-error results are demonstrated in the Examples section.
+
+## Limitations
+
+- **No implicit symbolic variable.** `x` is an undefined variable until `x = symbol("x")`; an
+  expression such as `diff(x^3, x)` fails without that binding.
+- **`eig_sym` is real-symmetric only.** A general eigen-decomposition is not available: there is no
+  `eigen`, SVD, QR, LU or Cholesky builtin in the catalogue.
+- **`solve` accepts `real` and `complex` only.** `integer` and `rational` are refused with the
+  accepted set named in the message; the solver's default domain is Complex.
+- **`and`, `or` and `not` are symbolic-relation operators**, not two-valued Boolean connectives.
+- **There is no complex literal.** A complex value enters through the DSP builtins and is bridged
+  back with `re`, `im`, `conj` and `abs`.
+- **Builtins are names, not values.** `sqrt` cannot be passed as an argument or stored; a user
+  function with the same name shadows the builtin because user functions resolve first.
+- **A bare engine is core-only.** `Engine::new_bare()` exposes only core builtins until a plugin is
+  loaded; the runner's `Engine::new()` loads every family and exposes all 124 names.
+- **Two caps bound the numeric surface.** `evalf` stops at 1000 decimal places, and `pi`/`e` stop at
+  the engine computation precision; requesting more is a refusal, never a silently clamped answer.
+- **Array arithmetic is not a builtin.** `+ - * / % ^` are language operators with right-aligned
+  broadcasting; the catalogue contributes construction, shape, reductions and manipulation.
+
+## Examples
+
+### Numerics examples
+
+```lovelace
+abs(-5)
+```
+```text
+= 5 (Integer)
+  _ = 5
+```
+
+```lovelace
+divrem(17, 5)
+```
+```text
+= DivRemResult(quotient: 3, remainder: 2) (DivRemResult)
+  _ = DivRemResult(quotient: 3, remainder: 2)
+```
+
+```lovelace
+sqrt(4)
+```
+```text
+= 2 (Real)
+  _ = 2
+```
+
+### Symbolics examples
+
+Creating a symbolic variable is explicit; there is no implicit single-letter symbol:
+
+```lovelace
+x = symbol("x"); simplify(sin(x)^2 + cos(x)^2)
+```
+```text
+= 1 (Symbolic)
+  _ = 1
+  x = x
+```
+
+```lovelace
+x = symbol("x"); factor(x^4 - 5*x^2 + 4)
+```
+```text
+= (x - 2)*(x - 1)*(x + 1)*(x + 2) (Symbolic)
+  _ = (x - 2)*(x - 1)*(x + 1)*(x + 2)
+  x = x
+```
+
+### Arrays examples
+
+```lovelace
+sum([[1, 2], [3, 4]])
+```
+```text
+= 10 (Natural)
+  _ = 10
+```
+
+```lovelace
+shape(zeros(2, 3))
+```
+```text
+= [2, 3] (Vector)
+  _ = [2, 3]
+```
+
+```lovelace
+matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])
+```
+```text
+= [[19, 22], [43, 50]] (Array)
+  _ = [[19, 22], [43, 50]]
+```
+
+### Linear Algebra examples
+
+```lovelace
+det([[1, 2], [3, 4]])
+```
+```text
+= -2 (Integer)
+  _ = -2
+```
+
+```lovelace
+inv([[1, 2], [3, 4]])
+```
+```text
+= [[-2, 1], [1.5, -0.5]] (Array)
+  _ = [[-2, 1], [1.5, -0.5]]
+```
+
+```lovelace
+setprecision(30); eig_sym([[2, 1], [1, 2]])
+```
+```text
+= EigenResult(values: [1, 3], vectors: [[0.707106781186547524400844362104, 0.707106781186547524400844362104], [-0.707106781186547524400844362104, 0.707106781186547524400844362104]], sweeps: 1, residual: 0, exact: False) (EigenResult)
+  _ = EigenResult(values: [1, 3], vectors: [[0.707106781186547524400844362104, 0.707106781186547524400844362104], [-0.707106781186547524400844362104, 0.707106781186547524400844362104]], sweeps: 1, residual: 0, exact: False)
+```
+
+```lovelace
+setprecision(30); eig_sym([[4, 1], [1, 3]]).values
+```
+```text
+= [2.381966011250105151795413165634, 4.618033988749894848204586834365] (Vector)
+  _ = [2.381966011250105151795413165634, 4.618033988749894848204586834365]
+```
+
+### Calculus examples
+
+```lovelace
+x = symbol("x"); diff(x^3, x)
+```
+```text
+= 3*x^2 (Symbolic)
+  _ = 3*x^2
+  x = x
+```
+
+```lovelace
+x = symbol("x"); integrate(2*x*cos(x^2), x)
+```
+```text
+= sin(x^2) (Symbolic)
+  _ = sin(x^2)
+  x = x
+```
+
+```lovelace
+x = symbol("x"); series(sin(x)/x, x, 0, 6)
+```
+```text
+= 1 - 1/6*x^2 + 1/120*x^4 + O(x^6) (Symbolic)
+  _ = 1 - 1/6*x^2 + 1/120*x^4 + O(x^6)
+  x = x
+```
+
+### Solving examples
+
+```lovelace
+x = symbol("x"); solve(x^2 - 4 == 0, x).status
+```
+```text
+= Solved
+  _ = Solved
+  x = x
+```
+
+```lovelace
+x = symbol("x"); solve(x^2 - 4 == 0, x).represented_count
+```
+```text
+= 2 (Integer)
+  _ = 2
+  x = x
+```
+
+### Compilation examples
+
+```lovelace
+x = symbol("x"); evalir(compile(x^2 + 1, [x]), [3], 40)
+```
+```text
+= 10 (Integer)
+  _ = 10
+  x = x
+```
+
+### DSP examples
+
+```lovelace
+fft([1, 0, 0, 0])
+```
+```text
+= [1, 1, 1, 1] (Vector)
+  _ = [1, 1, 1, 1]
+```
+
+```lovelace
+abs(fft([0, 1, 0, 0]))
+```
+```text
+= [1, 1, 1, 1] (Vector)
+  _ = [1, 1, 1, 1]
+```
+
+### Introspection examples
+
+```lovelace
+type(42)
+```
+```text
+= Natural
+  _ = Natural
+```
+
+```lovelace
+x = symbol("x"); y = symbol("y"); latex((x + 1)/y)
+```
+```text
+= \frac{x + 1}{y}
+  _ = \frac{x + 1}{y}
+  x = x
+  y = y
+```
+
+### Language examples
+
+```lovelace
+type(plot([1, 2, 3]))
+```
+```text
+= Text
+  _ = Text
+```
+
+### Optimization examples
+
+```lovelace
+x = symbol("x"); optimize(x^2 + x, [x])
+```
+```text
+= x*(x + 1) (Symbolic)
+  _ = x*(x + 1)
+  x = x
+```

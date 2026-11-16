@@ -13,11 +13,15 @@ that can be consulted independently.
 ## What RustLace is
 
 RustLace is a complete scripting language for arbitrary-precision mathematics. One engine serves
-the interactive REPL, the headless `lovelace-run` runner and the native Windows desktop. The
+every surface: the native desktop workbench and the headless `lovelace-run` runner. The
 engine has no external crates under it and uses exact arithmetic: there is no floating-point type
 in the value path, no fixed-width integer hiding behind the syntax, and no silent rounding.
 `1 / 3` is the exact periodic decimal `0.(3)`, `2 ^ 100` is a 31-digit natural, and `sqrt(2)` is
 computed to the precision you ask for.
+
+The desktop workbench runs on Windows x86_64 and on Linux x86_64 (X11) — the language is not tied to
+a platform. See [ADR-008](../adr/008-linux-gui-support.md) for what is certified and what is not,
+and the Linux section of [build-and-run.md](../build-and-run.md#linux) for the GUI runtime packages.
 
 The language is dynamically typed. Values are inspected with `type()` and `inspect()` rather than
 declared, and the numeric kinds widen automatically (`Natural` → `Integer` → `Real`). Arrays are
@@ -30,11 +34,14 @@ digital signal processing and MathIR compilation.
 The runner accepts an inline script, a file, or standard input:
 
 ```console
-cargo build -p lovelace-run
-target/debug/lovelace-run.exe --eval "1 / 3"
-target/debug/lovelace-run.exe --file script.lv
-target/debug/lovelace-run.exe --file script.lv --text
+cargo run -p lovelace-run -- --eval "1 / 3"
+cargo run -p lovelace-run -- --file script.ls
+cargo run -p lovelace-run -- --file script.ls --text
 ```
+
+Scripts use the `.ls` extension by convention (`examples/hello.ls`, and every `.ls` fixture under
+`docs/csharp-oracle/`). The runner does not require an extension: it runs whatever path it is given,
+so an older `.lv` file still works, but new material should use `.ls`.
 
 JSON is the default output mode; `--text` selects the human rendering used by the examples in
 this reference. A successful run prints the result (and any captured `print` output), a failed

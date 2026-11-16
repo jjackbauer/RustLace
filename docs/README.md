@@ -11,6 +11,8 @@ Start with the [README](../README.md). This directory holds the long-form docume
 | [parity-with-studio.md](parity-with-studio.md) | you need to know what the port preserves from the C# Studio and where it deliberately differs |
 | [release.md](release.md) | you are cutting a release |
 | [contributing.md](contributing.md) | you are opening a change |
+| [editorial.md](editorial.md) | you are writing or reviewing documentation, a skill or an agent instruction |
+| [tutorials/](tutorials/) | you are learning RustLace by running a complete script end to end |
 | [LICENSE](../LICENSE) | you need the terms this repository is released under |
 | [glossary.md](glossary.md) | a term is unfamiliar |
 | [language/](language/) | you are writing a script and need the syntax, semantics and the builtin catalogue |
@@ -45,6 +47,7 @@ Start with the [README](../README.md). This directory holds the long-form docume
 - [ADR-005: the incremental cache is keyed on full canonical strings](adr/005-incremental-cache-keying.md)
 - [ADR-006: atomic saves and recorded file identity](adr/006-atomic-save-and-external-change.md)
 - [ADR-007: one token set per theme, and a contrast gate that reads the tokens](adr/007-theme-tokens-and-contrast.md)
+- [ADR-008: the native workbench runs on Linux as well as Windows](adr/008-linux-gui-support.md)
 
 ## Reference material carried with the tests
 

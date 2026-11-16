@@ -61,11 +61,11 @@ cargo run -p lovelace-desktop -- --help
 ```
 
 Observed counts on this tree: `cargo test --workspace` gives 6135 passed and 1 ignored (the
-ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in place);
-`cargo test -p lovelace-desktop` gives 716 passed on Windows and 710 on Linux (706 in the binary
-plus 4 CLI integration tests; the ten tests that do not compile there are the Windows-only
-`platform_parity` module and `win32/shell.rs`, and four Windows-premise tests in `document_io.rs`,
-`workbench.rs` and `netcheck.rs`); `--gui-selftest` gives 20 checks, 0 failed on both platforms;
+ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in place); the
+desktop suite's measured count is recorded in
+[docs/testing.md](docs/testing.md#1-unit-tests-in-crate-test) — measured on Linux under `xvfb-run`
+at v0.4.1, with the Windows count not measured in this environment; `--gui-selftest` gives 20
+checks, 0 failed on both platforms;
 `--selftest` gives 15 checks on Windows and 14 plus a named `no-network-imports` skip on Linux; the
 corpus gives 214 passed, 0 failed. A run that needs the application directory needs it writable:
 set `APPDATA` on Windows, or `XDG_CONFIG_HOME`/`HOME` on Linux, to a scratch directory first.
@@ -186,6 +186,12 @@ happened" is not evidence. Put in-crate unit tests in `#[cfg(test)]` modules and
 (`roundNN_*.rs`, `suite_*_batch.rs`); use the existing `Engine::eval` and `format_typed` surface.
 For a bug, add the regression test first and watch it fail on the old code.
 
+### Documentation requirements
+
+Documentation changes are reviewed against [docs/editorial.md](docs/editorial.md). Two rules are
+blocking: every numerical claim is labelled exact, precision-bounded or parity, and every example
+uses a repository-relative path or a placeholder rather than a path from one machine.
+
 ### Where new things go
 
 | You are adding | Put it here |
@@ -215,7 +221,7 @@ Desktop v4: RUN-007 certified - cancellation parity with the web Studio referenc
 style: apply cargo fmt across the workspace
 ```
 
-One logical change per commit. "All tests pass" is not evidence; "716 tests, release x2 + debug
+One logical change per commit. "All tests pass" is not evidence; "a measured test count, release x2 + debug
 green" is.
 
 Conventional prefixes drive the release version, so the prefix is not cosmetic: `feat:` is a minor
@@ -270,6 +276,7 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
 | change `lovelace-real` / `lovelace-nat` arithmetic | [change-numeric-kernel](.dsh/skills/change-numeric-kernel/SKILL.md) |
 | reproduce and fix a desktop defect with evidence | [debug-desktop-issue](.dsh/skills/debug-desktop-issue/SKILL.md) |
 | build, tag and publish a release | [release-and-publish](.dsh/skills/release-and-publish/SKILL.md) |
+| update the dependent documentation after a change | [sync-docs](.dsh/skills/sync-docs/SKILL.md) |
 
 The same index, with one-line descriptions and when-to-use guidance, is
 [docs/skills.md](docs/skills.md). For the prose reference, start at

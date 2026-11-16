@@ -72,6 +72,14 @@ A reviewer should be able to answer these from the diff alone:
    fixture is a change to the contract and needs its own justification (the repository has one
    recorded residual of this kind, in `docs/rustlace-notes.md`).
 
+## Documentation requirements
+
+A documentation change is reviewed against the editorial guide,
+[docs/editorial.md](editorial.md). Two rules are blocking:
+every numerical claim says whether it is exact, precision-bounded or parity, and every example uses a
+repository-relative path or a placeholder instead of a path from one machine. A link check does not
+make a page ready to merge; the [editorial review checklist](editorial.md#review-checklist) does.
+
 ## Definition of done
 
 A change is done when all of the following hold:

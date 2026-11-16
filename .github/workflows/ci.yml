@@ -1,6 +1,6 @@
 name: CI
 
-# Two jobs:
+# Three jobs:
 #   windows - the full workspace: format, clippy, every test, and the release desktop build.
 #   linux   - the portable engine crates, then the desktop GUI itself: built, accepted by
 #             --gui-selftest and unit-tested under Xvfb. The GUI stack (eframe/egui/resvg) is
@@ -9,6 +9,9 @@ name: CI
 #             /dev/dri (the same failure WSLg shows). Windows keeps eframe's default wgpu
 #             renderer untouched. Both artifacts are real GUI builds; the Linux one is accepted
 #             headlessly because a CI runner has no desktop session.
+#   docs    - every fenced example in the language and extension reference pages, executed by
+#             both bash runners (bash cannot be skipped: the scripts are the gate) on Linux
+#             and Windows.
 
 on:
   push:
@@ -166,3 +169,62 @@ jobs:
           name: lovelace-desktop-linux-gui-x86_64
           path: target/release/lovelace-desktop
           if-no-files-found: error
+
+  # The documentation examples are executable documentation: each runner parses
+  # the fenced blocks out of the Markdown and compares every observed typed
+  # output with the recorded one. The matrix is the point - a runner that only
+  # works on one platform (path shapes, .exe discovery, line endings) must fail
+  # on the platform that has the bug, not pass because it was never run there.
+  docs:
+    name: Documentation examples (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      # windows-latest checks out with the runner's system core.autocrlf=true,
+      # which would give the bash runners CRLF and break them before they run.
+      # Pin LF for this job's checkout only; the windows and linux jobs above
+      # keep their existing checkout behaviour.
+      - name: Checkout
+        uses: actions/checkout@v4
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build lovelace-run
+        run: cargo build -p lovelace-run
+
+      # `shell: bash` is the system bash on ubuntu-latest and Git Bash on
+      # windows-latest. Both runners always execute; the step fails if either
+      # exits non-zero, so a wrong recorded output fails the workflow.
+      - name: Run the language and extension examples
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          bash docs/language/examples/run-examples.sh || status=1
+          bash docs/extensions/examples/run-examples.sh || status=1
+          exit "$status"
+
+      # The documentation consistency gate: relative Markdown links, path-shaped code
+      # references and Rust symbol citations must resolve. It runs after the example
+      # gate so a documentation defect and an example drift are both reported.
+      - name: Check documentation consistency
+        shell: bash
+        run: bash tools/check-docs.sh --symbols
+
+      # The reference-page contract (DOC-014): every page listed in
+      # docs/reference-pages.md carries the seven sections of
+      # docs/reference-template.md, in order, with no other level-2 heading.
+      - name: Check reference pages
+        shell: bash
+        run: bash tools/check-reference-pages.sh

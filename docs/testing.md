@@ -3,12 +3,18 @@
 RustLace is tested in five layers. Each layer answers a different question, and none of them is
 sufficient alone.
 
+No layer establishes mathematical correctness by itself. Automated wording and link checks can verify
+consistency, but they cannot establish mathematical correctness: a numerical claim needs an
+independent oracle, a reference calculation, or a stated error bound, and a suite that asserts nothing
+about the value is a consistency check, not a proof.
+
 ## 1. Unit tests (in-crate `#[test]`)
 
 Every crate keeps its tests beside the code as `#[cfg(test)]` modules: parity rounds
 (`roundNN_*.rs`), focused suites and, where a port needed it, a falsification harness
-(`lovelace-lang/src/falsification_round46/`). The counts below are the ones observed on this tree
-(`cargo test --workspace --no-fail-fast`):
+(`lovelace-lang/src/falsification_round46/`). The counts below were observed on this tree with
+`cargo test --workspace --no-fail-fast`; they are a carried observation, not a re-measurement in
+this environment, and the `lovelace-desktop` row is the Windows figure.
 
 | Crate | Passed | Ignored |
 |---|---|---|
@@ -35,19 +41,24 @@ reported **6130 passed, 5 failed** before the frozen knowledge-graph fixture was
 present, `cargo test -p lovelace-know` passes (exit 0) and the total is **6135 passed, 1 ignored**.
 If you clone a revision without the fixture, expect those five failures and nothing else.
 
-`cargo test -p lovelace-desktop` alone reports `716 passed; 0 failed; 0 ignored` on Windows, which is
-the desktop verification gate. On Linux the same command reports **706 passed** in the binary plus
-**4 passed** in `tests/linux_cli.rs` (710 in total): the `src/ui/**` modules compile there too, and
-the ten tests that do not are Windows by premise or live in a module still gated to Windows:
+At v0.4.1, `cargo test -p lovelace-desktop` (measured on Linux under `xvfb-run`) reports
+**711 passed** in the binary plus **4 passed** in `tests/linux_cli.rs` — **715** in total, with
+0 failed. That is the desktop verification gate. The Windows count was **not measured in this
+environment**, and it is not inferred from the 711: ten tests in the crate do not compile on Linux.
+The `src/ui/**` modules compile and run there; the ten tests that do not are Windows by premise or
+live in a module still gated to Windows:
 
 - `platform_parity` (3 tests): the PLF-010 report drives Win32 modifiers, dialogs, clipboard, the
   HWND IME state and DPI; the module is `#[cfg(windows)]`.
 - `win32/shell.rs` (3 tests): the legacy Win32 shell is not compiled on Linux.
-- `document_io.rs:856,886` (2 tests): Windows refuses to rename over a read-only target and exposes
-  the hidden file attribute; on Unix a rename over a read-only file succeeds, because directory
-  permissions govern.
-- `workbench.rs:6276` (1 test): the atomic-save failure premise is that same read-only rename.
-- `netcheck.rs:238` (1 test): the test binary is an ELF image, not a PE one.
+- `document_io.rs` — `a_failed_rename_keeps_the_read_only_original_byte_identical` and
+  `a_successful_save_preserves_the_targets_file_attributes` (2 tests): Windows refuses to rename
+  over a read-only target and exposes the hidden file attribute; on Unix a rename over a read-only
+  file succeeds, because directory permissions govern.
+- `workbench.rs` — `a_failed_atomic_save_keeps_the_original_and_its_recorded_snapshot` (1 test):
+  the atomic-save failure premise is that same read-only rename.
+- `netcheck.rs` — `this_test_binary_imports_no_networking_dll` (1 test): the test binary is an ELF
+  image, not a PE one.
 
 The cross-platform failed-write test in `document_io.rs` and the crate-source network scan still
 cover both behaviours on Linux, and `--selftest` prints the PE check as a named skip with its
@@ -143,7 +154,7 @@ $ cargo build --release -p lovelace-desktop          # the workbench, not a head
 $ xvfb-run -a -s "-screen 0 1600x1000x24" ./target/release/lovelace-desktop --gui-selftest
 GUI_SELFTEST summary checks=20 failed=0
 $ xvfb-run -a -s "-screen 0 1600x1000x24" cargo test -p lovelace-desktop
-# 706 passed (bin) + 4 passed (tests/linux_cli.rs)
+# 711 passed (bin) + 4 passed (tests/linux_cli.rs); see §1 for the measured total
 ```
 
 The selftest step requires exit 0 **and** the exact `checks=20 failed=0` summary, so a Linux build

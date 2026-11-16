@@ -1,0 +1,48 @@
+# RustLace — ignore rules
+#
+# The repository ships no build output, no local scratch state and no secrets.
+# Everything below is either regenerable or machine-local; if a file here ever
+# needs to be committed deliberately, use `git add -f <path>` and say why in the
+# commit. AGENTS.md records the same rule: never commit build outputs, `%APPDATA%`
+# state, certificates, `.pfx` files, private keys or secrets.
+
+# --- Rust build output -------------------------------------------------------
+# Workspace target directory, plus the standalone UI spike, which is deliberately
+# outside the workspace and therefore has its own.
+/target/
+/lovelace-desktop-spike/target/
+
+# --- Local scratch -----------------------------------------------------------
+# `--journey ... --out .tmp\journey` and other acceptance modes write here.
+/.tmp/
+
+# --- Local working artifacts ------------------------------------------------
+# Agentic and release-check runs leave these beside the tree. They are useful
+# while working and never part of the repository content.
+/.round3-artifact/
+/.round4/
+/linux-job-*.log
+/pr-body.md
+
+# --- Secrets and certificates ------------------------------------------------
+# A release is unsigned by default; a signing key is never committed.
+*.pfx
+*.p12
+*.key
+*.pem
+.env
+.env.*
+/.secrets/
+
+# --- Editor and OS noise -----------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+/.idea/
+/.vscode/
+
+# Kept deliberately: `Cargo.lock` (a binary workspace pins its graph),
+# `docs/goal-desktop-v4/` capture references, and `.dsh/skills/`.

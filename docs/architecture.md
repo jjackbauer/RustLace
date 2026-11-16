@@ -22,78 +22,80 @@ flowchart TB
 ## 1. Values (`lovelace-json`, `lovelace-nat`, `lovelace-int`)
 
 `lovelace-nat` stores a natural number as a little-endian array of base-2^64 limbs with no
-most-significant zero limb; zero is the empty array (`lovelace-nat/src/lib.rs:1`). Multiplication
+most-significant zero limb; zero is the empty array (`lovelace-nat/src/lib.rs`). Multiplication
 switches to an NTT for large operands (`lovelace-nat/src/ntt.rs`), square roots go through
 Burnikel–Ziegler/Newton (`lovelace-nat/src/bz.rs`, `newton.rs`), and `digit_store` keeps the
 decimal-digit view the wire contract publishes (`lovelace-nat/src/digit_store.rs`).
 
 `lovelace-int` is a sign plus a `Nat` magnitude with no negative zero; division truncates toward zero
-and takes the dividend's sign, and division by zero returns `None` (`lovelace-int/src/lib.rs:1`).
+and takes the dividend's sign, and division by zero returns `None` (`lovelace-int/src/lib.rs`).
 
 `lovelace-json` is the workspace's only JSON reader/writer. Numbers are kept as their source text so
 a numeric field is reproduced byte-for-byte instead of round-tripping through binary floating point
-(`lovelace-json/src/lib.rs:1`).
+(`lovelace-json/src/lib.rs`).
 
 **Invariant.** No floating point appears in any value path. `#![forbid(unsafe_code)]` guards
-`lovelace-array`, `lovelace-int`, `lovelace-know` and the non-Windows half of `lovelace-desktop`.
+`lovelace-array`, `lovelace-int` and `lovelace-know`; `lovelace-desktop` carries
+`#![cfg_attr(not(windows), forbid(unsafe_code))]`, so the whole crate forbids unsafe code on
+non-Windows targets.
 
 ## 2. Numeric kernels (`lovelace-real`, `lovelace-array`, `lovelace-symbolics`)
 
 `lovelace-real` stores `int * 10^exp` plus optional period metadata: a repeating decimal keeps the
 repeating block once, so `1/3` renders `0.(3)` and is never rounded
-(`lovelace-real/src/lib.rs:1`). Arithmetic on terminating values works on scaled integers; an
+(`lovelace-real/src/lib.rs`). Arithmetic on terminating values works on scaled integers; an
 operation involving a period converts to an exact rational first. `Real::sqrt` and `Real::pi` live in
 `transcendental.rs`, with a fixed-width fast path in `fast_path.rs` gated by
 `lovelace_lang::complex::FAST_PATH_MAX_DIGITS` (37).
 
 `lovelace-array` is a generic, row-major `NdArray<T>` with shape algebra, indexing, slicing,
 reductions and elementwise operations expressed over the `Field` trait
-(`lovelace-array/src/lib.rs:1`). `dense.rs` adds the typed `DenseArray`/`Precision` surface.
+(`lovelace-array/src/lib.rs`). `dense.rs` adds the typed `DenseArray`/`Precision` surface.
 
 `lovelace-symbolics` owns canonical expressions (`Expr`), exact rationals (`Rat`), term ordering,
 printing, differentiation, series, polynomial algebra, Gröbner bases and the cooperative
-cancellation token that every long kernel polls (`lovelace-symbolics/src/lib.rs:1`).
+cancellation token that every long kernel polls (`lovelace-symbolics/src/lib.rs`).
 
 ## 3. Language and engine (`lovelace-lang`)
 
 `lovelace-lang` is the whole language: values, lexer, parser, tree-walking interpreter, the builtin
 registry and the builtin implementations, the Modus plugin host, MathIR, complex arithmetic, SVG
-plotting and progress reporting. The engine facade is `Engine` (`lovelace-lang/src/lib.rs:737`) and
-its evaluation entry point is `Engine::eval` → `eval_text` (`lib.rs:1568`).
+plotting and progress reporting. The engine facade is `Engine` and its evaluation entry point is
+`Engine::eval` → `eval_text`.
 
 Two seams matter for every host:
 
-- **Precision.** `Engine::precision` is the computation digit budget (default 1000, `lib.rs:836`);
-  `Engine::display_precision` separately bounds how many fractional digits are *printed*
-  (`lib.rs:1031`). A host may pin the display bound without touching computation.
+- **Precision.** `Engine::precision` is the computation digit budget (default 1000, `Engine::new`);
+  `Engine::display_precision` separately bounds how many fractional digits are *printed*. A host
+  may pin the display bound without touching computation.
 - **Cancellation.** `Engine::set_cancel_after` arms a deadline and `Engine::set_cancel_flag` arms a
-  live flag (`lib.rs:1059`, `lib.rs:1075`). Both are scoped into
-  `lovelace_symbolics::cancel::arm_with_flag` for the duration of one evaluation (`lib.rs:1369`).
+  live flag. Both are scoped into `lovelace_symbolics::cancel::arm_with_flag` for the duration of
+  one evaluation (`Engine::eval`).
 
 ## 4. Execution hosts (`lovelace-run`, `lovelace-know`, `lovelace-corpus`, `lovelace-bench`)
 
 `lovelace-run` is the non-interactive runner and the agent-facing wire protocol: exactly one JSON
 document on stdout, a stable field set and three exit codes (0 success, 1 script/diagnostic failure,
-2 usage), with `--text` for human output (`lovelace-run/src/main.rs:1`). Positions in the envelope
+2 usage), with `--text` for human output (`lovelace-run/src/main.rs`). Positions in the envelope
 are UTF-16 code-unit offsets into the caller's text.
 
 `lovelace-know` is the observation-driven behavioural graph: proposal → real `lovelace-run` process
 over stdin/stdout → observation → reducer → convergence, with JSON persistence
-(`lovelace-know/src/lib.rs:1`).
+(`lovelace-know/src/lib.rs`).
 
 `lovelace-corpus` is the documentation-corpus gate: it runs every example in
 `parity/corpus/*.json` and compares the rendered text; a missing corpus is a failure, never an empty
-pass (`lovelace-corpus/src/main.rs:1`). `lovelace-bench` is the micro-benchmark harness shared with
-the C# reference's measurements (`lovelace-bench/src/main.rs:1`).
+pass (`lovelace-corpus/src/main.rs`). `lovelace-bench` is the micro-benchmark harness shared with
+the C# reference's measurements (`lovelace-bench/src/main.rs`).
 
 ## 5. UI (`lovelace-desktop`)
 
 The desktop binary has a windowed workbench and a set of headless modes
-(`lovelace-desktop/src/main.rs:1`). The window is eframe/egui 0.37 with resvg 0.50 rendering the
+(`lovelace-desktop/src/main.rs`). The window is eframe/egui 0.37 with resvg 0.50 rendering the
 engine's SVG into a texture; the Win32/AccessKit adapter lives only in `src/win32` and
 `src/ui/a11y.rs`. The workbench state is headless and testable: `Workbench::poll`, `run_active` and
 `cancel_active` are the three methods the window and `--gui-selftest` both drive
-(`lovelace-desktop/src/workbench.rs:1`).
+(`lovelace-desktop/src/workbench.rs`).
 
 ![The workbench on first launch: toolbar, editor, graph, workspace, logs and the symbolic inspector](images/welcome-dark.png)
 
@@ -107,27 +109,26 @@ engine's SVG into a texture; the Win32/AccessKit adapter lives only in `src/win3
 | Recovery journal (caller thread) | atomic `.lvrec` writes on a debounce | blocking the UI for a write |
 
 A run is submitted per document, and one document may have only one active run
-(`SubmitError::Busy`, `lovelace-desktop/src/execution.rs:10`). Results are published as typed
-`DesktopEvent`s and applied through an `EventSink` that ignores results from a stale source revision
-(`execution.rs:19`). The final state – snapshot and incremental cache – is settled **before** the
-terminal event is observable (`execution.rs:11`), so a client that submits the next run the moment it
-sees `Finished` cannot race the cache hand-back.
+(`SubmitError::Busy`). Results are published as typed `DesktopEvent`s and applied through an
+`EventSink` that ignores results from a stale source revision. The final state – snapshot and
+incremental cache – is settled **before** the terminal event is observable (`ExecutionHost`), so a
+client that submits the next run the moment it sees `Finished` cannot race the cache hand-back.
 
 ## Cancellation
 
 Cancellation has two seams and the documentation keeps them distinct:
 
 1. **Statement boundary.** Every top-level statement is preceded by
-   `lovelace_symbolics::cancel::check()` (`lovelace-lang/src/lib.rs:1597`). A script stops before the
+   `lovelace_symbolics::cancel::check()` in `eval_text`. A script stops before the
    next statement, which is exactly the web Studio's contract.
 2. **Inside a kernel.** Long operations poll the same token between limbs or iterations:
    `pow`/`factorial` (`lovelace-lang/src/cancellable.rs`), the transcendental kernels, and the
    `progress` sink that reports phase/fraction (`lovelace-lang/src/progress.rs`).
 
 The cancellation result is a structured `LangError` with code `Cancelled` and category
-`BudgetExceeded` (`lovelace-lang/src/lib.rs:190`). A kernel with no poll seam cannot be interrupted;
+`BudgetExceeded` (`cancelled_error`). A kernel with no poll seam cannot be interrupted;
 the desktop reports that as "the in-flight statement completed" rather than pretending it stopped
-(`lovelace-desktop/src/execution.rs:112`).
+(`InFlightCancellation`).
 
 ![A run in flight: statement progress in the log, the status strip at run Running, and the toolbar Cancel action](images/progress-and-cancel.png)
 
@@ -135,11 +136,11 @@ the desktop reports that as "the in-flight statement completed" rather than pret
 
 A run is sliced into top-level statements (`lovelace-desktop/src/statements.rs`). Each statement gets
 a `StatementKey` made of the normalized source, the submitted and effective precision, the ordered
-dependency values and the function revisions (`lovelace-desktop/src/incremental.rs:9`). The key is
+dependency values and the function revisions. The key is
 built from full canonical strings, never digests, so a hash collision cannot reuse a different
 statement. A statement that mentions a side-effecting builtin is never cached, and a cache hit is
 reported as reused only after the cached typed value was actually applied to the run's fresh engine
-(`incremental.rs:58`). The cache is per document and bounded at 4096 entries (`incremental.rs:111`).
+(`apply_cached`). The cache is per document and bounded at 4096 entries (`ENTRY_LIMIT`).
 
 ## Data flow of a run
 
@@ -169,7 +170,7 @@ rasterises those bytes with resvg — it never regenerates the plot.
 Everything the application writes outside a document lives under one application directory:
 `%APPDATA%\Lovelace\desktop.json` (settings), `plots\`, `recovery\` on Windows;
 `$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace` on Linux
-(`lovelace-desktop/src/settings.rs:1201`, `engine.rs:65`, `recovery.rs`). Saves are atomic – a temporary
+(`app_dir_from`, `default_plot_dir`, `recovery.rs`). Saves are atomic – a temporary
 file in the target's own directory, flushed, `sync_all`ed, then renamed over the target
-(`lovelace-desktop/src/document_io.rs:438`). The recovery journal applies the same write-then-rename
-discipline to `LOVELACE-RECOVERY` records (`recovery.rs:32`).
+(`document_io::write`). The recovery journal applies the same write-then-rename
+discipline to `LOVELACE-RECOVERY` records (`RecoveryRecord::write_atomic`).

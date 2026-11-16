@@ -2,14 +2,43 @@
 
 [![CI](https://github.com/jjackbauer/RustLace/actions/workflows/ci.yml/badge.svg)](https://github.com/jjackbauer/RustLace/actions/workflows/ci.yml)
 
-> The Lovelace stack — arbitrary-precision exact arithmetic, an N-dimensional array library, the
-> Lovelace scripting language and a native desktop IDE for Windows and Linux — in Rust, in one
-> workspace, with no external crates under the engine.
+**A native workbench for precision-controlled mathematical computing.**
 
-RustLace is the Rust-only successor of the [LovelaceSharp](https://github.com/jjackbauer/LovelaceSharp)
-stack. It keeps the behaviour the C# implementation defined — exact periodic decimals, the rendered
-text, the error sentences, the wire envelope — and replaces the browser IDE with a native workbench.
-There is no HTTP server and no browser runtime in the shipped product.
+RustLace brings arbitrary-precision arithmetic, N-dimensional arrays, symbolic mathematics,
+differentiation and series, polynomial solving and digital signal processing into a single scripting
+environment. Work interactively in the desktop workbench, or run scripts through the `lovelace-run`
+CLI for automation and reproducible results.
+
+The numerical engine uses exact integer and decimal-backed rational representations, with an explicit
+precision budget for the operations that cannot be exact. There is no floating-point type in the value
+path, and a result carries its kind, precision and exactness metadata instead of hiding them.
+
+RustLace runs natively on **Windows and Linux (X11)**. It is pre-1.0: what is supported, what is only
+partly verified, and what is known to be wrong are stated explicitly here rather than discovered later.
+
+**Try a calculation**
+
+```console
+$ cargo run -p lovelace-run -- --eval "1/3" --text
+= 0.(3) (Real)
+  _ = 0.(3)
+```
+
+`0.(3)` is the exact repeating-decimal representation of one third, not an approximation rendered to
+some number of places.
+
+**Get started:** [download the latest release](https://github.com/jjackbauer/RustLace/releases/latest) ·
+[build and run](docs/build-and-run.md) · [language reference](docs/language/README.md)
+
+## Current limitations
+
+- **Pre-1.0.** Interfaces change; the changelog and the conventional-commit history are the record.
+- **X11 is what is certified on Linux.** Wayland is untested, and on WSLg `WAYLAND_DISPLAY` must be
+  unset. GUI journey evidence is captured on Windows only; on Linux CI runs the workbench selftest and
+  the desktop suite headlessly rather than opening a window.
+- **macOS is not a supported platform.** No macOS host has been used and no claim is made.
+- **30-place results are precision-bounded, not exact.** "Exact decimal storage" and "mathematically
+  exact" are different claims; [docs/extensions/dsp.md](docs/extensions/dsp.md) distinguishes them.
 
 ![First launch of the native workbench, dark theme](docs/images/welcome-dark.png)
 
@@ -128,7 +157,7 @@ default wgpu backend on Windows and adds `glow` on other platforms. See
 Five layers, each with its own command — the detail is in [docs/testing.md](docs/testing.md).
 
 ```console
-$ cargo test --workspace          # 6135 tests (1 ignored), across the twelve crates
+$ cargo test --workspace          # 6135 tests (1 ignored) on v0.4.1, across the twelve crates
 $ cargo run --release -p lovelace-corpus   # the 214-record documentation corpus
 $ cargo run -p lovelace-desktop -- --gui-selftest   # 20 workbench checks, Windows and Linux
 $ cargo run -p lovelace-desktop -- --journey J-02   # recorded user journeys
@@ -159,7 +188,7 @@ overflows its main-thread stack at `lang/061`, while the release build of the sa
 | [docs/release.md](docs/release.md) | versioning, the release build, the signing caveat, the checklist |
 | [docs/contributing.md](docs/contributing.md) | workflow, commit style, review expectations, definition of done |
 | [docs/glossary.md](docs/glossary.md) | Real, LReal64/128, Modus, MathIR, statement boundary, precision |
-| [docs/adr/](docs/adr/) | seven architecture decision records |
+| [docs/adr/](docs/adr/) | eight architecture decision records |
 | [docs/crates/](docs/crates/) | one page per crate |
 | [docs/images/README.md](docs/images/README.md) | the screenshots and how they were captured |
 | [CONTRACT.md](CONTRACT.md) | the workspace contract: crates, fixed APIs, rendering rules, corpus |
