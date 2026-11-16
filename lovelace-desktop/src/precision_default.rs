@@ -6,14 +6,14 @@
 //! 1. [`fresh_defaults_are_thirty_digits_and_inside_the_fixed_width_gate`] pins the new value,
 //!    the `<= 37` gate the value is chosen to sit under, and the two default paths that must
 //!    take it (a fresh settings document and a new document) while a persisted value survives.
-//! 2. [`the_precision_gated_fixed_width_path_is_selected_at_30_and_not_at_1000`] is the
-//!    **representation witness**, not a timing claim. `dsp_movingavg` runs its reference
-//!    fixed-width path only while the engine's DSP precision is `<= 37`
-//!    (`rust/lovelace-lang/src/builtins.rs:5748`), and that path has an observable rendering the
-//!    arbitrary-precision path does not: `movingavg([2.5], 3)` renders the reference's malformed
-//!    period `0.(8)` at 30 and the ordinary exact period `0.8(3)` at 1000. The same run engine
-//!    the desktop executes therefore demonstrably selects the fixed-width representation at the
-//!    new default and not at the old one. The 37/38 pair pins the threshold itself.
+//! 2. [`movingavg_is_precision_independent_after_the_fixed_width_emulation_was_removed`] records
+//!    what replaced the old representation witness. `dsp_movingavg` used to substitute the
+//!    reference implementation's fixed-width division rendering below 38 digits, which answered
+//!    `0.(8)` (8/9) at 30 and `0.8(3)` (5/6) at 1000 for `movingavg([2.5], 3)`. That difference
+//!    was a defect in the substituted value, not a representation worth preserving, and the
+//!    emulation has been removed: `2.5 / 3` is `5/6` at every precision, so the 30-digit default
+//!    costs no correctness. The surviving DEV-009 evidence is observation 1 (the constant and the
+//!    default paths) plus observation 3 (the digit-budget timing).
 //! 3. [`sqrt_two_at_30_is_materially_faster_than_at_1000_and_correct`] measures the whole
 //!    `sqrt(2)` evaluation at 30 and at 1000 and verifies the 30-digit answer. This is a
 //!    *digit-budget* measurement: in the Rust engine `sqrt(2)` is a Real, and unlike the C#
@@ -94,10 +94,10 @@ fn fresh_defaults_are_thirty_digits_and_inside_the_fixed_width_gate() {
 }
 
 #[test]
-fn the_precision_gated_fixed_width_path_is_selected_at_30_and_not_at_1000() {
+fn movingavg_is_precision_independent_after_the_fixed_width_emulation_was_removed() {
     let mut engine = RealEngine::new();
 
-    // The same script at the new default, at the gate boundary, and at the old default.
+    // The same script at the new default, at the retired gate boundary, and at the old default.
     engine.set_precision(30);
     let at_30 = engine
         .eval("movingavg([2.5], 3)")
@@ -120,28 +120,25 @@ fn the_precision_gated_fixed_width_path_is_selected_at_30_and_not_at_1000() {
          38 -> {at_38:?}; 1000 -> {at_1000:?}"
     );
 
-    // `0.(8)` is the reference fixed-width divide's malformed-period rendering; the ordinary
-    // exact quotient renders as `0.8(3)`. Seeing the first at 30/37 and the second at 38/1000 is
-    // a direct witness of the representation the engine chose, with no timing involved.
+    // This test was DEV-009's representation witness: the fixed-width DSP path answered `[0.(8)]`
+    // (8/9) at 30/37 and the arbitrary-precision path `[0.8(3)]` (5/6) at 38/1000. That difference
+    // was a defect, not a representation worth preserving, and the emulation has been removed.
+    // `2.5 / 3` is `5/6` at every precision, so the result no longer depends on the digit budget:
+    // the 30-digit default is a performance choice that costs no correctness.
+    for (precision, value) in [
+        (30, &at_30),
+        (37, &at_37),
+        (38, &at_38),
+        (1000, &at_1000),
+    ] {
+        assert_eq!(
+            value, "[0.8(3)]",
+            "movingavg([2.5], 3) is 5/6 at {precision} digits"
+        );
+    }
     assert_eq!(
-        at_30, "[0.(8)]",
-        "the fixed-width DSP path must engage at the 30-digit default"
-    );
-    assert_eq!(
-        at_37, "[0.(8)]",
-        "the gate is inclusive at 37, so the fixed-width path still engages"
-    );
-    assert_eq!(
-        at_38, "[0.8(3)]",
-        "one digit above the gate the arbitrary-precision path answers"
-    );
-    assert_eq!(
-        at_1000, "[0.8(3)]",
-        "at the old 1000 default the fixed-width path never engages"
-    );
-    assert_ne!(
         at_30, at_1000,
-        "the observable must differ, or this is not a representation witness"
+        "the result must not depend on the precision budget"
     );
 }
 
