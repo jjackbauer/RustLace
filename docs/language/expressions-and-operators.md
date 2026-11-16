@@ -274,10 +274,13 @@ Error [InvalidOperation/DomainError]: Cannot apply '+' to 'Text' and 'Text'.
 
 ### Division
 
-Division is exact. Two exact integers with an exact quotient narrow back to a Natural or Integer;
-otherwise the result is a Real. A non-terminating decimal is stored with its exact period:
-`1 / 3` is `0.(3)`, not a rounded value. `1 / 4` is `0.25` (a Real, because the operands were not
-both exact-integer quotients that narrow; the value is still exact).
+Division is exact when the quotient's decimal expansion terminates or its repeating period fits
+the active computation budget. Two exact integers with an exact quotient narrow back to a Natural
+or Integer; otherwise the result is a Real. A non-terminating decimal whose period fits is stored
+with its exact period: `1 / 3` is `0.(3)`, not a rounded value. `1 / 4` is `0.25` (a Real, because
+the operands were not both exact-integer quotients that narrow; the value is still exact). If the
+period does not fit the budget, the quotient is truncated at the budget and marked inexact:
+`setprecision(5); 1 / 7` stores `0.14285`, not the exact `1/7`.
 
 Division by zero is a `DivisionByZero` / `DomainError` failure. The sentence differs slightly by
 tier: two exact operands say "Cannot divide by zero.", while a Real operand says "Cannot divide a

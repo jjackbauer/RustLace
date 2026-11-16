@@ -47,14 +47,14 @@ $ cargo run -p lovelace-run -- --eval "1/3"
 Sources: `--eval <src>`, `--file <path>`, `--stdin`, or a bare script path. Options include
 `--plot-dir`, `--plot-file`, `--cancel-after <ms>`, `--print-budget <n>`, `--omit-functions`,
 `--omit-variables`, `--functions [pattern]`, `--function <name>`, `--function-limit <n>`, `--repl`,
-`--json` and `--text` (`lovelace-run/src/main.rs:70`). Exit codes: 0 success, 1 script or diagnostic
+`--json` and `--text` (`usage`). Exit codes: 0 success, 1 script or diagnostic
 failure, 2 usage.
 
 ## Run the desktop
 
 ```console
 $ cargo run -p lovelace-desktop                  # the workbench
-$ cargo run -p lovelace-desktop -- notes.lv      # opened on a file
+$ cargo run -p lovelace-desktop -- notes.ls      # opened on a file
 $ cargo run -p lovelace-desktop -- --gui-selftest
 $ cargo run -p lovelace-desktop -- --help
 ```
@@ -119,7 +119,7 @@ $ sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcur
   face whose own line box is at least 1.15x at their size; `NimbusSans-Bold.otf` (URW base35, 1.20
   em) satisfies it and the DejaVu faces do not. Without it the strong-role test fails with
   `measured row 17.00 is below 1.15x15.00`, and `--legibility-check` fails on the same roles. The
-  Windows build tries `seguisb.ttf`/`segoeuib.ttf` first and is unchanged (`ui/type_scale.rs:99`).
+  Windows build tries `seguisb.ttf`/`segoeuib.ttf` first and is unchanged (`STRONG_FACES`).
 - `libgl1-mesa-dri` is mesa's software GL (llvmpipe), the renderer on a machine with no GPU such as
   a CI runner under Xvfb or WSLg.
 - `xvfb` and `xauth` are for the display-less runs (`xvfb-run`); `x11-utils` (`xwininfo`) and
@@ -131,7 +131,7 @@ $ sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcur
 Windows build keeps the default feature set and the default `wgpu` renderer, and nothing here
 changes it. The non-Windows build compiles eframe's `glow` (OpenGL) backend as well
 (`lovelace-desktop/Cargo.toml:39`), and `ui::native_options` selects `eframe::Renderer::Glow` there
-(`lovelace-desktop/src/ui/app.rs:9908`).
+(`lovelace-desktop/src/ui/app.rs`).
 
 The reason is the host, not a preference. Under WSLg there is no `/dev/dri`, and the wgpu path dies
 with `WGPU error: Parent device is lost` (`MESA: error: ZINK: failed to choose pdev`), while the GLX
@@ -145,7 +145,7 @@ in this tree supports. `Renderer::Glow` does not exist in a Windows build (the v
 ```console
 $ export DISPLAY=:0
 $ unset WAYLAND_DISPLAY
-$ cargo run --release -p lovelace-desktop -- notes.lv
+$ cargo run --release -p lovelace-desktop -- notes.ls
 ```
 
 `WAYLAND_DISPLAY` matters under WSLg: when it is set, winit selects the Wayland backend, WSLg's
@@ -183,7 +183,7 @@ the writable application directory it uses is `$XDG_CONFIG_HOME/lovelace` or `~/
 ### What stays Windows-only
 
 `--legacy-win32`, `--ime-probe` and `--platform-parity` are Win32 code and are refused by name on
-Linux with exit 2 (`lovelace-desktop/src/main.rs:148`, `:174`, `:287`). Everything else in the
+Linux with exit 2 (the mode dispatch in `main`). Everything else in the
 mode table runs on Linux, including `--journey`, `--raster-svg` and the audit modes; `--selftest`
 reports 14 checks, 0 failed and one named skip (`no-network-imports` reads a PE import table).
 
@@ -197,20 +197,20 @@ as a cancel.
 
 | Variable | Effect | Source |
 |---|---|---|
-| `APPDATA` | Root of the application directory: `desktop.json`, `plots\`, `recovery\`. On Linux the root is `$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace` | `lovelace-desktop/src/settings.rs:1201`, `engine.rs:65` |
-| `LOVELACE_THREADS` | Pins the worker budget for determinism experiments | `lovelace-nat/src/lib.rs:85` |
-| `LOVELACE_NTT_THRESHOLD` | Pins the NTT crossover without rebuilding | `lovelace-nat/src/lib.rs:105` |
-| `LOVELACE_FACTORIAL_LEAF` | Pins the factorial product-tree leaf size | `lovelace-nat/src/lib.rs:811` |
-| `LOVELACE_RUN` | Path to the runner the knowledge graph spawns | `lovelace-know/src/runner.rs:210` |
-| `LOVELACE_RECORD_GOLDENS` | `=1` rewrites the golden wire fixtures instead of comparing | `lovelace-run/src/golden_batch.rs:17` |
-| `LOVELACE_RUN_TRACE` | File (or `stderr`) that receives one line per run mark | `lovelace-desktop/src/run_trace.rs:15` |
-| `LOVELACE_MEASURE_TRACE` | Per-pass CSV path for the measurement modes | `lovelace-desktop/src/ui/measure.rs:125` |
-| `LOVELACE_ENGINE_FAULT` | `panic-once` injects one engine panic (RUN-017 recovery capture) | `lovelace-desktop/src/engine/fault.rs:18` |
-| `LOVELACE_PLOT_FAULT` | `malformed` or `oversized` corrupts the plot capture | `lovelace-desktop/src/ui/app.rs:999` |
-| `LOVELACE_LOG_FLOOD` | `<n>` appends n stdout records and one fatal at launch | `lovelace-desktop/src/ui/app.rs:996` |
-| `LOVELACE_LOG_START_SCROLLED` | Starts the log view away from the newest record | `lovelace-desktop/src/ui/app.rs:801` |
-| `LOVELACE_IME_NO_SHORTCUT` | `=1` skips the shortcut-during-composition probe | `lovelace-desktop/src/ime_probe.rs:462` |
-| `LOVELACE_PROBE_DWMFLUSH` | `=1` blocks on `DwmFlush` once per frame probe pass | `lovelace-desktop/src/frame_probe.rs:10` |
+| `APPDATA` | Root of the application directory: `desktop.json`, `plots\`, `recovery\`. On Linux the root is `$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace` | `app_dir_from`, `default_plot_dir` |
+| `LOVELACE_THREADS` | Pins the worker budget for determinism experiments | `thread_budget` |
+| `LOVELACE_NTT_THRESHOLD` | Pins the NTT crossover without rebuilding | `ntt_threshold` |
+| `LOVELACE_FACTORIAL_LEAF` | Pins the factorial product-tree leaf size | `factorial_leaf` |
+| `LOVELACE_RUN` | Path to the runner the knowledge graph spawns | `resolve_runner` |
+| `LOVELACE_RECORD_GOLDENS` | `=1` rewrites the golden wire fixtures instead of comparing | `RECORD_ENV` |
+| `LOVELACE_RUN_TRACE` | File (or `stderr`) that receives one line per run mark | `run_trace::mark` |
+| `LOVELACE_MEASURE_TRACE` | Per-pass CSV path for the measurement modes | `FrameTrace` |
+| `LOVELACE_ENGINE_FAULT` | `panic-once` injects one engine panic (RUN-017 recovery capture) | `FAULT_ENV` |
+| `LOVELACE_PLOT_FAULT` | `malformed` or `oversized` corrupts the plot capture | `faulted_capture_svg` |
+| `LOVELACE_LOG_FLOOD` | `<n>` appends n stdout records and one fatal at launch | `Workbench::flood_log_active` |
+| `LOVELACE_LOG_START_SCROLLED` | Starts the log view away from the newest record | `log_force_scrolled` |
+| `LOVELACE_IME_NO_SHORTCUT` | `=1` skips the shortcut-during-composition probe | `ProbeApp::step` |
+| `LOVELACE_PROBE_DWMFLUSH` | `=1` blocks on `DwmFlush` once per frame probe pass | `compositor_flush` |
 
 The `LOVELACE_*_FAULT`, `_FLOOD` and `_START_SCROLLED` switches are acceptance seams: they exist so a
 test can reach a state a script cannot, and none of them is on by default. `LOVELACE_LOG_FLOOD=4000`
@@ -244,7 +244,7 @@ enough (the strong-role test reports `measured row 17.00 is below 1.15x15.00`); 
 
 **`Cannot create the plot directory ... Access is denied`.** The log pane reports it at start-up; the
 process could not create `%APPDATA%\Lovelace\plots`. Set `APPDATA` to a writable directory. Plot
-statements then fail with that message rather than silently writing nowhere (`engine.rs:90`).
+statements then fail with that message rather than silently writing nowhere (`prepare_plot_dir`).
 
 **`cargo build` cannot reach a registry.** The engine and the CLI do not need one. The desktop does:
 its GUI stack is the only external dependency (`eframe`/`egui`, `resvg`, `raw-window-handle`), and
@@ -252,4 +252,4 @@ it is declared in the desktop crate only.
 
 **A settings file written by a newer build.** `Settings::from_json` has no error return: an unknown
 schema, a wrong field type or a corrupt file yields the defaults plus a warning
-(`settings.rs:1`).
+(`lovelace-desktop/src/settings.rs`).

@@ -14,14 +14,14 @@ returns, worked examples, and the limits that are specific to it.
 `44 + 16 + 59 + 5 = 124`, which is exactly what `lovelace-run --functions` reports (`total: 124`)
 and what the execution envelope's `functions` array contains. The registry's own doc comment pins two
 of those numbers independently: a Symbolics + MathIR engine publishes 108, a runner with DSP
-publishes 124 (`lovelace-lang/src/registry.rs:33-37`).
+publishes 124 (`builtin_count_for_plugins`).
 
 ## Which builtins belong to which extension
 
 The family key is the **`plugin` field**, not `category`:
 
 ```rust
-// lovelace-lang/src/registry.rs:19-20
+// lovelace-lang/src/registry.rs (the plugin field)
 /// The plugin that registered it, when it is not core.
 pub plugin: Option<&'static str>,
 ```
@@ -50,7 +50,7 @@ An extension is a **named set of registry descriptors**, gated at the call site 
 `Engine::plugin_enabled`:
 
 ```rust
-// lovelace-lang/src/lib.rs:988-998
+// lovelace-lang/src/lib.rs (the plugin gate)
 fn plugin_enabled(&self, name: &str) -> bool {
     let Some(enabled) = &self.enabled_plugins else {
         return true;
@@ -66,15 +66,15 @@ Three states follow from that:
 
 | Engine | `enabled_plugins` | Callable builtins |
 | --- | --- | --- |
-| `Engine::new()` (`lib.rs:830`) | `None` | all 124 — core plus every family |
-| `Engine::new_bare()` (`lib.rs:875`) | `Some(empty)` | 44 core only |
-| `new_bare()` + `load_plugin` (`lib.rs:883`) | `Some({name})` | core plus the descriptors tagged with that name |
+| `Engine::new()` (`Engine::new`) | `None` | all 124 — core plus every family |
+| `Engine::new_bare()` (`Engine::new_bare`) | `Some(empty)` | 44 core only |
+| `new_bare()` + `load_plugin` (`load_plugin`) | `Some({name})` | core plus the descriptors tagged with that name |
 
 `Engine::default()` is `Engine::new()`, and `lovelace-run` always uses it: the CLI's usage block has
 no plugin flag, so **every CLI run has all 124 builtins available** and there is no CLI way to see a
 bare engine.
 
-The `ModusPlugin` trait (`lovelace-lang/src/modus.rs:927-933`) is the dynamic seam for a host
+The `ModusPlugin` trait (declared in `lovelace-lang/src/modus.rs`) is the dynamic seam for a host
 (including a test) that wants to add builtins of its own:
 
 ```rust
@@ -85,7 +85,7 @@ pub trait ModusPlugin {
 ```
 
 A `load_plugin` call does two things: it runs `register` (which may add builtins and kernels,
-`lib.rs:883-889`), and it inserts `plugin.name()` into `enabled_plugins`. Because the gate compares
+inside `load_plugin`), and it inserts `plugin.name()` into `enabled_plugins`. Because the gate compares
 that string against the *registry descriptor's* tag, a plugin whose name is `"Lovelace.Dsp"` makes
 the engine's own 16 DSP builtins callable **without registering any of them**. The demo
 [`bare_engine.rs`](../../lovelace-lang/examples/bare_engine.rs) does exactly that for all three families:
@@ -124,12 +124,12 @@ Constant 0 0
 
 Three things to read out of that transcript: core builtins (`abs`, `det`) never depend on a family;
 an unloaded family fails as `UnknownFunction` / `Unknown function '<name>'.` (category
-`UnsupportedOperation`, `builtins.rs:4279`), not with a plugin-specific error; and enabling a family
+`UnsupportedOperation`, `unknown_function_among`), not with a plugin-specific error; and enabling a family
 does not bind symbols or pre-evaluate anything (`diff(x^2, x)` is still an undefined variable).
 
 **There is no production `ModusPlugin` implementation in this tree.** Every `impl ModusPlugin` lives
-in a `#[cfg(test)]` module — `round67_modus.rs` (declared at `lib.rs:2796-2797`) and
-`round69_parameter_domain.rs` (`lib.rs:2800-2801`). The shipped families are registry declarations
+in a `#[cfg(test)]` module — `round67_modus.rs` and `round69_parameter_domain.rs` (both declared in
+`lovelace-lang/src/lib.rs`). The shipped families are registry declarations
 gated by name, exactly as described above; `AGENTS.md` states the same ("there is no production
 plugin directory yet"). A host that wants a *new* family implements the trait; nothing in the
 shipped three needs it to be loaded.
@@ -162,7 +162,7 @@ it:
 powershell -NoProfile -ExecutionPolicy Bypass -File docs/extensions/examples/run-examples.ps1
 ```
 
-The runner writes each snippet to a `.lv` file and runs `lovelace-run --file <path> --text
+The runner writes each snippet to a temporary script file and runs `lovelace-run --file <path> --text
 --omit-variables`, then compares the combined stdout/stderr with the documented block after
 whitespace normalisation. It prints one line per example, a total, and exits 0 only when every
 example matches. It sets `TEMP`/`APPDATA` to a scratch directory inside the clone so nothing leaks
@@ -177,7 +177,7 @@ shell artefact, not a language behaviour.
 
 - **Statistics does not exist.** There is no Statistics family, no `Statistics` category, and no
   `StatisticsPlugin` in production. The only `StatisticsPlugin` in the tree is a test double inside
-  `#[cfg(test)] mod round67_modus` (`round67_modus.rs:65`), which exists to exercise the plugin seam.
+  `#[cfg(test)] mod round67_modus` (`lovelace-lang/src/round67_modus.rs`), which exists to exercise the plugin seam.
   Names like `mean`/`sum`/`min`/`max`/`norm` are **core** `Arrays` reductions.
 - **Linear algebra is core.** `det`, `eig_sym`, `inv`, `inv_full`, `linsolve`, `linsolve_full`,
   `matrix_rank`, `trace` and `matmul` are `plugin: None`; they work on a bare engine.

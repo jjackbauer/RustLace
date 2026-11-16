@@ -1,5 +1,12 @@
 # Mandatory journeys — executable specification
 
+> **Historical snapshot — a carried specification.** This file is a historical carried specification
+> from the LovelaceSharp repository, not current project evidence. Its per-journey capture artifacts
+> (`round-33/`, `round-44/`, `round-47/`, `round-61/`, `deviations.md`) live in that repository and
+> are deliberately not carried here, so those links do not resolve. The desktop `--journey` tests
+> read this file for its expected observables: the table below is machine-read and must not be
+> edited as prose.
+
 CON-007 and TST-001 require each of the 22 named journeys to have an input, an action sequence, an
 expected observable and a reproducible artifact. This file is the executable specification; the
 `Status` column says what is required before the journey can be run against the product window. A

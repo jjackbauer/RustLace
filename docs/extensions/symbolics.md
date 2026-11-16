@@ -3,7 +3,9 @@
 **59 builtins.** The largest family in the engine — exact computer algebra, from `diff` to
 Gröbner-basis system solving.
 
-## What it is
+## Purpose
+
+### What it is
 
 Symbolics is the exact algebra family: expression construction (`symbol`, the four domain values),
 calculus (`diff`, `integrate`, `series`, `limit`), rewriting (`simplify`, `expand`, `factor`,
@@ -28,14 +30,47 @@ Calculus, `optimize` is Optimization, yet all are this family. The `plugin` fiel
 used to reconstruct family membership — the execution envelope and the registry source carry
 `plugin`.
 
-## How it is enabled
+### Where the code lives
+
+| Path | What is there |
+| --- | --- |
+| `lovelace-lang/src/registry.rs` | the 59 descriptors; plugin tags at lines 69-1678 |
+| `lovelace-lang/src/builtins.rs` | dispatch arms and the symbolic builtin implementations |
+| `lovelace-lang/src/lib.rs` | `Engine` assumption state, the plugin gate (990), `load_plugin` (883) |
+| `lovelace-lang/src/modus.rs` | the typed payload channel a host plugin registers through |
+| `lovelace-symbolics/src/lib.rs` | canonical `Expr`, the algebra |
+| `lovelace-symbolics/src/assumptions.rs` | the tri-state assumption kernel |
+| `lovelace-symbolics/src/{polynomials,groebner,rational_functions,series_kink,symbolic_matrix}.rs` | the algorithms behind `factor`/`solve_system`/`apart`/`series`/`linsolve` |
+| `lovelace-symbolics/src/rewrite_registry.rs` | stable rewrite rule ids used by `simplify_full` |
+
+Tests that cover it (`cargo test -p lovelace-lang`, modules that drive the symbolic surface):
+
+| Test module | Tests |
+| --- | --- |
+| `symbolics_tail_round34` | 66 |
+| `suite_engine_batch` | 42 |
+| `round28_batch` | 22 |
+| `assumptions_round35` | 17 |
+| `round90_symbolic_families` | 12 |
+| `round97_tail` | 12 |
+| `symbolics_round23` | 8 |
+| `round92_symbolic_families` | 6 |
+| `round67_modus` | 22 |
+
+The `lovelace-symbolics` crate carries its own batch modules (`round67_polynomial_algebra`,
+`round90_symbolic_families`, `round92_symbolic_families`, `tail_round34`, `assumptions`,
+`series_kink`, `groebner`) which are the unit-level layer beneath these.
+
+## Inputs
+
+### How it is enabled
 
 `lovelace-run` always builds `Engine::new()`, so all 59 names are live in every CLI run; there is no
 CLI flag that disables a family. On the library side, `Engine::new()` leaves `enabled_plugins` as
 `None`, which makes `Engine::plugin_enabled` answer `true` for every registered name
 ([`lovelace-lang/src/lib.rs`](../../lovelace-lang/src/lib.rs), lines 990-998).
 
-`Engine::new_bare()` (`lib.rs:875`) sets `enabled_plugins = Some(empty)`, so the family disappears
+`Engine::new_bare()` (`lovelace-lang/src/lib.rs`) sets `enabled_plugins = Some(empty)`, so the family disappears
 and the call fails the way an unknown name fails. Observed from
 [`bare_engine.rs`](../../lovelace-lang/examples/bare_engine.rs) (run it with `cargo run -p lovelace-lang --example bare_engine`):
 
@@ -45,8 +80,8 @@ bare+sym   symbol("x")              => x
 bare+sym   diff(x^2, x)             => [InvalidOperation] Undefined variable 'x'.
 ```
 
-That is `code = UnknownFunction`, `category = UnsupportedOperation` (`builtins.rs:4279`), raised at
-the gate (`lib.rs:2146-2150`). It is the same failure an unknown name gives; there is no separate
+That is `code = UnknownFunction`, `category = UnsupportedOperation` (`unknown_function_among`), raised at
+the gate (`Engine::call`). It is the same failure an unknown name gives; there is no separate
 "plugin not loaded" error. The third line is the important one: loading the family makes the
 *builtins* callable, it does not bind any symbol — `x` is still undefined until the script assigns
 it.
@@ -83,7 +118,9 @@ Error [InvalidOperation/DomainError]: Undefined variable 'x'.
 
 The binding is `x = symbol("x")`, and it must come first in the same session.
 
-## Every function it contributes
+## Outputs
+
+### Every function it contributes
 
 Arity is `min-max` accepted arguments. Parameters and descriptions are the registry's declared
 metadata; every row was executed and its typed result is in the [verified-call appendix](#verified-calls).
@@ -150,7 +187,83 @@ metadata; every row was executed and its typed result is in the [verified-call a
 | `tan` | 1 | `x` | Symbolic | The tangent function. |
 | `tanh` | 1 | `x` | Symbolic | The hyperbolic tangent. |
 
-## Worked examples
+## Precision behaviour
+
+### Precision, assumptions and limits
+
+- **Symbols must be bound.** There is no implicit symbolic variable. `x` is an undefined variable
+  until `x = symbol("x")` (or `symbol("x", real)` to carry a domain). This is the single most common
+  way a Symbolics example fails.
+- **Assumptions are session state, not a parameter.** `assume_*` / `assume` store into the engine;
+  `assume_clear()` empties the set; `assumptions()` reads it back as an `AssumptionSet`. Nothing is
+  carried across engines, and the engine does not reject contradictory relations: after
+  `assume(x > 5)`, evaluating `x < 3` simply answers `x < 3` (observed).
+- **`evalf` has a 1000-place computation cap and a 100-place display default.** A request above the
+  cap is truncated and says so in the structured payload: for `evalf(pi, 5000)` the observed record
+  carries `truncated: true`, `truncationReason: "digit-cap"`, `budget: 1000`, `exact: false`, a
+  `value` holding 1000 digits, and a `display`/`typed` holding the 100-digit rendering. The display
+  bound is separate from the computation bound and is 100 until `setprecision` moves it.
+- **Domains.** `solve` accepts `real` and `complex`; `integer` and `rational` are refused with the
+  message quoted above. `capabilities()` publishes exactly that split
+  (`solve_domains_accepted: [real, complex]`, `solve_domains_refused: [integer, rational]`).
+- **Exactness is reported, not assumed.** `solve`/`limit`/`integrate_full`/`cancel_full`/
+  `simplify_full` return records whose fields say whether the answer is `Exact` or `BestEffort`, and
+  which conditions it holds under. `cancel(f)` is the bare-value form and explicitly cannot carry
+  those conditions — use `cancel_full` when the domain delta matters.
+- **`capabilities()` is the machine-readable limit list.** It returns a `CapabilitiesResult` naming
+  every known-unsupported operation class with the exact code, category and message its live call
+  produces (non-integer powers, unsupported solve domains, complex algebraic `RootOf`,
+  unevaluated integration diagnostics, symbolic `plot` arguments, non-symbolic variables, and more).
+- **Rewrite budget.** A transformation applies at most 400 rules (`REWRITE_MAX_STEPS`); a rewrite
+  that would exceed it stops rather than looping.
+- **Solver working precision.** Constant folding and candidate verification in the solver run at 40
+  decimal places (`constant_real`, `numeric_residual_is_zero`), independent of the display precision.
+
+## Errors
+
+Every refusal is a `LangError` with a stable code and category, and some outcomes that look like
+failures are documented results instead.
+
+| Failure | Code / category |
+|---|---|
+| Wrong argument count at the call site | `InvalidArgument` / `TypeMismatch`, with the declared signature |
+| An undefined variable such as `diff(x^2, x)` without `x = symbol("x")` | `InvalidOperation` / `DomainError`, message `Undefined variable 'x'.` |
+| A solve domain other than `real` or `complex` | `InvalidOperation` / `DomainError`, naming the accepted set |
+| A non-integer exponent outside the supported cases | `UnsupportedOperation` / `UnsupportedOperation`, message `Non-integer exponents are not yet supported.` |
+| A name from an unloaded family | `UnknownFunction` / `UnsupportedOperation`, the ordinary unknown-name failure |
+
+An unevaluated integral is **not** an error: `integrate(exp(x^2), x)` returns the integral as a
+`Symbolic` value and the process exits 0. A solve that finds no solution is not an error either:
+`solve(x^2 + 1 == 0, x, real)` returns a `SolveResult` with `status: NoSolutions` and a diagnostic.
+The worked examples below show each of these in the observed output.
+
+## Limitations
+
+### What is NOT in this extension
+
+- **No linear algebra.** `det`, `eig_sym`, `inv`, `inv_full`, `linsolve`, `linsolve_full`,
+  `matrix_rank`, `trace` and `matmul` are all **core** (`plugin: None`), even though `linsolve` is
+  the symbolic Bareiss solver. They are callable on a bare engine and are not part of the 59.
+- **No general eigen-decomposition.** `eig_sym` is the core, real-symmetric-only eigensolver; there
+  is no `eigen`, `eigenvalue`, `eigenvector` or general decomposition builtin anywhere in the
+  registry — and the C# Studio it descends from had none either. Do not expect SVD/QR/LU/cholesky
+  either.
+- **No differential equations.** No `dsolve`, no `ode`, no Laplace or Fourier *transform* builtins
+  (`fft`/`dft` are discrete numeric transforms in DSP, not symbolic ones).
+- **No symbolic summation or products.** No `summation`, `product`, `telescope`.
+- **No non-integer powers.** `2^(1/2)`, `4^(1/2)`, `0.5^(1/2)` are all refused with
+  `Non-integer exponents are not yet supported.` (`capabilities()` documents the exact scope: a
+  negative base under the principal square root *is* supported, e.g. `sqrt(-4)` → `2*i`).
+- **No numeric root-finding or quadrature.** `evalf` evaluates closed forms; there is no Newton
+  iteration or adaptive integration entry point.
+- **`inspect`, `type`, `print` are core** Introspection builtins, not Symbolics — only `capabilities`
+  and `latex` belong to the family.
+- **`plot` is core `Language`**, and `capabilities()` advertises it as refusing symbolic
+  arguments (`plot.symbolic-expression`); this family draws nothing.
+
+## Examples
+
+### Worked examples
 
 Differentiation of a polynomial, the canonical form:
 
@@ -244,90 +357,7 @@ Non-integer powers are not implemented, and the refusal is the kernel's own mess
 Error [UnsupportedOperation/UnsupportedOperation]: Non-integer exponents are not yet supported.
 ```
 
-## Precision, assumptions and limits
-
-- **Symbols must be bound.** There is no implicit symbolic variable. `x` is an undefined variable
-  until `x = symbol("x")` (or `symbol("x", real)` to carry a domain). This is the single most common
-  way a Symbolics example fails.
-- **Assumptions are session state, not a parameter.** `assume_*` / `assume` store into the engine;
-  `assume_clear()` empties the set; `assumptions()` reads it back as an `AssumptionSet`. Nothing is
-  carried across engines, and the engine does not reject contradictory relations: after
-  `assume(x > 5)`, evaluating `x < 3` simply answers `x < 3` (observed).
-- **`evalf` has a 1000-place computation cap and a 100-place display default.** A request above the
-  cap is truncated and says so in the structured payload: for `evalf(pi, 5000)` the observed record
-  carries `truncated: true`, `truncationReason: "digit-cap"`, `budget: 1000`, `exact: false`, a
-  `value` holding 1000 digits, and a `display`/`typed` holding the 100-digit rendering. The display
-  bound is separate from the computation bound and is 100 until `setprecision` moves it.
-- **Domains.** `solve` accepts `real` and `complex`; `integer` and `rational` are refused with the
-  message quoted above. `capabilities()` publishes exactly that split
-  (`solve_domains_accepted: [real, complex]`, `solve_domains_refused: [integer, rational]`).
-- **Exactness is reported, not assumed.** `solve`/`limit`/`integrate_full`/`cancel_full`/
-  `simplify_full` return records whose fields say whether the answer is `Exact` or `BestEffort`, and
-  which conditions it holds under. `cancel(f)` is the bare-value form and explicitly cannot carry
-  those conditions — use `cancel_full` when the domain delta matters.
-- **`capabilities()` is the machine-readable limit list.** It returns a `CapabilitiesResult` naming
-  every known-unsupported operation class with the exact code, category and message its live call
-  produces (non-integer powers, unsupported solve domains, complex algebraic `RootOf`,
-  unevaluated integration diagnostics, symbolic `plot` arguments, non-symbolic variables, and more).
-- **Rewrite budget.** A transformation applies at most 400 rules (`REWRITE_MAX_STEPS`,
-  `builtins.rs:12013`); a rewrite that would exceed it stops rather than looping.
-- **Solver working precision.** Constant folding and candidate verification in the solver run at 40
-  decimal places (`builtins.rs:7989`), independent of the display precision.
-
-## Where the code lives
-
-| Path | What is there |
-| --- | --- |
-| `lovelace-lang/src/registry.rs` | the 59 descriptors; plugin tags at lines 69-1678 |
-| `lovelace-lang/src/builtins.rs` | dispatch arms and the symbolic builtin implementations |
-| `lovelace-lang/src/lib.rs` | `Engine` assumption state, the plugin gate (990), `load_plugin` (883) |
-| `lovelace-lang/src/modus.rs` | the typed payload channel a host plugin registers through |
-| `lovelace-symbolics/src/lib.rs` | canonical `Expr`, the algebra |
-| `lovelace-symbolics/src/assumptions.rs` | the tri-state assumption kernel |
-| `lovelace-symbolics/src/{polynomials,groebner,rational_functions,series_kink,symbolic_matrix}.rs` | the algorithms behind `factor`/`solve_system`/`apart`/`series`/`linsolve` |
-| `lovelace-symbolics/src/rewrite_registry.rs` | stable rewrite rule ids used by `simplify_full` |
-
-Tests that cover it (`cargo test -p lovelace-lang`, modules that drive the symbolic surface):
-
-| Test module | Tests |
-| --- | --- |
-| `symbolics_tail_round34` | 66 |
-| `suite_engine_batch` | 42 |
-| `round28_batch` | 22 |
-| `assumptions_round35` | 17 |
-| `round90_symbolic_families` | 12 |
-| `round97_tail` | 12 |
-| `symbolics_round23` | 8 |
-| `round92_symbolic_families` | 6 |
-| `round67_modus` | 22 |
-
-The `lovelace-symbolics` crate carries its own batch modules (`round67_polynomial_algebra`,
-`round90_symbolic_families`, `round92_symbolic_families`, `tail_round34`, `assumptions`,
-`series_kink`, `groebner`) which are the unit-level layer beneath these.
-
-## What is NOT in this extension
-
-- **No linear algebra.** `det`, `eig_sym`, `inv`, `inv_full`, `linsolve`, `linsolve_full`,
-  `matrix_rank`, `trace` and `matmul` are all **core** (`plugin: None`), even though `linsolve` is
-  the symbolic Bareiss solver. They are callable on a bare engine and are not part of the 59.
-- **No general eigen-decomposition.** `eig_sym` is the core, real-symmetric-only eigensolver; there
-  is no `eigen`, `eigenvalue`, `eigenvector` or general decomposition builtin anywhere in the
-  registry — and the C# Studio it descends from had none either. Do not expect SVD/QR/LU/cholesky
-  either.
-- **No differential equations.** No `dsolve`, no `ode`, no Laplace or Fourier *transform* builtins
-  (`fft`/`dft` are discrete numeric transforms in DSP, not symbolic ones).
-- **No symbolic summation or products.** No `summation`, `product`, `telescope`.
-- **No non-integer powers.** `2^(1/2)`, `4^(1/2)`, `0.5^(1/2)` are all refused with
-  `Non-integer exponents are not yet supported.` (`capabilities()` documents the exact scope: a
-  negative base under the principal square root *is* supported, e.g. `sqrt(-4)` → `2*i`).
-- **No numeric root-finding or quadrature.** `evalf` evaluates closed forms; there is no Newton
-  iteration or adaptive integration entry point.
-- **`inspect`, `type`, `print` are core** Introspection builtins, not Symbolics — only `capabilities`
-  and `latex` belong to the family.
-- **`plot` is core `Language`**, and `capabilities()` advertises it as refusing symbolic
-  arguments (`plot.symbolic-expression`); this family draws nothing.
-
-## Verified calls
+### Verified calls
 
 Every builtin in the table above was executed through the built CLI. Each row is the exact one-line
 call (statements joined with `;`) and the typed result observed. Results longer than 150 characters

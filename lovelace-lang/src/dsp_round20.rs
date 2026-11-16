@@ -128,16 +128,21 @@ fn movingavg_given_empty_or_short_signal_is_empty() {
 }
 
 #[test]
-fn movingavg_given_fractional_samples_keeps_the_fixed_width_period_rendering() {
-    // The oracle's fixed-width path reports 0.(8) for 2.5/3 (a malformed-period state);
-    // the observable is preserved exactly.
-    assert_eq!(typed("movingavg([2.5], 3)"), "[0.(8)] (Vector)");
-    assert_eq!(typed("movingavg([0.1], 3)"), "[0.(0)] (Vector)");
+fn movingavg_given_fractional_samples_divides_exactly() {
+    // The average of one sample with window 3 is that sample divided by 3, and the engine divides
+    // exactly: 2.5/3 = 5/6 = 0.8(3), 0.1/3 = 1/30 = 0.0(3). These used to answer 0.(8) (8/9) and
+    // 0.(0) (zero) because a rendering of the reference's fixed-width division was substituted for
+    // the correct quotient; that emulation has been removed.
+    assert_eq!(typed("movingavg([2.5], 3)"), "[0.8(3)] (Vector)");
+    assert_eq!(typed("movingavg([0.1], 3)"), "[0.0(3)] (Vector)");
 }
 
 #[test]
-fn movingavg_given_periodic_samples_marks_the_fixed_width_result_inexact() {
-    assert!(!element_exact("movingavg([1/3], 3)", 0));
+fn movingavg_given_periodic_samples_is_exact_at_every_precision() {
+    // 1/9 is exactly representable as 0.(1). The result is exact because the quotient comes from
+    // `Real::div` and is no longer re-derived through the reference's fixed-width expansion, which
+    // reported it inexact even though the rational was exactly representable.
+    assert!(element_exact("movingavg([1/3], 3)", 0));
     assert_eq!(typed("movingavg([1/3], 3)"), "[0.(1)] (Vector)");
 }
 
@@ -148,6 +153,37 @@ fn movingavg_given_precision_above_the_fixed_width_keeps_periodic_exactness() {
         typed("setprecision(50); movingavg([1/3], 3)"),
         "[0.(1)] (Vector)"
     );
+}
+
+#[test]
+fn movingavg_matches_exact_division_at_every_precision() {
+    // Mathematical oracle, independent of any C# fixture: the moving average of a single sample
+    // with window 3 is that sample divided by 3, and the engine divides exactly. The result must be
+    // identical on both sides of the old 38-digit threshold and at the desktop's 30-digit default.
+    assert_eq!(typed("2.5/3"), "0.8(3) (Real)");
+    assert_eq!(typed("0.1/3"), "0.0(3) (Real)");
+
+    for precision in [
+        "",
+        "setprecision(30); ",
+        "setprecision(37); ",
+        "setprecision(38); ",
+        "setprecision(1000); ",
+    ] {
+        assert_eq!(
+            typed(&format!("{precision}movingavg([2.5], 3)")),
+            "[0.8(3)] (Vector)",
+            "movingavg([2.5], 3) must be 5/6 at {precision:?}"
+        );
+        assert_eq!(
+            typed(&format!("{precision}movingavg([0.1], 3)")),
+            "[0.0(3)] (Vector)",
+            "movingavg([0.1], 3) must be 1/30 at {precision:?}"
+        );
+    }
+
+    // A window of 7 over one third: 1/21 = 0.(047619).
+    assert_eq!(typed("movingavg([1/3], 7)"), "[0.(047619)] (Vector)");
 }
 
 // ---------------------------------------------------------------------------

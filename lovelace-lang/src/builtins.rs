@@ -5589,16 +5589,6 @@ fn dsp_is_periodic(value: &Real) -> bool {
     value.to_string().contains('(')
 }
 
-/// The length of the repeating block a periodic value stores (0 for a finite decimal). The
-/// fixed-width path can only re-detect a period that fits its significant-digit budget.
-fn dsp_period_block_len(value: &Real) -> usize {
-    let text = value.to_string();
-    match (text.find('('), text.rfind(')')) {
-        (Some(open), Some(close)) if close > open + 1 => close - open - 1,
-        _ => 0,
-    }
-}
-
 fn dsp_complex_mul(a: &(Real, Real), b: &(Real, Real)) -> (Real, Real) {
     let mut re = a.0.mul(&b.0).sub(&a.1.mul(&b.1));
     let mut im = a.0.mul(&b.1).add(&a.1.mul(&b.0));
@@ -5628,155 +5618,6 @@ fn dsp_complex_pow_int(base: &(Real, Real), exponent: i64) -> (Real, Real) {
     result
 }
 
-/// The magnitude digits and decimal exponent of a finite decimal value, in the shape the
-/// fixed-width LReal128 conversion reads them. None for a periodic or unwieldy value.
-fn dsp_finite_decimal_parts(value: &Real) -> Option<(Nat, i64)> {
-    let text = value.to_string();
-    if text.contains('(') {
-        return None;
-    }
-    let body = text.strip_prefix('-').unwrap_or(&text);
-    let (integer, fraction) = match body.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (body, ""),
-    };
-    let mut digits = String::new();
-    digits.push_str(integer.trim_start_matches('0'));
-    digits.push_str(fraction);
-    if digits.is_empty() {
-        return Some((Nat::zero(), 0));
-    }
-    let magnitude = Nat::from_decimal(&digits)?;
-    Some((magnitude, -(fraction.len() as i64)))
-}
-
-/// Whether LReal128.TryFromReal accepts the value: its magnitude fits a UInt128 and its
-/// exponent fits an int.
-fn dsp_lreal128_convertible(value: &Real) -> bool {
-    let text = value.to_string();
-    let body = text.strip_prefix('-').unwrap_or(&text);
-    let (magnitude, exponent) = if let Some(open_paren) = body.find('(') {
-        let Some(close_paren) = body.rfind(')') else {
-            return false;
-        };
-        if close_paren <= open_paren + 1 {
-            return false;
-        }
-        let Some((integer, fraction)) = body.split_once('.') else {
-            return false;
-        };
-        let rest = &fraction[..close_paren - (body.find('.').map(|d| d + 1).unwrap_or(0))];
-        let open = rest.find('(').unwrap_or(0);
-        let close = rest.rfind(')').unwrap_or(rest.len());
-        let prefix = &rest[..open];
-        let period = &rest[open + 1..close];
-        let mut digits = String::new();
-        digits.push_str(integer.trim_start_matches('0'));
-        digits.push_str(prefix);
-        digits.push_str(period);
-        let magnitude = if digits.is_empty() {
-            Nat::zero()
-        } else {
-            Nat::from_decimal(&digits).unwrap_or_else(Nat::zero)
-        };
-        (
-            magnitude,
-            -((prefix.chars().count() + period.chars().count()) as i64),
-        )
-    } else {
-        match dsp_finite_decimal_parts(value) {
-            Some(parts) => parts,
-            None => return false,
-        }
-    };
-    let digits = magnitude.to_decimal();
-    digits.len() <= 38 && exponent >= i32::MIN as i64 && exponent <= i32::MAX as i64
-}
-
-/// The malformed periodic rendering C#'s LReal128.Divide produces when a remainder repeats at
-/// the first fractional step and the integer quotient is non-zero: the period metadata names
-/// fractional positions while the stored magnitude still begins with the integer digits.
-/// Returns the rendering only when that state occurs; None means the ordinary exact quotient is
-/// the same observable (terminating result, or a well-formed period).
-fn dsp_lreal128_division_render(numerator: &Real, divisor: i64) -> Option<String> {
-    if divisor <= 0 {
-        return None;
-    }
-    let (magnitude, exponent) = dsp_finite_decimal_parts(numerator)?;
-    if magnitude.to_decimal().len() > 38 {
-        return None;
-    }
-    let divisor_nat = Nat::from_decimal(&divisor.to_string())?;
-    let (mut signature, mut remainder) = magnitude.div_rem(&divisor_nat)?;
-    let mut history: Vec<(Nat, usize)> = Vec::new();
-    let mut frac_count = 0usize;
-    let mut period_start = 0usize;
-    let mut period_length = 0usize;
-    let mut found = false;
-    while !remainder.is_zero() && frac_count < 512 {
-        if let Some(position) = history.iter().position(|(value, _)| *value == remainder) {
-            period_start = history[position].1;
-            period_length = frac_count - period_start;
-            found = true;
-            break;
-        }
-        history.push((remainder.clone(), frac_count));
-        remainder = remainder.mul(&Nat::from_u64(10));
-        let (digit, next) = remainder.div_rem(&divisor_nat)?;
-        remainder = next;
-        signature = signature.mul(&Nat::from_u64(10)).add(&digit);
-        if signature.to_decimal().len() > 38 {
-            return None;
-        }
-        frac_count += 1;
-    }
-    if !found || period_length > 38 {
-        return None;
-    }
-    let result_exponent = exponent - frac_count as i64;
-    if result_exponent < i32::MIN as i64 || result_exponent > i32::MAX as i64 {
-        return None;
-    }
-    let digits = signature.to_decimal();
-    let frac_len = (-result_exponent).max(0) as usize;
-    let padded = if digits.len() < frac_len {
-        format!("{}{}", "0".repeat(frac_len - digits.len()), digits)
-    } else {
-        digits.clone()
-    };
-    let split_at = padded.len().saturating_sub(frac_len);
-    let int_part = if split_at == 0 {
-        "0"
-    } else {
-        &padded[..split_at]
-    };
-    let digit_at = |position: usize| -> char {
-        let digits_len = digits.len() as i64;
-        let frac_len = frac_len as i64;
-        let idx = if position < period_start {
-            digits_len - frac_len + position as i64
-        } else {
-            let offset = (position - period_start) % period_length;
-            digits_len - frac_len + period_start as i64 + offset as i64
-        };
-        if idx < 0 || idx >= digits_len {
-            '0'
-        } else {
-            digits.as_bytes()[idx as usize] as char
-        }
-    };
-    let non_repeating: String = (0..period_start).map(digit_at).collect();
-    let period: String = (0..period_length)
-        .map(|offset| digit_at(period_start + offset))
-        .collect();
-    let sign = if numerator.cmp(&Real::zero()) == std::cmp::Ordering::Less {
-        "-"
-    } else {
-        ""
-    };
-    Some(format!("{sign}{int_part}.{non_repeating}({period})"))
-}
-
 fn dsp_movingavg(engine: &Engine, args: &[Value]) -> Result<Value, LangError> {
     dsp_arity("movingavg", args.len(), 2, 2)?;
     let window = dsp_integer(&args[1], "movingavg", "w", 2, DspIntBounds::Positive)?;
@@ -5786,23 +5627,17 @@ fn dsp_movingavg(engine: &Engine, args: &[Value]) -> Result<Value, LangError> {
     }
     let precision = engine.dsp_precision();
     let divisor = dsp_real(window);
-    // The reference takes its fixed-width path while the DSP precision fits 37 and every
-    // sample converts into LReal128. That path's division has a periodic-state quirk the
-    // arbitrary-precision path does not; the observable repair below is applied only in the
-    // exact circumstances the fixed path would run.
-    let fixed_path = precision <= 37
-        && values
-            .iter()
-            .all(|(re, im)| dsp_lreal128_convertible(re) && dsp_lreal128_convertible(im));
-    // A periodic operand in the fixed-width path is expanded and re-detected on every
-    // operation, and the reference reports the quotient inexact even where the rational is
-    // exactly representable. Long periods promote back to the exact path; only the short
-    // periods the fixed width can actually re-detect keep that provenance.
-    let fixed_periodic = fixed_path
-        && values.iter().any(|(re, im)| {
-            (dsp_is_periodic(re) && dsp_period_block_len(re) <= 38)
-                || (dsp_is_periodic(im) && dsp_period_block_len(im) <= 38)
-        });
+    // Division is the engine's exact `Real::div`, at every precision. A rational quotient keeps its
+    // exact periodic decimal and its exact provenance.
+    //
+    // This used to substitute a hand-rolled rendering of the reference implementation's fixed-width
+    // division below 38 digits. That emulation anchored the recurring period one fractional position
+    // early whenever the numerator had a decimal point, so it answered `0.(8)` (8/9) for
+    // `movingavg([2.5], 3)` where the quotient is `5/6` = `0.8(3)`, and 0 for
+    // `movingavg([0.1], 3)` where the quotient is `1/30` = `0.0(3)`. It replaced a correct value
+    // with a defective one and reported it as exact. Removed: sound arithmetic takes precedence
+    // over byte-parity with a defective reference. See docs/adr/004-thirty-digit-default.md,
+    // "Correction".
     let mut out = Vec::with_capacity(values.len());
     for n in 0..values.len() {
         let start = n as i128 - window as i128 + 1;
@@ -5817,27 +5652,6 @@ fn dsp_movingavg(engine: &Engine, args: &[Value]) -> Result<Value, LangError> {
         }
         let re = sum_re.div(&divisor, precision).unwrap_or_else(Real::zero);
         let im = sum_im.div(&divisor, precision).unwrap_or_else(Real::zero);
-        let (re, im) = if fixed_path {
-            let fix = |value: &Real, quotient: Real| {
-                if !dsp_lreal128_convertible(value) {
-                    return quotient;
-                }
-                match dsp_lreal128_division_render(value, window) {
-                    Some(rendered) if rendered != quotient.to_string() => {
-                        Real::from_str(&rendered).unwrap_or(quotient)
-                    }
-                    _ => quotient,
-                }
-            };
-            (fix(&sum_re, re), fix(&sum_im, im))
-        } else {
-            (re, im)
-        };
-        let (re, im) = if fixed_periodic {
-            (re.mark_inexact(), im.mark_inexact())
-        } else {
-            (re, im)
-        };
         out.push(dsp_complex(re, im));
     }
     Ok(Value::Vector(out))

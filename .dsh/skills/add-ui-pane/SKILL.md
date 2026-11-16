@@ -84,6 +84,8 @@ split is not done.
 
 ## Verify
 
+Every host (the desktop tests need a display on Linux, so run them under Xvfb there):
+
 ```console
 cargo test -p lovelace-desktop lay_011
 cargo test -p lovelace-desktop lay_002
@@ -91,10 +93,17 @@ cargo test -p lovelace-desktop a11y_002
 cargo run -p lovelace-desktop -- --ui-audit
 cargo run -p lovelace-desktop -- --contrast-check
 cargo run -p lovelace-desktop -- --gui-selftest
+```
+
+Windows host only, after step 9 added the scenario to `ValidateSet` and `$scenarios` (`my-pane` below
+is the scenario you added):
+
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File docs/images/capture.ps1 -Scenario my-pane -Exe target/release/lovelace-desktop.exe -WorkRoot .tmp/capture
 ```
 
-Observable success: `lay_011`, `lay_002` and `a11y_002` pass; `--ui-audit` exits 0 with every file
-PASS; `--contrast-check` prints "every required pair passes"; `--gui-selftest` keeps
-`failed=0`; the capture prints `IMAGE my-pane <bytes> bytes <w>x<h> sha256=<hash>` with bytes above
-the script's minimum, and the PNG shows the pane title and its empty state.
+Observable success: `lay_011` (2 tests), `lay_002` (1 test) and `a11y_002` (1 test) each report
+`0 failed` and a nonzero passed count; `--ui-audit` exits 0 with every file PASS; `--contrast-check`
+prints "every required pair passes"; `--gui-selftest` keeps `failed=0`; the capture prints
+`IMAGE my-pane <bytes> bytes <w>x<h> sha256=<hash>` with bytes above the script's minimum, and the
+PNG shows the pane title and its empty state.

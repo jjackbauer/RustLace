@@ -39,7 +39,7 @@ errors rather than stack overflows.
 
 Spaces, tabs, carriage returns, and every other character for which Rust's `char::is_whitespace`
 is true are ignored between tokens. A newline is not just whitespace: it is a statement
-separator (see [Separators](#separators)).
+separator (see [Separators](#separators-newlines-and-line-continuation)).
 
 Whitespace is never required where the grammar makes a boundary unambiguous, but it is required
 where two tokens would otherwise merge. There is no implicit multiplication or function
@@ -120,8 +120,9 @@ by a member-access dot, and the parser then demands a field name:
 Error [ParseError/ParseError]: Expected 'Ident' but found '' at position 2.
 ```
 
-Decimals are exact decimal values, not binary floating point: `0.1` is exactly one tenth, and
-`0.1 + 0.2` is exactly `0.3`.
+Decimal literals have an exact decimal representation, not a binary floating-point one: `0.1` is
+exactly one tenth, and `0.1 + 0.2` is exactly `0.3`. That is a claim about the representation; it is
+not an error bound on a computed expression.
 
 ### Periodic decimals
 
@@ -134,8 +135,8 @@ tokenizer:
 | Integer part, dot, preperiod, parenthesised period | `0.1(6)` | 1/6 |
 | Integer part, dot, preperiod, parenthesised period | `1.2(34)` | 1.2 followed by repeating 34 |
 
-The period must contain at least one digit and must be closed by `)`. The value is exact and
-carries period metadata, so `0.(3) * 3` is exactly `1`, not a rounded approximation.
+The period must contain at least one digit and must be closed by `)`. The literal is represented
+exactly and carries period metadata, so `0.(3) * 3` is exactly `1`, not a rounded approximation.
 
 ```lovelace
 0.(3)
@@ -266,7 +267,7 @@ This is a real language quirk, not a documentation shortcut. A `Boolean` value i
 comparison (`1 < 2`) or by the `not` builtin; there is no Boolean literal. `if (true)` therefore
 fails with "if condition must be Boolean, but got 'Natural'." See
 [Values and types](values-and-types.md#boolean) and
-[Statements and control flow](statements-and-control-flow.md#conditions).
+[Statements and control flow](statements-and-control-flow.md#conditions-and-ifelse).
 
 ## The token set
 

@@ -112,6 +112,7 @@ hold mixed rows as long as every row has the same shape.
 
 ## Exactness
 
+Exactness here is the representation's provenance bit, not a proof of correctness.
 `Natural` and `Integer` are always exact. A `Real` is exact when it is a finite decimal or a
 periodic decimal the engine can carry exactly. It is inexact when it is a truncation of an
 irrational or transcendental computation, or when a division's period did not fit inside the
@@ -126,6 +127,14 @@ The `inspect()` builtin exposes an `exact` field:
 = [True, False, True, False, True] (Vector)
   _ = [True, False, True, False, True]
 ```
+
+The flag records whether a digit was dropped. It is not an error bound and it does not certify the
+value: a periodically exact result can still be the wrong number if an algorithm is defective, and
+provenance propagates, so an operation on an inexact input can produce an exactly representable
+result that is still flagged inexact. The
+[editorial guide](../editorial.md#the-four-kinds-of-claim) defines the separate claim categories; the
+historical `movingavg` defect ([ADR-004](../adr/004-thirty-digit-default.md)) is the recorded case
+of a wrong value carrying an exact bit.
 
 The display form does not show exactness; `0.(3)` and `sqrt(2)` are both rendered as `Real`.
 Inspect the value, or read the `structured.exact` field of the JSON envelope, when the

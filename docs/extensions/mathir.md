@@ -3,7 +3,9 @@
 **5 builtins.** The bridge from a symbolic expression to a typed, validated computational DAG and
 back out at a caller-chosen precision.
 
-## What it is
+## Purpose
+
+### What it is
 
 MathIR is the intermediate representation the engine lowers symbolic expressions into. `lower`
 produces the text form of the DAG, `compile` produces it through the validating compiler, `compile_full`
@@ -28,14 +30,38 @@ The family is exactly the compile/evaluate loop. It contributes no expression co
 rewriting and no optimization: `compile` lowers what it is given, and the record says so
 (`optimization_policy: none`).
 
-## How it is enabled
+### Where the code lives
+
+| Path | What is there |
+| --- | --- |
+| `lovelace-lang/src/registry.rs` | the 5 descriptors; plugin tags at lines 352-1055 |
+| `lovelace-lang/src/mathir.rs` | `IrOpKind` (39-110), `IrProgram`, serialization (335), the version gate (375), validation |
+| `lovelace-lang/src/builtins.rs` | the `compile`/`compile_full`/`lower`/`evalir`/`evalir_batch` dispatch arms |
+| `lovelace-lang/src/lib.rs` | the gate (990), `load_plugin` (883) |
+| `lovelace-lang/src/numeric.rs` | the exact numeric backend the evaluator calls |
+
+Tests that cover it:
+
+| Test module | Tests |
+| --- | --- |
+| `mathir_round54` | 13 |
+| `round97_tail` | 12 (incl. the Symbolics + MathIR = 108 builtin count) |
+| `mathir_typing_round55` | 7 |
+| `round84_evalir_multi` | part of the `lovelace-lang` batches |
+
+`round97_tail` is where the published count is pinned: a `SuiteEngine` with Symbolics + MathIR
+publishes 108 builtins, which is `44 core + 59 Symbolics + 5 MathIR`.
+
+## Inputs
+
+### How it is enabled
 
 `lovelace-run` always builds `Engine::new()`, so all five names are live in every CLI run; no CLI
 flag disables a family. In the library, `Engine::new()` leaves `enabled_plugins` as `None`, which
 makes the gate answer `true` for every registered name
 ([`lovelace-lang/src/lib.rs`](../../lovelace-lang/src/lib.rs), lines 990-998).
 
-`Engine::new_bare()` (`lib.rs:875`) sets `enabled_plugins = Some(empty)`. Observed from
+`Engine::new_bare()` (`lovelace-lang/src/lib.rs`) sets `enabled_plugins = Some(empty)`. Observed from
 [`bare_engine.rs`](../../lovelace-lang/examples/bare_engine.rs) (run it with `cargo run -p lovelace-lang --example bare_engine`), the relevant lines are:
 
 ```text
@@ -45,8 +71,8 @@ const (rat 1 1)
 Constant 0 0
 ```
 
-The bare failure is code `UnknownFunction`, category `UnsupportedOperation` (`builtins.rs:4279`),
-raised at the gate (`lib.rs:2146-2150`) — the same shape as any unknown name, with no
+The bare failure is code `UnknownFunction`, category `UnsupportedOperation` (`unknown_function_among`),
+raised at the gate (`Engine::call`) — the same shape as any unknown name, with no
 plugin-specific error.
 
 Re-enabling is a name-keyed load. A `ModusPlugin` whose `name()` is `"Lovelace.MathIR"` flips the
@@ -71,7 +97,9 @@ assert!(engine.eval("lower(1, [])").unwrap().display().starts_with("#!mathir 2")
 The same session can then mix families freely — compiling a symbolic expression needs both MathIR and
 Symbolics loaded, which is exactly what `Engine::new()` gives you.
 
-## Every function it contributes
+## Outputs
+
+### Every function it contributes
 
 Arity is `min-max` accepted arguments. Parameters and descriptions are the registry's declared
 metadata; every row was executed and its typed result is in the [verified-call appendix](#verified-calls).
@@ -84,7 +112,77 @@ metadata; every row was executed and its typed result is in the [verified-call a
 | `evalir_batch` | 3 | `ir`, `values`, `digits` | Vector | Batch-evaluates a compiled kernel (IR text or CompilationResult) over flat row-major values at the given precision. |
 | `lower` | 2 | `f`, `params` | Text | Lowers a symbolic expression to MathIR (the typed, validated computational DAG). |
 
-## Worked examples
+## Precision behaviour
+
+### Precision, limits and the version
+
+- **Format version 2.** `mathir::FORMAT_VERSION` is `2` (`lovelace-lang/src/mathir.rs`), the header is `#!mathir 2`
+  (`IrProgram::serialize`), and any other version is refused with
+  `Unsupported MathIR format version '<v>' (expected 2).` (`IrProgram::deserialize`). The wire envelope
+  advertises the same number as `mathIrVersion: 2`. There is no migration path — the gate is
+  deliberately strict.
+- **Precision is the caller's.** The kernel stores no precision policy; the record says
+  `precision_policy: caller_supplied`, and `evalir`'s third argument is the working precision.
+  `digits` accepts 1 to 2147483647; `0` is refused with
+  `evalir(): argument 3 (digits) must be a Natural or Integer between 1 and 2147483647; got 0.`
+- **Exact, not floating point.** The constant pool holds rationals (`const (rat 1 1)`), the evaluator
+  runs on the exact numeric kernels, and `exact: True` is reported. `evalir` returns
+  `Real | Complex` when the program needs them and an exact scalar otherwise (`10 (Integer)` above).
+- **35 op kinds, and they are closed.** No `Mod`, no `Atan2`, no reductions, no complex-specific
+  nodes. If an expression needs an operation outside the set, lowering fails rather than inventing a
+  node.
+- **Validation happens before evaluation.** Every node's pool and operand indices are checked:
+  a hand-written `#!mathir 2` program with a dangling constant index answers
+  `IR validation: Constant node 0 references out-of-range pool index 0.` (observed).
+- **The parameter list must be symbols and must cover the expression.** `compile`/`compile_full`
+  require at least one parameter; a free symbol missing from the list fails with
+  `Node kind Symbol cannot be lowered to MathIR.` (observed for `compile(x^2 + 1, [y])` and for
+  `lower(x^2 + 1, [])`). `lower` differs from `compile` in one respect: it accepts an empty parameter
+  list when the expression is a constant (`lower(1, [])` answers a two-line program).
+- **No optimization.** `compile` emits the lowered DAG as-is (`optimization_policy: none`). Horner
+  form and CSE are a separate Symbolics transform (`optimize`), not part of compilation.
+
+## Errors
+
+The surface reports failures through `LangError`, and the parsing and evaluation failures keep the
+codes the rest of the engine uses.
+
+| Failure | Code / category |
+|---|---|
+| Wrong argument count at the call site | `InvalidArgument` / `TypeMismatch`, with the declared signature |
+| `compile`/`compile_full` with an empty parameter list | `InvalidArgument` / `TypeMismatch`, message `Compilation requires at least one parameter. (Parameter 'parameters')` |
+| An IR text whose header is not `#!mathir 2` | `InvalidInput` / `ParseError`, message `Unsupported MathIR format version '<v>' (expected 2).` |
+| A malformed IR line, or text that is not IR | `InvalidInput` / `ParseError`, message `Malformed IR line: <line>` |
+| A kernel whose node or constant indices do not validate | `InvalidOperation` / `DomainError`, message `IR validation: ...` |
+| A value list whose length does not match the kernel | `InvalidOperation` / `DomainError`, message `evalir(): kernel expects <n> parameters; got <m> values.` |
+| A name from an unloaded family | `UnknownFunction` / `UnsupportedOperation`, the ordinary unknown-name failure |
+
+A refused `digits` value (`evalir(..., 0)`) is an `InvalidArgument` / `TypeMismatch` argument
+refusal, and an expression that cannot be lowered is a `LangError` naming the node kind rather than
+a panic. The worked examples below show the version, arity and empty-parameter messages verbatim.
+
+## Limitations
+
+### What is NOT in this extension
+
+- **No JIT, no native or GPU code generation.** The only target the record advertises is
+  `target: mathir`; `evalir` is an interpreter over the DAG, and nothing emits machine code or
+  source in another language.
+- **No optimizer.** `optimization_policy: none`. There is no constant folding pass beyond the
+  lowering, no loop restructuring, no CSE — `optimize` belongs to Symbolics and runs on expressions,
+  not on IR.
+- **No symbolic work.** This family does not build, rewrite or solve expressions; it needs Symbolics
+  (or a host-supplied expression) to have produced one first.
+- **No persistence or caching builtin.** The IR is text returned as a `Text` value; storing it,
+  keying it and invalidating it are the host's job. There is no binary format.
+- **No automatic differentiation, no adjoints, no gradients** through the kernel.
+- **`evalir` does not accept a function definition or a bare expression** — it wants IR text or a
+  `CompilationResult`; passing `"not-ir"` answers `Malformed IR line: not-ir` (observed).
+- **No unevaluated or partial application.** The value list must match the parameter count exactly.
+
+## Examples
+
+### Worked examples
 
 `compile` lowers a symbolic expression to IR. The parameter list is the kernel's argument order:
 
@@ -201,74 +299,7 @@ compile(x^2 + 1, [])
 Error [InvalidArgument/TypeMismatch]: Compilation requires at least one parameter. (Parameter 'parameters')
 ```
 
-## Precision, limits and the version
-
-- **Format version 2.** `mathir::FORMAT_VERSION` is `2` (`mathir.rs:35`), the header is `#!mathir 2`
-  (`mathir.rs:335-340`), and any other version is refused with
-  `Unsupported MathIR format version '<v>' (expected 2).` (`mathir.rs:375-379`). The wire envelope
-  advertises the same number as `mathIrVersion: 2`. There is no migration path — the gate is
-  deliberately strict.
-- **Precision is the caller's.** The kernel stores no precision policy; the record says
-  `precision_policy: caller_supplied`, and `evalir`'s third argument is the working precision.
-  `digits` accepts 1 to 2147483647; `0` is refused with
-  `evalir(): argument 3 (digits) must be a Natural or Integer between 1 and 2147483647; got 0.`
-- **Exact, not floating point.** The constant pool holds rationals (`const (rat 1 1)`), the evaluator
-  runs on the exact numeric kernels, and `exact: True` is reported. `evalir` returns
-  `Real | Complex` when the program needs them and an exact scalar otherwise (`10 (Integer)` above).
-- **35 op kinds, and they are closed.** No `Mod`, no `Atan2`, no reductions, no complex-specific
-  nodes. If an expression needs an operation outside the set, lowering fails rather than inventing a
-  node.
-- **Validation happens before evaluation.** Every node's pool and operand indices are checked:
-  a hand-written `#!mathir 2` program with a dangling constant index answers
-  `IR validation: Constant node 0 references out-of-range pool index 0.` (observed).
-- **The parameter list must be symbols and must cover the expression.** `compile`/`compile_full`
-  require at least one parameter; a free symbol missing from the list fails with
-  `Node kind Symbol cannot be lowered to MathIR.` (observed for `compile(x^2 + 1, [y])` and for
-  `lower(x^2 + 1, [])`). `lower` differs from `compile` in one respect: it accepts an empty parameter
-  list when the expression is a constant (`lower(1, [])` answers a two-line program).
-- **No optimization.** `compile` emits the lowered DAG as-is (`optimization_policy: none`). Horner
-  form and CSE are a separate Symbolics transform (`optimize`), not part of compilation.
-
-## Where the code lives
-
-| Path | What is there |
-| --- | --- |
-| `lovelace-lang/src/registry.rs` | the 5 descriptors; plugin tags at lines 352-1055 |
-| `lovelace-lang/src/mathir.rs` | `IrOpKind` (39-110), `IrProgram`, serialization (335), the version gate (375), validation |
-| `lovelace-lang/src/builtins.rs` | the `compile`/`compile_full`/`lower`/`evalir`/`evalir_batch` dispatch arms |
-| `lovelace-lang/src/lib.rs` | the gate (990), `load_plugin` (883) |
-| `lovelace-lang/src/numeric.rs` | the exact numeric backend the evaluator calls |
-
-Tests that cover it:
-
-| Test module | Tests |
-| --- | --- |
-| `mathir_round54` | 13 |
-| `round97_tail` | 12 (incl. the Symbolics + MathIR = 108 builtin count) |
-| `mathir_typing_round55` | 7 |
-| `round84_evalir_multi` | part of the `lovelace-lang` batches |
-
-`round97_tail` is where the published count is pinned: a `SuiteEngine` with Symbolics + MathIR
-publishes 108 builtins, which is `44 core + 59 Symbolics + 5 MathIR`.
-
-## What is NOT in this extension
-
-- **No JIT, no native or GPU code generation.** The only target the record advertises is
-  `target: mathir`; `evalir` is an interpreter over the DAG, and nothing emits machine code or
-  source in another language.
-- **No optimizer.** `optimization_policy: none`. There is no constant folding pass beyond the
-  lowering, no loop restructuring, no CSE — `optimize` belongs to Symbolics and runs on expressions,
-  not on IR.
-- **No symbolic work.** This family does not build, rewrite or solve expressions; it needs Symbolics
-  (or a host-supplied expression) to have produced one first.
-- **No persistence or caching builtin.** The IR is text returned as a `Text` value; storing it,
-  keying it and invalidating it are the host's job. There is no binary format.
-- **No automatic differentiation, no adjoints, no gradients** through the kernel.
-- **`evalir` does not accept a function definition or a bare expression** — it wants IR text or a
-  `CompilationResult`; passing `"not-ir"` answers `Malformed IR line: not-ir` (observed).
-- **No unevaluated or partial application.** The value list must match the parameter count exactly.
-
-## Verified calls
+### Verified calls
 
 Every builtin in the table above was executed through the built CLI. Each row is the exact one-line
 call and the typed result observed. IR results are shown whitespace-collapsed here; the worked

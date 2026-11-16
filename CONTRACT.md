@@ -11,10 +11,12 @@ Build from the repository root:
     cargo run --release -p lovelace-corpus
 
 **No external crates in the engine.** `[dependencies]` may reference workspace crates by path only.
-No unsafe, no floating point in any value path. The one exception is the desktop's Windows-only GUI
-stack (`eframe`/`egui` 0.37, `resvg` 0.50, `raw-window-handle` 0.6) in `lovelace-desktop/Cargo.toml`.
-`#![forbid(unsafe_code)]` guards `lovelace-int`, `lovelace-array`, `lovelace-know` and the non-Windows
-half of `lovelace-desktop`; `unsafe` outside `lovelace-desktop/src/win32` is a defect.
+No unsafe, no floating point in any value path. The one exception is the desktop's GUI stack
+(`eframe`/`egui` 0.37, `resvg` 0.50, `raw-window-handle` 0.6) in `lovelace-desktop/Cargo.toml`. That
+stack is cross-platform and is not scoped to Windows: non-Windows targets add eframe's `glow` backend.
+`#![forbid(unsafe_code)]` guards `lovelace-int`, `lovelace-array`, `lovelace-know` and the whole of
+`lovelace-desktop` on non-Windows targets (`#![cfg_attr(not(windows), forbid(unsafe_code))]`);
+`unsafe` outside `lovelace-desktop/src/win32` is a defect.
 
 ## Crates
 

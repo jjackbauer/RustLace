@@ -42,13 +42,15 @@ The second example shows the return contract without embedding a machine-specifi
 comparison: the returned Text is non-empty. A real run also prints the path itself:
 
 ```text
-= C:\Users\ricar\dev\LovelaceSharp\rust\target-desktop\tmp\language-work\target\example-plots\plot2.svg
-  _ = C:\Users\ricar\dev\LovelaceSharp\rust\target-desktop\tmp\language-work\target\example-plots\plot2.svg
+= <plot-dir>/plot2.svg
+  _ = <plot-dir>/plot2.svg
 ```
 
 That text is the observed `--text` result of `plot([0, 1, 2, 3], [0, 1, 4, 9], "squares")` with
-`--plot-dir <clone>\target\example-plots --plot-file plot2.svg`. The exact directory is host
-configuration; the language contract is "an absolute path to the file that was written".
+`--plot-dir <plot-dir> --plot-file plot2.svg`, run from the repository root; `<plot-dir>` stands for
+the absolute directory passed to `--plot-dir` (this run passed `target/example-plots`). The exact
+directory is host configuration; the language contract is "an absolute path to the file that was
+written".
 
 ## Where the file goes
 
@@ -99,9 +101,11 @@ renderer:
   a smooth curve rather than an angular polygon. A series with fewer than three points falls back
   to straight segments.
 
-Coordinates are held as exact `Real` values through model construction, bounds calculation,
-padding, and normalisation; only the final pixel conversion introduces a decimal rendering. The
-tick labels are formatted numbers, while the plotted coordinates are exact model data.
+Coordinates are carried as `Real` values through model construction, bounds calculation, padding,
+and normalisation; only the final pixel conversion introduces a decimal rendering, and no binary
+floating point enters the model path. The tick labels are formatted numbers, while the plotted
+coordinates are the model's decimal data. That is a statement about the representation, not a proof
+that every interpolated sample is mathematically exact.
 
 The observed sample `plot([0, 1, 2, 3], [0, 1, 4, 9], "squares")` wrote **15,263 bytes** to
 `plot2.svg`. The size depends on the number of points and the labels, not on the path.
@@ -111,14 +115,15 @@ The observed sample `plot([0, 1, 2, 3], [0, 1, 4, 9], "squares")` wrote **15,263
 On a successful plot, the JSON envelope contains a `plot` object and an `artifacts` array:
 
 ```json
-{"bytes":15263,"kind":"plot","path":"C:\\Users\\ricar\\dev\\LovelaceSharp\\rust\\target-desktop\\tmp\\language-work\\target\\example-plots\\plot2.svg","title":"squares"}
+{"bytes":15263,"kind":"plot","path":"<plot-dir>/plot2.svg","title":"squares"}
 ```
 
-That is one observed artifact (pretty-printed here for readability; the wire is one line). The
-full envelope's `plot` object has the same `path` and `title` plus the complete `svg` string:
+That is one observed artifact with the path shortened to the `<plot-dir>` placeholder
+(pretty-printed here for readability; the wire is one line). The full envelope's `plot` object has
+the same `path` and `title` plus the complete `svg` string:
 
 ```json
-{"path":"C:\\...\\plot2.svg","title":"squares","svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" ..."}
+{"path":"<plot-dir>/plot2.svg","title":"squares","svg":"<svg xmlns=\"http://www.w3.org/2000/svg\" ..."}
 ```
 
 The `result` object is the returned Text path: `kind: "Text"`, `display` and `typed` equal to the
@@ -185,10 +190,10 @@ expression numerically first (`evalf`, or substitute values to build a Vector).
 With a fixed output directory, the command
 
 ```console
-target/debug/lovelace-run.exe --file plot.lv --text --plot-dir target/example-plots --plot-file plot2.svg
+target/debug/lovelace-run.exe --file plot.ls --text --plot-dir target/example-plots --plot-file plot2.svg
 ```
 
-where `plot.lv` contains `plot([0, 1, 2, 3], [0, 1, 4, 9], "squares")`, wrote
+where `plot.ls` contains `plot([0, 1, 2, 3], [0, 1, 4, 9], "squares")`, wrote
 `target/example-plots/plot2.svg` (15,263 bytes) and printed the absolute path to it. The SVG's
 title is `squares`, its x ticks include `0`, `0.5`, `1`, …, and its curve is the cubic-spline
 polyline through the four exact points. The file is a single self-contained SVG; no external
