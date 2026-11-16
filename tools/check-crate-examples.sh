@@ -33,6 +33,13 @@
 # %USERPROFILE%/.cargo/bin/cargo.exe under Git Bash. It uses only workspace
 # path dependencies: no network access, no external crates. It runs from any
 # working directory and tolerates CRLF Markdown.
+#
+# Every path written into a generated file (today only the temporary
+# Cargo.toml, whose [workspace] table has no members) is converted with
+# `cygpath -w` when cygpath is on PATH. Git Bash, MSYS and Cygwin translate a
+# native child's argv and path-like environment variables, but never the
+# contents of a file the child reads, so a POSIX path in the manifest is
+# opened by Windows cargo as C:\d\... and fails. See toml_path below.
 
 set -u
 
@@ -303,30 +310,55 @@ for dep in $deps; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# Native path shape for the generated manifest. The temporary Cargo.toml is
+# read by the native cargo, not by this shell: a Git Bash, MSYS or Cygwin
+# shell reports the repository as /d/a/RustLace/RustLace, and it converts
+# that spelling for a native child's argv and path-like environment
+# variables, but never for the contents of a file the child reads. Written
+# unchanged, the path is opened by Windows cargo as
+# C:\d\a\RustLace\RustLace\lovelace-array, which does not exist (os error 3).
+# Converting with `cygpath -w` whenever it exists, and using the absolute
+# path unchanged elsewhere (Linux, macOS, WSL), makes the manifest native on
+# every host. The failure branch below explains the shape if it ever recurs.
+# ---------------------------------------------------------------------------
+cygpath_bin=
+if command -v cygpath >/dev/null 2>&1; then
+    cygpath_bin=$(command -v cygpath)
+fi
+
+# toml_path ABSOLUTE_PATH - the value to put in a TOML basic string. On a
+# host with cygpath the path is converted to its native spelling first, then
+# escaped: the value is a TOML basic string, where a backslash introduces an
+# escape, so the backslashes `cygpath -w` produces must be doubled. On every
+# other host the absolute path is already native and passes through.
 toml_path() {
     p=$1
-    case "$p" in
-        [A-Za-z]:[\\/]* | *\\*)
-            if command -v cygpath >/dev/null 2>&1; then
-                p=$(cygpath -m -- "$p") || return 1
-            fi
-            ;;
-    esac
-    printf '%s' "$p" | sed 's/\\/\\\\/g'
+    if [ -n "$cygpath_bin" ]; then
+        p=$("$cygpath_bin" -w -- "$p") || {
+            printf 'check-crate-examples: cygpath -w failed for %s\n' "$1" >&2
+            return 1
+        }
+    fi
+    printf '%s' "$p" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+manifest_file=$tmp/Cargo.toml
 {
     printf '[package]\n'
     printf 'name = "rustlace-crate-examples-check"\n'
     printf 'version = "0.0.0"\n'
     printf 'edition = "2024"\n'
     printf 'publish = false\n\n'
+    # No member paths: this table only stops the generated package from
+    # joining the enclosing workspace.
     printf '[workspace]\n\n'
     printf '[dependencies]\n'
     for dep in $deps; do
-        printf '%s = { path = "%s" }\n' "$dep" "$(toml_path "$repo_root/$dep")"
+        dep_path=$(toml_path "$repo_root/$dep") || exit 2
+        printf '%s = { path = "%s" }\n' "$dep" "$dep_path"
     done
-} > "$tmp/Cargo.toml"
+} > "$manifest_file"
 
 # ---------------------------------------------------------------------------
 # Generate one binary per included fence and a map from generated file to
@@ -417,6 +449,25 @@ build_log=$tmp/build.log
 build_code=$?
 if [ "$build_code" -ne 0 ]; then
     map_diagnostics < "$build_log" >&2
+    # A path the generated manifest records but the native cargo cannot open
+    # is a different defect from an API drift, and cargo's "os error 3" does
+    # not say that the missing file is a path this script wrote. Only a host
+    # with cygpath can have had a POSIX path converted, so the explanation is
+    # gated on it. This is additive: the existing messages and the DOCREPORT
+    # line below are unchanged.
+    if [ -n "$cygpath_bin" ] &&
+        grep -qF 'failed to load manifest' "$build_log" &&
+        grep -qE 'The system cannot find the path specified|os error 3|No such file or directory' "$build_log"; then
+        printf '%s\n' \
+            'check-crate-examples: the generated manifest records a path that the native cargo cannot open.' \
+            'check-crate-examples: this host has cygpath, so the manifest must hold the native spelling that' \
+            'check-crate-examples: `cygpath -w` returns. Git Bash translates argv for a native program, never' \
+            'check-crate-examples: the contents of a file it reads, so a POSIX path here is opened as' \
+            'check-crate-examples: C:\d\a\... and does not exist.' \
+            "check-crate-examples: the manifest is $manifest_file and recorded:" >&2
+        grep 'path = ' "$manifest_file" | sed 's/^/  /' >&2
+        printf 'check-crate-examples: check the native spelling with: cygpath -w -- %s\n' "$repo_root" >&2
+    fi
     printf 'check-crate-examples: the crate-page examples do not compile; a syntax/API change is a build failure\n' >&2
     printf 'DOCREPORT gate=check-crate-examples status=fail pages=%d fences=%d compiled=%d excluded=%d failures=1\n' \
         "${#pages[@]}" "$fences" "$compiled" "$excluded"

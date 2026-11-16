@@ -16,35 +16,40 @@
 #     4. a heading anchor that matches no heading in the destination page
 #     5. a nonexistent path linked from a root page (README.md)
 #     6. a broken link in an agent instruction (.dsh/skills/**/SKILL.md)
+#     7. a backticked directory path that no longer exists (trailing slash)
 #   check-docs.sh --symbols
-#     7. a .rs:NNN citation outside docs/adr/
-#     8. a dead snake_case symbol citation
+#     8. a .rs:NNN citation outside docs/adr/
+#     9. a dead snake_case symbol citation
 #   check-docs.sh --claims
-#     9. a prohibited absolutist numerical phrase
-#    10. a tutorial without its "## Precision" section
+#    10. a prohibited absolutist numerical phrase
+#    11. a tutorial without its "## Precision" section
+#    12. the retired claim term on a current page
+#    13. the retired claim term unquoted in an ADR (not a blanket exemption)
 #   check-docs.sh --readme
-#    11. a README without its "## Current limitations" section
+#    14. a README without its "## Current limitations" section
 #   check-reference-pages.sh
-#    12. a listed reference page missing a required section
-#    13. a listed reference page with an out-of-order section
-#    14. a scoped-tree page that is neither manifested nor declared non-reference
-#    15. a manifested page that does not exist on disk
-#    16. a required section heading with no content before the next heading
-#    17. a declared non-reference page with no reason
+#    15. a listed reference page missing a required section
+#    16. a listed reference page with an out-of-order section
+#    17. a scoped-tree page that is neither manifested nor declared non-reference
+#    18. a manifested page that does not exist on disk
+#    19. a required section heading with no content before the next heading
+#    20. a declared non-reference page with no reason
 #   docs/language/examples/run-examples.sh
-#    18. an undeclared page in the runner manifest
-#    19. a declared page missing on disk
-#    20. zero example pairs in the whole run
-#    21. an unpaired ```lovelace block
+#    21. an undeclared page in the runner manifest
+#    22. a declared page missing on disk
+#    23. zero example pairs in the whole run
+#    24. an unpaired ```lovelace block
 #   docs/extensions/examples/run-examples.sh
-#    22. an undeclared page in the runner manifest
-#    23. a declared page missing on disk
-#    24. zero example pairs in the whole run
-#    25. an unpaired ```lovelace block
+#    25. an undeclared page in the runner manifest
+#    26. a declared page missing on disk
+#    27. zero example pairs in the whole run
+#    28. an unpaired ```lovelace block
 #   the CI wiring guard
-#    26. a mandatory docs-job step deleted from a copy of ci.yml
+#    29. a mandatory docs-job step deleted from a copy of ci.yml
 #   tools/docs-report.sh
-#    27. a gate that exits 0 without printing its DOCREPORT line
+#    30. a gate that exits 0 without printing its DOCREPORT line
+#   tools/check-crate-examples.sh
+#    31. a POSIX path recorded in the generated Cargo.toml (Windows)
 #
 # The script also asserts that .github/workflows/ci.yml still invokes every
 # mandatory gate as a step of the docs job, so the self-test cannot stay green
@@ -60,7 +65,7 @@
 # Usage (from anywhere; the repository root is derived from this file):
 #   bash tools/test-docs-gates.sh
 #   bash tools/test-docs-gates.sh --check-ci FILE   # the wiring guard alone
-#                                                   # (used by mutation 26)
+#                                                   # (used by mutation 29)
 #
 # Requires bash, cp, cmp, awk, grep, find, mktemp and, for the two example
 # runners, a built lovelace-run under ${CARGO_TARGET_DIR:-<repo>/target}.
@@ -265,12 +270,14 @@ fi
 
 # A minimal current documentation tree that passes every check-docs.sh mode:
 # one page per scanned class (docs/, root page, agent instruction) with a
-# resolving link, a resolving heading anchor and a live code reference, and a
-# placeholder source root so the symbol index is non-empty.
+# resolving link, a resolving heading anchor and a live code reference, a
+# resolving directory reference (so the trailing-slash rule has a positive
+# case before its mutation runs), and a placeholder source root so the symbol
+# index is non-empty.
 make_check_docs_tree() {
     local root=$1
-    mkdir -p -- "$root/tools" "$root/docs" "$root/lovelace-lang/src" \
-        "$root/.github" "$root/.dsh/skills/scratch" || exit 2
+    mkdir -p -- "$root/tools" "$root/docs" "$root/docs/internal/archive" \
+        "$root/lovelace-lang/src" "$root/.github" "$root/.dsh/skills/scratch" || exit 2
     copy_checker "$repo_root/tools/check-docs.sh" "$root/tools/check-docs.sh"
     cat >"$root/lovelace-lang/src/lib.rs" <<'RUST'
 pub fn engine_open() {}
@@ -280,6 +287,8 @@ RUST
 # Scratch documentation index
 
 Self-test fixture. The engine entry point is `engine_open()`.
+
+The archived harness lives under `docs/internal/archive/`.
 
 See [the page template](template.md#template) and the implementation in
 `lovelace-lang/src/lib.rs`.
@@ -575,6 +584,97 @@ make_docs_report_tree() {
 }
 
 # ---------------------------------------------------------------------------
+# A scratch repository for the crate-example manifest case (31): one page with
+# one rust fence and the seven workspace crates the generated manifest
+# declares. The fake cygpath and cargo below never compile anything; they
+# judge only the path text in the generated Cargo.toml, which is the defect
+# that case is about.
+# ---------------------------------------------------------------------------
+write_fake_cygpath() {
+    local root=$1
+    cat >"$root/fakebin/cygpath" <<'SH'
+#!/usr/bin/env bash
+# Fake cygpath for the self-test. -w converts the POSIX path to a native
+# Windows spelling the way Git Bash does; every other form returns its last
+# argument, which is all check-crate-examples.sh asks for.
+set -u
+last=${!#}
+case "${1:-}" in
+    -w)
+        printf 'C:'
+        printf '%s' "$last" | sed 's|/|\\|g'
+        printf '\n'
+        ;;
+    *)
+        printf '%s\n' "$last"
+        ;;
+esac
+SH
+    chmod +x "$root/fakebin/cygpath" || exit 2
+}
+
+write_fake_cargo() {
+    local root=$1
+    cat >"$root/fakebin/cargo" <<'SH'
+#!/usr/bin/env bash
+# A stand-in for the native cargo: it does not compile, it judges the manifest
+# the way Windows cargo would. A path that starts with "/" is rooted at the
+# current drive by the Windows path parser, so under Git Bash it names a
+# directory that does not exist - the CI failure this case reproduces. Any
+# other non-native spelling is a test-only assertion. Accepted paths emit one
+# stub executable per src/bin file so the run phase can pass.
+set -u
+if [ ! -f Cargo.toml ]; then
+    printf 'error: could not find `Cargo.toml`\n' >&2
+    exit 101
+fi
+bad=$(awk -F'"' '$0 ~ /path = "/ && $2 ~ /^\// { print $0; exit }' Cargo.toml)
+if [ -n "$bad" ]; then
+    path=$(printf '%s' "$bad" | awk -F'"' '{ print $2 }')
+    dep=$(printf '%s' "$bad" | sed 's/ = .*//')
+    win=$(printf 'C:%s' "$path" | sed 's|/|\\|g')
+    printf 'error: failed to load manifest for dependency `%s`\n' "$dep" >&2
+    printf '  failed to read `%s`:\n' "$win" >&2
+    printf '  The system cannot find the path specified. (os error 3)\n' >&2
+    exit 101
+fi
+foreign=$(awk -F'"' '$0 ~ /path = "/ && $2 !~ /^[A-Za-z]:[\\/]/ { print $2; exit }' Cargo.toml)
+if [ -n "$foreign" ]; then
+    printf 'fake-cargo: manifest path is not native: %s\n' "$foreign" >&2
+    exit 101
+fi
+mkdir -p -- "$CARGO_TARGET_DIR/debug" || exit 2
+for src in src/bin/*.rs; do
+    name=${src##*/}
+    name=${name%.rs}
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$CARGO_TARGET_DIR/debug/$name" || exit 2
+    chmod +x -- "$CARGO_TARGET_DIR/debug/$name" || exit 2
+done
+exit 0
+SH
+    chmod +x "$root/fakebin/cargo" || exit 2
+}
+
+make_crate_examples_tree() {
+    local root=$1 dep
+    mkdir -p -- "$root/tools" "$root/docs/crates" "$root/fakebin" || exit 2
+    copy_checker "$repo_root/tools/check-crate-examples.sh" "$root/tools/check-crate-examples.sh"
+    cat >"$root/docs/crates/example.md" <<'MD'
+# Example page
+
+```rust
+assert_eq!(1 + 1, 2);
+```
+MD
+    for dep in lovelace-array lovelace-int lovelace-json lovelace-lang lovelace-nat lovelace-real lovelace-symbolics; do
+        mkdir -p -- "$root/$dep" || exit 2
+        printf '[package]\nname = "%s"\nversion = "0.0.0"\n' "$dep" >"$root/$dep/Cargo.toml"
+    done
+    write_fake_cygpath "$root"
+    write_fake_cargo "$root"
+}
+
+# ---------------------------------------------------------------------------
 # Locate the built runner: the example-runner mutations must fail their own
 # manifest/pairing checks, not "lovelace-run not found". Build it first.
 # ---------------------------------------------------------------------------
@@ -611,7 +711,8 @@ printf 'SETUP lovelace-run: %s\n' "$runner_exe"
 printf 'SETUP scratch: %s\n' "$work"
 
 # ---------------------------------------------------------------------------
-# 1-2. check-docs.sh, base pass: links and path-shaped code references
+# 1-3, 7. check-docs.sh, base pass: links and path-shaped file and directory
+# references
 # ---------------------------------------------------------------------------
 {
     root=$work/check-docs-broken-link/repo
@@ -633,6 +734,20 @@ printf 'SETUP scratch: %s\n' "$work"
     expect_failure "check-docs: path-shaped code reference to a nonexistent file" \
         "docs/index.md" "does not name an existing file" \
         "$work/check-docs-missing-ref/mutated.log" bash "$root/tools/check-docs.sh"
+}
+
+{
+    root=$work/check-docs-missing-dir/repo
+    make_check_docs_tree "$root"
+    expect_success "check-docs base: missing-directory-reference fixture" \
+        "$work/check-docs-missing-dir/baseline.log" bash "$root/tools/check-docs.sh"
+    # EVD-056's shape: a directory quoted with a trailing slash passes the
+    # file-extension rule, so only the directory rule can see that it moved.
+    printf '\nThe first goal cycle is archived under `docs/goal-docs-v1/`.\n' \
+        >>"$root/docs/index.md"
+    expect_failure "check-docs: backticked directory path that does not exist" \
+        "docs/index.md" "does not name an existing directory" \
+        "$work/check-docs-missing-dir/mutated.log" bash "$root/tools/check-docs.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -661,7 +776,7 @@ printf 'SETUP scratch: %s\n' "$work"
 }
 
 # ---------------------------------------------------------------------------
-# 5-6. check-docs.sh --claims
+# 10-13. check-docs.sh --claims
 # ---------------------------------------------------------------------------
 {
     root=$work/check-docs-claim/repo
@@ -691,8 +806,54 @@ MD
         "$work/check-docs-tutorial/mutated.log" bash "$root/tools/check-docs.sh" --claims
 }
 
+{
+    root=$work/check-docs-retired-term/repo
+    make_check_docs_tree "$root"
+    mkdir -p -- "$root/docs/tutorials" || exit 2
+    expect_success "check-docs --claims: retired-term fixture" \
+        "$work/check-docs-retired-term/baseline.log" bash "$root/tools/check-docs.sh" --claims
+    printf '\nEigenvalues are precision-bounded at that count.\n' >>"$root/docs/index.md"
+    expect_failure "check-docs --claims: retired claim term on a current page" \
+        "docs/index.md" "retired term 'precision-bounded' (use 'precision-limited'" \
+        "$work/check-docs-retired-term/mutated.log" bash "$root/tools/check-docs.sh" --claims
+}
+
+{
+    # The archived harness records are evidence, not current documentation:
+    # the rule must not turn the archived vocabulary into a defect.
+    root=$work/check-docs-archived-term/repo
+    make_check_docs_tree "$root"
+    mkdir -p -- "$root/docs/tutorials" "$root/docs/internal/archive/goal-docs-v1" || exit 2
+    printf '# Archived journal\n\nThe first cycle called this precision-bounded.\n' \
+        >"$root/docs/internal/archive/goal-docs-v1/journal.md"
+    mkdir -p -- "$root/docs/goal-docs-v2" || exit 2
+    printf '# Archived goal memory\n\nStill precision-bounded in this record.\n' \
+        >"$root/docs/goal-docs-v2/journal.md"
+    expect_success "check-docs --claims: archived harness records keep the retired term" \
+        "$work/check-docs-archived-term/baseline.log" bash "$root/tools/check-docs.sh" --claims
+}
+
+{
+    # docs/adr/ may quote the retired term as history, but the ADR tree is not
+    # a blanket exemption: an unquoted current use on an ADR page fails too.
+    root=$work/check-docs-retired-term-adr/repo
+    make_check_docs_tree "$root"
+    mkdir -p -- "$root/docs/tutorials" "$root/docs/adr" || exit 2
+    cat >"$root/docs/adr/999-scratch.md" <<'MD'
+# Scratch ADR
+
+The earlier draft previously said "precision-bounded" for this kind of value.
+MD
+    expect_success "check-docs --claims: ADR historical quotation" \
+        "$work/check-docs-retired-term-adr/baseline.log" bash "$root/tools/check-docs.sh" --claims
+    printf '\nA precision-bounded result is acceptable here.\n' >>"$root/docs/adr/999-scratch.md"
+    expect_failure "check-docs --claims: retired claim term unquoted in an ADR" \
+        "docs/adr/999-scratch.md" "retired term 'precision-bounded'" \
+        "$work/check-docs-retired-term-adr/mutated.log" bash "$root/tools/check-docs.sh" --claims
+}
+
 # ---------------------------------------------------------------------------
-# 7. check-docs.sh --readme
+# 14. check-docs.sh --readme
 # ---------------------------------------------------------------------------
 {
     root=$work/check-docs-readme/repo
@@ -760,7 +921,7 @@ MD
 }
 
 # ---------------------------------------------------------------------------
-# 12-17. check-reference-pages.sh
+# 15-20. check-reference-pages.sh
 # ---------------------------------------------------------------------------
 {
     root=$work/reference-missing-section/repo
@@ -933,7 +1094,7 @@ MD
 }
 
 # ---------------------------------------------------------------------------
-# 18-21. docs/language/examples/run-examples.sh
+# 21-24. docs/language/examples/run-examples.sh
 # ---------------------------------------------------------------------------
 {
     root=$work/language-undeclared/repo
@@ -1004,7 +1165,7 @@ MD
 }
 
 # ---------------------------------------------------------------------------
-# 14-17. docs/extensions/examples/run-examples.sh
+# 25-28. docs/extensions/examples/run-examples.sh
 # ---------------------------------------------------------------------------
 {
     root=$work/extensions-undeclared/repo
@@ -1076,7 +1237,7 @@ MD
 }
 
 # ---------------------------------------------------------------------------
-# 26. CI wiring: delete one mandatory step from a copy of ci.yml and prove the
+# 29. CI wiring: delete one mandatory step from a copy of ci.yml and prove the
 # guard fails. The real workflow is never modified, and the baseline run of the
 # same guard against the real file proves the deleted step is the only change.
 # ---------------------------------------------------------------------------
@@ -1104,7 +1265,7 @@ MD
 }
 
 # ---------------------------------------------------------------------------
-# 27. docs-report.sh: a gate that exits 0 but prints no DOCREPORT line is a
+# 30. docs-report.sh: a gate that exits 0 but prints no DOCREPORT line is a
 # failure. A silent pass is not evidence, and the total must record it.
 # ---------------------------------------------------------------------------
 {
@@ -1122,6 +1283,49 @@ MD
         "$root/mutated.log" bash "$root/tools/docs-report.sh"
     if ! grep -Fq -- 'DOCREPORT total gates=4 ok=3 failed=1' "$root/mutated.log"; then
         fail "docs-report: total after a missing summary" "the total line is not gates=4 ok=3 failed=1"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 31. check-crate-examples.sh: a POSIX path in the generated Cargo.toml is a
+# Windows build failure. The fake cygpath converts the way Git Bash does, so
+# the baseline proves the manifest is native whenever cygpath exists; the
+# mutation leaves the path POSIX - the shape the original toml_path produced
+# on Git Bash when its Windows-path case did not match - and the fake cargo
+# fails the way Windows cargo did in run 43878298949. The checker must add an
+# explanation of the path shape, not just cargo's message.
+# ---------------------------------------------------------------------------
+{
+    root=$work/crate-examples-posix-manifest/repo
+    make_crate_examples_tree "$root"
+    case31_baseline=$work/crate-examples-posix-manifest/baseline.log
+    case31_mutated=$work/crate-examples-posix-manifest/mutated.log
+
+    expect_success "crate-examples: cygpath host" "$case31_baseline" \
+        env CARGO="$root/fakebin/cargo" CARGO_TARGET_DIR="$root/target" \
+        PATH="$root/fakebin:$PATH" \
+        bash "$root/tools/check-crate-examples.sh"
+    if ! grep -Fq -- 'compiled=1 excluded=0 failures=0' "$case31_baseline"; then
+        fail "crate-examples: clean baseline" \
+            "the DOCREPORT line is not compiled=1 excluded=0 failures=0"
+    fi
+
+    cat >"$root/fakebin/cygpath" <<'SH'
+#!/usr/bin/env bash
+# Mutation: cygpath exists but leaves the POSIX path unchanged, the manifest
+# shape the original toml_path produced on Git Bash.
+printf '%s\n' "${!#}"
+SH
+    chmod +x "$root/fakebin/cygpath" || exit 2
+
+    expect_failure "crate-examples: POSIX path in the generated manifest" \
+        "the generated manifest records a path" "cygpath -w" \
+        "$case31_mutated" \
+        env CARGO="$root/fakebin/cargo" CARGO_TARGET_DIR="$root/target" \
+        PATH="$root/fakebin:$PATH" \
+        bash "$root/tools/check-crate-examples.sh"
+    if ! grep -Fq -- 'status=fail' "$case31_mutated"; then
+        fail "crate-examples: mutated summary" "the DOCREPORT line does not report status=fail"
     fi
 }
 

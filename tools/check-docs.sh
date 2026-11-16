@@ -33,9 +33,19 @@
 #      suffix for a repeated heading. This is an ASCII approximation of the
 #      GitHub anchor algorithm (non-ASCII letters are dropped); it verifies
 #      that the anchor exists, not that the surrounding sentence is true;
-#   3. every path-shaped inline code reference (a `a/b.rs` style path that
-#      contains "/" and ends in .rs, .toml, .yml, .yaml, .json or .md, with an
-#      optional :NNN or :NNN-MMM line suffix) names an existing file;
+#   3. every path-shaped inline code reference names an existing path. A
+#      `a/b.rs` style file reference contains "/" and ends in .rs, .toml,
+#      .yml, .yaml, .json or .md, with an optional :NNN or :NNN-MMM suffix,
+#      and must resolve. A backticked path that ends in "/" and has at least
+#      two segments names a directory and must resolve too; that half is what
+#      catches a moved directory quoted in prose (RQ-015, EVD-056): before it,
+#      `docs/goal-docs-v1/` survived although the directory had moved to
+#      `docs/internal/archive/goal-docs-v1/`. A single-segment name (`rust/`,
+#      `lang/`, `round-33/`) is not treated as a repository path: it is as
+#      often a historical proper name, a corpus-id prefix or a capture round
+#      named in the LovelaceSharp repository. An `http(s)://` URL is skipped,
+#      and so is a path the citing line itself declares absent ("... exist
+#      yet", "no longer ..."): that sentence is not a claim that it exists;
 #   4. with --symbols: no *.rs:NNN line-suffix citation on a docs/ page
 #      outside docs/adr/ (those records are historical). Root pages and agent
 #      instructions may cite a source line as an operational anchor: AGENTS.md
@@ -49,7 +59,16 @@
 #      the three pages that prohibit, replace or correct them, and every page
 #      under docs/tutorials/ has a "## Precision" section. Fenced blocks and
 #      inline code spans are mentions, not claims, and are not matched.
-#   6. with --readme: README.md states its value proposition in the first ten
+#   6. with --claims: no current page, root page or agent instruction uses the
+#      retired claim-vocabulary term "precision-bounded" (TODO-007). The four
+#      claim kinds are exact, precision-limited, error-bounded and
+#      parity-verified (docs/editorial.md). The archived harness records never
+#      reach this scan (docs/internal/archive/ and docs/goal-docs-*/ are not
+#      current pages), and docs/adr/ may quote the term only as an explicit
+#      historical quotation: the term in quotation marks on a line that also
+#      marks it as history ("previously", "historically", "was called", ...).
+#      A use reports file:line and the replacement to write.
+#   7. with --readme: README.md states its value proposition in the first ten
 #      lines, carries a "## Current limitations" section and a fenced block
 #      containing lovelace-run, and places all three before "## The crates".
 #
@@ -67,7 +86,8 @@ usage() {
   printf '              in docs/, README.md, AGENTS.md, CONTRACT.md and the agent instructions\n'
   printf '  --symbols   also reject .rs:NNN citations on docs/ pages and unknown Rust symbols\n'
   printf '              (a token search of lovelace-*/src, not semantic resolution)\n'
-  printf '  --claims    also reject absolutist numerical claims and tutorials without ## Precision\n'
+  printf '  --claims    also reject absolutist numerical claims, the retired claim term\n'
+  printf '              and tutorials without ## Precision\n'
   printf '  --readme    also assert the README value proposition, limitations, command and order\n'
 }
 
@@ -116,6 +136,7 @@ citations_checked=0
 symbols_checked=0
 claim_hits=0
 claim_pages=0
+retired_hits=0
 tutorials_checked=0
 precision_sections=0
 readme_requirements=0
@@ -161,6 +182,43 @@ page_class() {
 claims_phrase_allowed() {
   case "$1" in
     docs/editorial.md|docs/adr/004-thirty-digit-default.md|docs/extensions/dsp.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Retired claim vocabulary (TODO-007). The four kinds are exact,
+# precision-limited, error-bounded and parity-verified; "precision-bounded" is
+# the retired name and may survive only in a historical record. The archived
+# harness trees never reach this scan because is_current_doc excludes them.
+# docs/adr/ is decision history, so it may quote the old wording as history:
+# the term must be in quotation marks AND the same line must mark it as
+# historical ("previously", "was called", ...). An unquoted use in an ADR is
+# current prose and fails, so the ADR tree is not a blanket exemption.
+retired_term_allowed() {
+  # $1 file, $2 lowercased citing line
+  case "$1" in
+    docs/internal/archive/*|docs/goal-docs-*) return 0 ;;
+    docs/adr/*)
+      case "$2" in
+        *'"precision-bounded"'*|*'`precision-bounded`'*) ;;
+        *) return 1 ;;
+      esac
+      case "$2" in
+        *previously*|*historically*|*"used to"*|*"was called"*|*retired*|*former*|*superseded*|*originally*) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# A directory path that the citing line itself declares absent is not a stale
+# claim that the directory exists: docs/editorial.md names `docs/how-to/` as a
+# planned page shape and says in the same line that no how-to pages exist yet.
+# The markers are deliberately narrow and are measured on the citing line.
+directory_ref_documented_absent() {
+  case "$1" in
+    *"exist yet"*|*"does not exist"*|*"do not exist"*|*"not part of this repository"*|*"no longer"*|*"not yet"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -433,6 +491,36 @@ while IFS= read -r -d '' file; do
         ref=${ref%:*}
       fi
 
+      # ---- directory references --------------------------------------------
+      # A path that ends in "/" names a directory, and the file-extension case
+      # below cannot see it. This is EVD-056's shape: a moved directory quoted
+      # in prose passed every check while the old location was gone. A
+      # single-segment name is skipped: `rust/`, `lang/` and `round-33/` are
+      # historical proper names or corpus-id prefixes more often than they are
+      # repository paths. A URL, an absolute host path and a path the citing
+      # line declares absent are not directory claims either.
+      case "$ref" in
+        */)
+          case "$ref" in
+            *://*|/*|*\\*) continue ;;
+          esac
+          dir_ref=${ref%/}
+          case "$dir_ref" in
+            */*) ;;
+            *) continue ;;
+          esac
+          if directory_ref_documented_absent "${text,,}"; then
+            continue
+          fi
+          refs_checked=$((refs_checked + 1))
+          if ! resolve_ref "$ref" "$doc_dir"; then
+            fail "$file" "$line_no" \
+              "code reference '$body' does not name an existing directory"
+          fi
+          continue
+          ;;
+      esac
+
       case "$ref" in
         */*.rs|*/*.toml|*/*.yml|*/*.yaml|*/*.json|*/*.md) ;;
         *) continue ;;
@@ -443,6 +531,21 @@ while IFS= read -r -d '' file; do
         fail "$file" "$line_no" "code reference '$body' does not name an existing file"
       fi
     done
+
+    # ---- retired claim vocabulary (--claims) ------------------------------
+    # Measured once per line on the raw text, inline code span included: a
+    # backticked use still teaches the retired term. The archived trees never
+    # reach this loop (is_current_doc excludes them), and docs/adr/ may quote
+    # it as history; retired_term_allowed is the only exception.
+    if [ "$claims" -eq 1 ]; then
+      lower_text=${text,,}
+      if [[ $lower_text == *precision-bounded* ]] &&
+        ! retired_term_allowed "$file" "$lower_text"; then
+        retired_hits=$((retired_hits + 1))
+        fail "$file" "$line_no" \
+          "retired term 'precision-bounded' (use 'precision-limited'; the four claim kinds are exact, precision-limited, error-bounded and parity-verified)"
+      fi
+    fi
   done < <(awk '
     { sub(/\r$/, "") }
     {
@@ -490,7 +593,7 @@ if [ "$claims" -eq 1 ]; then
       if [ -n "$claim_phrase" ] && ! claims_phrase_allowed "$file"; then
         claim_hits=$((claim_hits + 1))
         fail "$file" "$line_no" \
-          "prohibited numerical claim '$claim_phrase' (label it exact, precision-bounded or parity; see docs/editorial.md)"
+          "prohibited numerical claim '$claim_phrase' (label it exact, precision-limited, error-bounded or parity-verified; see docs/editorial.md)"
       fi
     done < <(awk '
       { sub(/\r$/, "") }
@@ -533,7 +636,7 @@ if [ "$claims" -eq 1 ]; then
       END { exit(found ? 0 : 1) }
     ' "$file"; then
       fail "$file" 1 \
-        "missing '## Precision' section (every tutorial labels its values exact, precision-bounded or parity)"
+        "missing '## Precision' section (every tutorial labels its values exact, precision-limited, error-bounded or parity-verified)"
     else
       precision_sections=$((precision_sections + 1))
     fi
@@ -663,8 +766,8 @@ else
 fi
 
 if [ "$claims" -eq 1 ]; then
-  printf 'check-docs: claims audit: %d pages under docs/, %d tutorial pages, %d prohibited phrase(s)\n' \
-    "$claim_pages" "$tutorials_checked" "$claim_hits"
+  printf 'check-docs: claims audit: %d pages under docs/, %d tutorial pages, %d prohibited phrase(s), %d retired-term use(s)\n' \
+    "$claim_pages" "$tutorials_checked" "$claim_hits" "$retired_hits"
 fi
 if [ "$readme" -eq 1 ]; then
   printf 'check-docs: README.md structural audit: 4 requirements checked\n'

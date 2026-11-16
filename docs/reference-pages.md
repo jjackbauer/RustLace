@@ -74,9 +74,9 @@ same change.
 Everything else under `docs/` is out of scope for the same family of reasons: `architecture.md`,
 `testing.md`, `editorial.md`, `contributing.md`, `extending.md`, `release.md`, `skills.md` and the
 rest are explanation or procedure; `docs/adr/` is decision history; `docs/csharp-oracle/` and
-`docs/symbolics/` are fixtures; and `docs/goal-desktop-v4/` and `docs/goal-docs-v1/` are archived
-specification and harness working memory. None of them documents a public callable or programmatic
-surface.
+`docs/symbolics/` are fixtures; and `docs/goal-desktop-v4/` and
+`docs/internal/archive/goal-docs-v1/` are archived specification and harness working memory. None of
+them documents a public callable or programmatic surface.
 
 ## Conformance
 

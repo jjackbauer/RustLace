@@ -336,6 +336,27 @@
 - **Alternatives considered**: treating ADR-004:100 as an exempt historical quotation (rejected by the implementer with a reason, and I agree — the sentence prescribes what to do now).
 - **Related**: VAL-009, C17, C19, C20, C21
 
+### OBS-012: Hosted Windows found a path-translation bug no local run could
+
+- **Source**: GitHub run 43878298949, job `Documentation examples (windows-latest)`
+- **Fact**: The step `Compile and run the crate-page examples` failed with `failed to read C:\d\a\RustLace\RustLace\lovelace-array\Cargo.toml`. The generated temporary `Cargo.toml` carried POSIX paths (`/d/a/RustLace/...`); Git Bash translates argv for native binaries but not file contents, so native Windows cargo read `/d/...` as `C:\d\...`. The other three jobs — Windows workspace, Linux, and Ubuntu docs — were green.
+- **Implications**: This is precisely the class RQ-013.4 names ("checkout/CRLF, Git Bash, binary lookup, path, or shell discrepancies"). It is invisible on Linux by construction, and it is the second failure hosted CI has caught that local gates called green.
+- **Confidence**: High
+- **Agent**: orchestrator
+- **Related**: EVD-057, RQ-013.4, TODO-010, C13
+
+### TODO-010: Make generated Cargo manifests platform-native
+
+- **Task**: In `tools/check-crate-examples.sh` (and any sibling that writes a path into a file), convert the path with `cygpath -w` when available so the generated manifest is `D:\a\RustLace\...` on Git Bash, leaving Linux untouched.
+- **Priority**: P0 (blocks C13)
+- **Depends on**: none
+- **Status**: Done in round 8 and reproduced against a real Git Bash host in round 9. The generated
+  manifest now records `F:\\dev\\RustLace\\lovelace-array`, which decodes to
+  `F:\dev\RustLace\lovelace-array` and resolves through the native Windows API; the pre-fix
+  `/f/dev/RustLace/...` shape does not resolve there. The hosted Windows run that decides C13 is
+  still outstanding, so this is a local diagnosis of the cause, not the hosted record.
+- **Related**: OBS-012, EVD-057, RQ-013.4, C13
+
 ### DEC-001: All 24 requirements gate completion
 
 - **Decision**: Every requirement RQ-001…RQ-024 must be met with evidence. No P2/P3 item may close as an "accepted residual".
