@@ -22,7 +22,9 @@ Run from the repository root. The engine crates build anywhere; the desktop work
 runs on Windows and on Linux (X11). Linux needs the X11/GL/font packages and, on a display-less
 machine, Xvfb - see [Build on Linux](#build-on-linux).
 Requires Rust 1.85+ (`rust-version` in `Cargo.toml`; the tree was built with 1.100.0) and, on
-Windows, the MSVC build tools.
+Windows, the MSVC build tools. A per-user rustup install keeps `cargo.exe` and `rustc.exe` under
+`%USERPROFILE%\.cargo\bin`; use that full path when a shell's `PATH` predates the install (a
+long-running terminal or agent host keeps the environment it started with).
 
 ```console
 # build
