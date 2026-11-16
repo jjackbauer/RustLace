@@ -328,7 +328,8 @@ pub fn run(script: Option<PathBuf>, out: Option<PathBuf>) -> i32 {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1600.0, 1000.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("Lovelace Desktop - ARC-007 run measurement"),
+            .with_title("Lovelace Desktop - ARC-007 run measurement")
+            .with_icon(super::app::window_icon()),
         ..Default::default()
     };
     let outcome = Arc::new(AtomicBool::new(false));

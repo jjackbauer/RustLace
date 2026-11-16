@@ -1,3 +1,5 @@
+![RustLace logo with an infinity motif and calligraphic wordmark](docs/images/rustlace-logo.webp)
+
 # RustLace
 
 [![CI](https://github.com/jjackbauer/RustLace/actions/workflows/ci.yml/badge.svg)](https://github.com/jjackbauer/RustLace/actions/workflows/ci.yml)

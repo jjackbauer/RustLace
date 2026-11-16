@@ -1,3 +1,5 @@
+![RustLace logo with an infinity motif and calligraphic wordmark](images/rustlace-logo.webp)
+
 # Documentation index
 
 Start with the [README](../README.md). This directory holds the long-form documentation.

@@ -9891,13 +9891,25 @@ fn splitter(
     }
 }
 
+/// The application icon: the complete heart-and-infinity emblem, with no wordmark, on the
+/// banner's near-black ground (`assets/rustlace-icon.png`, 512x512).
+///
+/// The PNG is embedded so the window icon is identical on both platforms; eframe decodes it at
+/// startup. A missing or unreadable asset costs the icon, not the window, so the fallback is an
+/// empty icon.
+pub(crate) fn window_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../../assets/rustlace-icon.png"))
+        .unwrap_or_default()
+}
+
 /// The native window options shared by the workbench and the EDT-016 measurement mode.
 pub(crate) fn native_options() -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("Lovelace Desktop"),
+            .with_title("Lovelace Desktop")
+            .with_icon(window_icon()),
         // Renderer selection is deliberate and platform-conditional. Windows keeps eframe's
         // default (wgpu), which is the backend the shipped product has always used there, so
         // nothing about the Windows window changes. Linux selects glow (OpenGL): eframe's
@@ -9942,6 +9954,41 @@ mod tests {
     use crate::workbench::Workbench;
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Instant;
+
+    /// The icon is the complete infinity emblem: a transparent rounded corner, the banner's
+    /// near-black ground, the cream stroke on both right-hand branches (upper lobe and the lower
+    /// branch that completes it), the orange heart, and the same 512x512 image reaches the native
+    /// window options.
+    #[test]
+    fn window_icon_is_the_complete_infinity_emblem() {
+        let icon = window_icon();
+        assert_eq!((icon.width, icon.height), (512, 512));
+        let pixel = |x: usize, y: usize| -> [u8; 4] {
+            let offset = (y * icon.width as usize + x) * 4;
+            [
+                icon.rgba[offset],
+                icon.rgba[offset + 1],
+                icon.rgba[offset + 2],
+                icon.rgba[offset + 3],
+            ]
+        };
+        // Outside the rounded tile, the banner's ground, and the infinity's cream stroke in the
+        // upper lobe, then in the lower branch that closes the right-hand side.
+        assert_eq!(pixel(0, 0), [0, 0, 0, 0]);
+        assert_eq!(pixel(256, 20), [3, 3, 3, 255]);
+        assert!(pixel(452, 232)[..3].iter().all(|channel| *channel >= 230));
+        assert!(pixel(439, 329)[..3].iter().all(|channel| *channel >= 230));
+        // The heart's orange, with no transparent pixel in the mark.
+        let heart = pixel(169, 213);
+        assert!(heart[0] >= 240 && (90..=160).contains(&heart[1]) && heart[2] <= 40);
+        assert_eq!(heart[3], 255);
+
+        let wired = native_options()
+            .viewport
+            .icon
+            .expect("native options carry the window icon");
+        assert_eq!((wired.width, wired.height), (512, 512));
+    }
 
     /// An engine that sleeps in every evaluation, so a run stays in flight long enough for the
     /// window to paint it and for a shortcut to reach it.
