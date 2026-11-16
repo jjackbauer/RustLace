@@ -12,40 +12,149 @@ about the value is a consistency check, not a proof.
 
 Every crate keeps its tests beside the code as `#[cfg(test)]` modules: parity rounds
 (`roundNN_*.rs`), focused suites and, where a port needed it, a falsification harness
-(`lovelace-lang/src/falsification_round46/`). The counts below were observed on this tree with
-`cargo test --workspace --no-fail-fast`; they are a carried observation, not a re-measurement in
-this environment, and the `lovelace-desktop` row is the Windows figure.
+(`lovelace-lang/src/falsification_round46/`).
 
-| Crate | Passed | Ignored |
-|---|---|---|
-| `lovelace-real` | 2487 | 0 |
-| `lovelace-lang` | 1737 | 0 |
-| `lovelace-desktop` | 716 | 0 |
-| `lovelace-run` | 438 | 0 |
-| `lovelace-nat` | 271 | 0 |
-| `lovelace-symbolics` | 197 | 0 |
-| `lovelace-int` | 135 | 0 |
-| `lovelace-array` | 61 | 0 |
-| `lovelace-corpus` (lib) | 18 | 1 |
-| `lovelace-json` | 7 | 0 |
-| `lovelace-bench` | 0 | 0 |
-| **Total** | **6135** | **1** |
+### The current aggregate, measured
 
-The single ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in place:
-"blocked: numeric::evaluate and IrEvaluator differ by 1 ulp at 50 places (lovelace-lang)".
+Every count in the current table is an **exact** observation of a named revision; none of the rows
+is carried forward as a current total. The aggregate was measured on **Linux** (WSL2, Ubuntu
+24.04.4 LTS, x86_64) on **2026-11-16** at commit
+**`fa87ecc6abe41d3e174d62b211dd6b6fac2e29b7`** (`v0.4.1-4-gfa87ecc`) with:
 
-Those totals are composed from two runs on this tree: `cargo test --workspace --no-fail-fast`
-reported **6130 passed, 5 failed** before the frozen knowledge-graph fixture was carried
-(`e87ca2a`); the five failures were `lovelace-know`'s `convergence_tests` (2), `graph_tests` (2) and
-`seed_reproduction` (1), all failing on the missing `knowledge-graph-demo.json`. With that fixture
-present, `cargo test -p lovelace-know` passes (exit 0) and the total is **6135 passed, 1 ignored**.
-If you clone a revision without the fixture, expect those five failures and nothing else.
+```console
+$ xvfb-run -a -s "-screen 0 1600x1000x24" cargo test --workspace --no-fail-fast
+```
 
-At v0.4.1, `cargo test -p lovelace-desktop` (measured on Linux under `xvfb-run`) reports
-**711 passed** in the binary plus **4 passed** in `tests/linux_cli.rs` — **715** in total, with
-0 failed. That is the desktop verification gate. The Windows count was **not measured in this
-environment**, and it is not inferred from the 711: ten tests in the crate do not compile on Linux.
-The `src/ui/**` modules compile and run there; the ten tests that do not are Windows by premise or
+The run reports **35 test targets: 6147 passed, 0 failed, 1 ignored**. The per-crate rows below
+are the same commands grouped by crate (`cargo test -p <crate>`, with the desktop under
+`xvfb-run`), on the same commit, date and host; they sum to the same 6147 passed and 1 ignored.
+
+| Crate | Test targets | Passed | Failed | Ignored |
+|---|---:|---:|---:|---:|
+| `lovelace-real` | 2 | 2487 | 0 | 0 |
+| `lovelace-lang` | 2 | 1750 | 0 | 0 |
+| `lovelace-desktop` (Linux) | 2 | 715 | 0 | 0 |
+| `lovelace-run` | 3 | 450 | 0 | 0 |
+| `lovelace-nat` | 2 | 271 | 0 | 0 |
+| `lovelace-symbolics` | 2 | 197 | 0 | 0 |
+| `lovelace-int` | 2 | 135 | 0 | 0 |
+| `lovelace-array` | 2 | 61 | 0 | 0 |
+| `lovelace-corpus` | 3 | 18 | 0 | 1 |
+| `lovelace-json` | 2 | 7 | 0 | 0 |
+| `lovelace-bench` | 1 | 0 | 0 | 0 |
+| `lovelace-know` | 12 | 56 | 0 | 0 |
+| **Total** | **35** | **6147** | **0** | **1** |
+
+Rows that compose more than one target:
+
+- `lovelace-desktop` is 711 passed in `src/main.rs` plus 4 in `tests/linux_cli.rs`. This is the
+  Linux measurement; the Windows desktop figure is **not measured in this environment** and is
+  kept separate [below](#windows-and-linux-are-separate-observations).
+- `lovelace-run` is 438 in `src/main.rs`, 1 in `tests/recursion_depth.rs` and 11 in `tests/repl.rs`.
+- `lovelace-know` is 56 across nine integration targets, with two zero-test unit targets and one
+  zero-test doctest target. Its CLI-stdio tests spawn the real `lovelace-run` binary, so a
+  standalone `cargo test -p lovelace-know` in a fresh target directory needs `cargo build -p
+  lovelace-run` first (the test helper prints that instruction when the binary is missing);
+  `cargo test --workspace` builds it as part of `lovelace-run`'s own test targets.
+
+The single ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in
+place: "blocked: numeric::evaluate and IrEvaluator differ by 1 ulp at 50 places
+(lovelace-lang)". It is part of the `lovelace-corpus` row (18 passed + 1 ignored).
+
+### The reconciled historical table: 6,067 + 68 = 6,135
+
+Before this edit the page listed eleven rows that summed to **6,067** while its Total row said
+**6,135**. The 68-test difference is real, and row-level measurement splits it into the two test
+targets the table omitted. It is not one crate:
+
+| Crate | Passed | Ignored | Provenance of the row |
+|---|---:|---:|---|
+| `lovelace-real` | 2487 | 0 | row as recorded |
+| `lovelace-lang` | 1737 | 0 | measured at `7ceeeba`, the revision this table describes |
+| `lovelace-desktop` | 716 | 0 | **recorded on Windows; the record names no date or commit, and it is not measured here** |
+| `lovelace-run` (`src/main.rs`) | 438 | 0 | row as recorded; unit-test target only |
+| `lovelace-run` (`tests/`) | 12 | 0 | **added row**: 1 `recursion_depth` + 11 `repl`; 12 passed at v0.4.1 and at `fa87ecc` |
+| `lovelace-nat` | 271 | 0 | row as recorded |
+| `lovelace-symbolics` | 197 | 0 | row as recorded |
+| `lovelace-int` | 135 | 0 | row as recorded |
+| `lovelace-array` | 61 | 0 | row as recorded |
+| `lovelace-corpus` (lib) | 18 | 1 | row as recorded |
+| `lovelace-json` | 7 | 0 | row as recorded |
+| `lovelace-bench` | 0 | 0 | row as recorded |
+| `lovelace-know` | 56 | 0 | **added row**: 56 tests at `7ceeeba` (`--list`); 56 passed at v0.4.1 with the runner built and at `fa87ecc` |
+| **Total** | **6135** | **1** | recorded aggregate, Windows |
+
+The arithmetic is explicit:
+
+```text
+rows as originally written    2487+1737+716+438+271+197+135+61+18+7+0 = 6067
+omitted: lovelace-know                                                   56
+omitted: lovelace-run tests/                                             12
+                                                                        ---
+reconciled total                                                       6135
+```
+
+The earlier prose attributed the whole 68 to `lovelace-know` by subtraction. That attribution is
+wrong: `lovelace-know` has 56 tests at both `7ceeeba` and `fa87ecc`, and the remaining 12 are
+`lovelace-run`'s two integration-test targets, which the 438 row does not include. Subtracting the
+rows from the total gave the right gap and the wrong split; listing every target makes the
+composition visible.
+
+`7ceeeba32d800317205a22b923f5954c6ce67389` (2026-11-14, "docs: document the whole RustLace
+workspace") is the revision the old table was written for; `cargo test -p lovelace-lang` at that
+revision measures **1737 passed, 0 failed, 0 ignored** on this host (2026-11-16), so 1737 is a
+real snapshot of that commit rather than a stale count for v0.4.1 or for this branch. The 716
+desktop row is carried from a Windows host with no date or commit attached to it, so the
+**6,135 total is the page's recorded Windows aggregate, not a re-measured one**, and it is not
+presented as current.
+
+That historical composition also contains the fixture story the page used to carry:
+`cargo test --workspace --no-fail-fast` reported **6130 passed, 5 failed** before commit
+`e87ca2a` carried `knowledge-graph-demo.json`; the five failures were `lovelace-know`'s
+`convergence_tests` (2), `graph_tests` (2) and `seed_reproduction` (1), all on the missing
+fixture. With the fixture present, the same composition is **6135 passed, 1 ignored**. Those are
+two runs behind the recorded historical total, not a current count.
+
+### 1,737 versus 1,750: the `lovelace-lang` delta
+
+The two numbers are measurements of different revisions and must not be mixed:
+
+| Count | Revision | Command and host | Date |
+|---:|---|---|---|
+| 1737 | `7ceeeba32d800317205a22b923f5954c6ce67389` (2026-11-14) | `cargo test -p lovelace-lang`, Linux WSL Ubuntu 24.04.4 | 2026-11-16 |
+| 1749 | `c7d9840cd87d9b488c29e52535516bebf4c53f1f` (v0.4.1, 2026-11-15) | `cargo test -p lovelace-lang`, Linux WSL Ubuntu 24.04.4 | 2026-11-16 |
+| 1750 | `fa87ecc6abe41d3e174d62b211dd6b6fac2e29b7` (2026-11-15) | `cargo test -p lovelace-lang`, Linux WSL Ubuntu 24.04.4 | 2026-11-16 |
+
+The +13 delta from 1737 to 1750 is accounted for by two commits:
+
+- **+12** `eigen_jacobi_round` tests added by
+  `5b5fe1087ee17ceb3ffb85ab7cf72085479433a0` ("feat: add eig_sym Jacobi symmetric eigensolver",
+  2026-11-14), between `7ceeeba` and v0.4.1.
+- **+3 − 2 = +1** movingavg tests: `1f114c9e5b76d5f8dd9e9ea50a96253543466f09`
+  ("fix(movingavg): return the exact quotient instead of a defective reference rendering",
+  2026-11-15) replaces the two fixed-width-rendering assertions with three exact-quotient tests.
+
+The test-name lists at the three revisions were compared with `cargo test --lib -- --list`: the
+only differences are the twelve `eigen_jacobi_round` names and five `dsp_round20::movingavg_*`
+names (3 added, 2 removed). The 1737 row is therefore a snapshot of `7ceeeba`, not a current count.
+
+Moving the recorded table to this branch's measured table is a two-row change:
+`6,135 + 13` (the `lovelace-lang` tests above) `− 1` (the measured Linux desktop 715 replaces the
+recorded Windows 716) `= 6,147`, which is exactly the independently measured current total. The
+6,135 side of that sentence is the recorded aggregate; it is not a Windows measurement made here.
+
+### Windows and Linux are separate observations
+
+- **Linux desktop, measured:** 711 passed in `src/main.rs` plus 4 in `tests/linux_cli.rs` —
+  **715** in total, 0 failed, 0 ignored, at `fa87ecc` on 2026-11-16 under the command above. The
+  earlier v0.4.1 record reports the same 711 + 4 split; this run re-measures it at the commit
+  named above.
+- **Windows desktop, recorded but not measured here:** **716 passed**, 0 failed, 0 ignored. This
+  environment is WSL Ubuntu only, so the Windows target was not run, and the 716 is a carried
+  observation from a Windows host, not inferred from 715. Conversely, 715 is not inferred from 716.
+
+Ten tests in the crate do not compile on Linux, which is why the two totals differ. The
+`src/ui/**` modules compile and run there; the ten tests that do not are Windows by premise or
 live in a module still gated to Windows:
 
 - `platform_parity` (3 tests): the PLF-010 report drives Win32 modifiers, dialogs, clipboard, the
@@ -154,7 +263,7 @@ $ cargo build --release -p lovelace-desktop          # the workbench, not a head
 $ xvfb-run -a -s "-screen 0 1600x1000x24" ./target/release/lovelace-desktop --gui-selftest
 GUI_SELFTEST summary checks=20 failed=0
 $ xvfb-run -a -s "-screen 0 1600x1000x24" cargo test -p lovelace-desktop
-# 711 passed (bin) + 4 passed (tests/linux_cli.rs); see §1 for the measured total
+# measured at fa87ecc: 711 (bin) + 4 (tests/linux_cli.rs) = 715; §1 records the host and date
 ```
 
 The selftest step requires exit 0 **and** the exact `checks=20 failed=0` summary, so a Linux build

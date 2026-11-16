@@ -14,7 +14,7 @@ precision budget for the operations that cannot be exact. There is no floating-p
 path, and a result carries its kind, precision and exactness metadata instead of hiding them.
 
 RustLace runs natively on **Windows and Linux (X11)**. It is pre-1.0: what is supported, what is only
-partly verified, and what is known to be wrong are stated explicitly here rather than discovered later.
+partly verified and what is known to be wrong are listed under [Current limitations](#current-limitations).
 
 **Try a calculation**
 
@@ -28,17 +28,19 @@ $ cargo run -p lovelace-run -- --eval "1/3" --text
 some number of places.
 
 **Get started:** [download the latest release](https://github.com/jjackbauer/RustLace/releases/latest) ·
-[build and run](docs/build-and-run.md) · [language reference](docs/language/README.md)
+[build and run](docs/build-and-run.md) · [the four tutorials](docs/tutorials/README.md) ·
+[language reference](docs/language/README.md)
 
 ## Current limitations
 
 - **Pre-1.0.** Interfaces change; the changelog and the conventional-commit history are the record.
 - **X11 is what is certified on Linux.** Wayland is untested, and on WSLg `WAYLAND_DISPLAY` must be
-  unset. GUI journey evidence is captured on Windows only; on Linux CI runs the workbench selftest and
-  the desktop suite headlessly rather than opening a window.
+  unset. GUI journey evidence is captured on Windows only; on Linux the workbench selftest and the
+  desktop suite run headlessly rather than opening a window.
 - **macOS is not a supported platform.** No macOS host has been used and no claim is made.
-- **30-place results are precision-bounded, not exact.** "Exact decimal storage" and "mathematically
-  exact" are different claims; [docs/extensions/dsp.md](docs/extensions/dsp.md) distinguishes them.
+- **30-place results are precision-limited, not exact.** "Exact decimal storage" and "mathematically
+  exact" are different claims; [precision and formatting](docs/language/precision-and-formatting.md)
+  and [the DSP guide](docs/extensions/dsp.md) distinguish them.
 
 ![First launch of the native workbench, dark theme](docs/images/welcome-dark.png)
 
@@ -48,11 +50,9 @@ The same workbench on Linux (WSLg, X11), captured from the release binary:
 
 **Linux support.** The full workbench builds and runs on Linux/X11 as well as on Windows. The Linux
 build selects eframe's `glow` (OpenGL) backend; Windows keeps the default `wgpu` path unchanged.
-Linux CI builds the GUI, runs `--gui-selftest` (20 checks, 0 failed) and the desktop test suite under
-`xvfb-run`, and uploads the binary as the `lovelace-desktop-linux-gui-x86_64` artifact. What is
-verified is X11: Wayland is not tested, and under WSLg `WAYLAND_DISPLAY` must be unset or winit picks
-a Wayland socket WSLg does not provide. The three Win32-only modes (`--legacy-win32`, `--ime-probe`,
-`--platform-parity`) are refused by name on Linux. See
+What is verified is X11: Wayland is not tested, and under WSLg `WAYLAND_DISPLAY` must be unset or
+winit picks a Wayland socket WSLg does not provide. The three Win32-only modes (`--legacy-win32`,
+`--ime-probe`, `--platform-parity`) are refused by name on Linux. See
 [build-and-run.md](docs/build-and-run.md#linux).
 
 **Release assets.** Every release carries both executables and one checksum file per platform:
@@ -83,7 +83,8 @@ All three drive the same engine; no host re-implements language behaviour.
 
 ## Quick start
 
-Requires Rust 1.85+ (the tree was built with 1.99.1) and, on Windows, the MSVC build tools. The
+Requires Rust 1.85+ (`rust-version` in `Cargo.toml`; the tree was built with 1.100.0) and, on
+Windows, the MSVC build tools. The
 Linux workbench also needs the X11/GL/font packages listed in
 [build-and-run.md](docs/build-and-run.md#linux); a display-less machine can run the acceptance modes
 under `xvfb-run`.
@@ -102,7 +103,7 @@ $ cargo run --release -p lovelace-corpus
 corpus: 214 passed, 0 failed, 214 total
 
 $ cargo test -p lovelace-desktop
-test result: ok. 716 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.79s
+test result: ok. <passed> passed; 0 failed; <ignored> ignored; <measured> measured; <filtered> filtered out; finished in <time>
 
 $ cargo run -p lovelace-desktop -- --gui-selftest
 GUI_SELFTEST summary checks=20 failed=0
@@ -124,6 +125,11 @@ Windows, and under `$XDG_CONFIG_HOME/lovelace` or `~/.config/lovelace` on Linux;
 directory somewhere writable when running headless. The screenshots in `docs/images` are real
 frames of the release build — see [docs/images/README.md](docs/images/README.md) for the binary hash,
 the capture method and each frame's provenance.
+
+Test counts and timings depend on the commit, host and test features:
+[docs/testing.md](docs/testing.md#1-unit-tests-in-crate-test) is the measured record — commit, OS,
+command, counts and date, with the Linux and Windows desktop observations kept separate. Read the
+number from your own run instead of copying one from here.
 
 ## The crates
 
@@ -157,11 +163,18 @@ default wgpu backend on Windows and adds `glow` on other platforms. See
 Five layers, each with its own command — the detail is in [docs/testing.md](docs/testing.md).
 
 ```console
-$ cargo test --workspace          # 6135 tests (1 ignored) on v0.4.1, across the twelve crates
+$ cargo test --workspace
+test result: ok. <passed> passed; 0 failed; <ignored> ignored; ...   # one such line per test target
+
 $ cargo run --release -p lovelace-corpus   # the 214-record documentation corpus
 $ cargo run -p lovelace-desktop -- --gui-selftest   # 20 workbench checks, Windows and Linux
 $ cargo run -p lovelace-desktop -- --journey J-02   # recorded user journeys
 ```
+
+The workspace total is not repeated here. [docs/testing.md](docs/testing.md#1-unit-tests-in-crate-test)
+records the measured aggregate with its commit, OS, command, counts and date; it lists the per-crate
+rows, keeps the Linux and Windows desktop observations separate, and names the one ignored test. A
+count from an earlier revision is not evidence about this one.
 
 On Linux, CI runs the same `--gui-selftest` and the desktop suite under `xvfb-run`, so the workbench
 code is machine-checked there without a display; CI does not open or capture a window, and the
@@ -178,8 +191,9 @@ overflows its main-thread stack at `lang/061`, while the release build of the sa
 | Page | What it covers |
 |---|---|
 | [AGENTS.md](AGENTS.md) | portable contributor guide: entry points, commands, layout, conventions and guardrails |
-| [docs/skills.md](docs/skills.md) | the eight task skills for extending the application, with when-to-use guidance |
+| [docs/skills.md](docs/skills.md) | the nine task skills for extending the application, with when-to-use guidance |
 | [docs/README.md](docs/README.md) | the index of everything below |
+| [docs/tutorials/](docs/tutorials/README.md) | four end-to-end tutorials: linear algebra, symbolic, signal processing and the reproducible JSON envelope |
 | [docs/architecture.md](docs/architecture.md) | the five layers, threading, cancellation, the cache, the data flow of a run |
 | [docs/build-and-run.md](docs/build-and-run.md) | prerequisites, profiles, the CLI and the GUI, environment variables, troubleshooting |
 | [docs/testing.md](docs/testing.md) | the test layers, exact commands and counts, subsets, what cannot run in CI |

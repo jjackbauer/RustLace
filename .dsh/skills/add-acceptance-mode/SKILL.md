@@ -39,7 +39,9 @@ bound to the commit.
 2. **Add the dispatch.** In `lovelace-desktop/src/main.rs`, add the flag before the unknown-option
    check and before the windowed launch, and mirror it in the `#[cfg(not(windows))]` block if it can
    run without a window. Print the flag in `usage()` with its arguments. A mode that needs a window
-   must be rejected with exit code 2 on the non-Windows build, as `--journey` is.
+   must be rejected with exit code 2 on the non-Windows build, as `--platform-parity` is (it prints
+   `--platform-parity requires the Windows build` and exits 2); `--legacy-win32` and `--ime-probe`
+   are refused the same way. `--journey`, by contrast, is headless and runs on both platforms.
 
 3. **Drive the workbench.** Construct `Workbench::new()`, set the source with `set_source`, call
    `run_active()` and wait with `wait_until_idle(RUN_TIMEOUT)`. Read the published
@@ -85,11 +87,11 @@ bound to the commit.
 cargo run -p lovelace-desktop -- --journey J-02 --out .tmp/journey
 cargo run -p lovelace-desktop -- --gui-selftest
 cargo run -p lovelace-desktop -- --help
-cargo test -p lovelace-desktop
+cargo test -p lovelace-desktop                 # on Linux: xvfb-run -a -s "-screen 0 1600x1000x24" …
 ```
 
-Observable success: the journey prints `JOURNEY J-02 PASS` and
-`JOURNEY summary journeys=1 failed=0`, exits 0, and `.tmp/journey` contains the artifact named in
-step 5 with the printed SHA-256; `--gui-selftest` ends with
-`GUI_SELFTEST summary checks=20 failed=0` (or the new count) and exits 0; `--help` lists the new flag;
-the desktop suite passes.
+Observable success: the journey prints `JOURNEY J-02 PASS` and `JOURNEY summary journeys=1 failed=0`
+and exits 0. J-02 writes no artifact — only the IDs in `needs_output_dir` (J-09 and J-15 today) create
+`--out` and write into it — so the file and SHA-256 from step 5 belong to those journeys, not to
+J-02. `--gui-selftest` ends with `GUI_SELFTEST summary checks=20 failed=0` (or the new count) and
+exits 0; `--help` lists the new flag; the desktop suite reports a nonzero passed count with `0 failed`.

@@ -27,6 +27,8 @@ at_2 = subs(df, x, 2)
 approx = evalf(sqrt(2), 20)
 ```
 
+The same script is checked in as [symbolic.ls](examples/symbolic.ls).
+
 ## Output
 
 ```text
@@ -72,7 +74,9 @@ approx = evalf(sqrt(2), 20)
 
 ## Assumptions
 
-- RustLace 0.4.1, run through the debug CLI at `/tmp/rl-target/debug/lovelace-run` on WSL Ubuntu.
+- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+  `cargo run -p lovelace-run -- --file docs/tutorials/examples/symbolic.ls --text` on Windows,
+  Linux or WSL. The first run compiles the runner.
 - Assumptions are session state. `assume(x != 1)` and `assume(x != 0)` remain active for the rest
   of the run; `assume_clear()` would remove them.
 - `simplify` is the safe rewriter used here; `cancel` is a separate, explicit algebraic operation.
@@ -82,8 +86,8 @@ approx = evalf(sqrt(2), 20)
 
 ## Precision
 
-Labels follow [the editorial guide](../editorial.md): **exact**, **precision-bounded** or
-**parity**.
+The four claim kinds are **exact**, **precision-limited**, **error-bounded** and
+**parity-verified**, following [the editorial guide](../editorial.md#the-four-kinds-of-claim).
 
 | Value | Label | Justification |
 |---|---|---|
@@ -92,28 +96,29 @@ Labels follow [the editorial guide](../editorial.md): **exact**, **precision-bou
 | `14` in `at_2` | **exact** | `3*2^2 + 2` is the integer 14; substitution preserved exactness. |
 | `20` in `evalf(sqrt(2), 20)` | **exact** | The requested decimal-place count is an integer parameter, not a measured value. |
 | `19` in the visible-digit count | **exact** | An integer count of rendered fractional digits in this run; the 20th digit is zero. |
-| `1.4142135623730950488` in `approx` | **precision-bounded** | `sqrt(2)` is irrational; the value is computed to 20 decimal places. The 20th place is zero and is not rendered, so 19 digits are visible. |
+| `1.4142135623730950488` in `approx` | **precision-limited** | `sqrt(2)` is irrational; the value is computed to a 20-decimal-place working budget. The stored decimal is a truncation at that budget, and the budget is not a final-error bound. The 20th place is zero and is not rendered, so 19 digits are visible. |
 | `21` in the 21-place comparison | **exact** | An integer parameter chosen for the demonstration. |
 
-No **parity** values appear in this run. `approx` is the only precision-bounded value; every other
-number is exact.
+`approx` is the only **precision-limited** value in this run; the 21-place comparison in Reading the
+result is precision-limited for the same reason. No value is **error-bounded**: the page publishes
+no bound on the final error of `evalf(sqrt(2), 20)`, and a 20-place budget is not such a bound. No
+value is **parity-verified**: the engine's own evaluation is reported, not a match against a named
+reference implementation. Apart from `approx` and that 21-place comparison, every number in the run
+is exact.
 
 ## Verification
 
-Run this from any directory. It prints exactly the output above and writes no files.
+Run this from the repository root. It prints the output above on standard output and the script
+writes no files. The command is the same in bash, PowerShell and Command Prompt.
 
 ```console
-/tmp/rl-target/debug/lovelace-run --stdin --text <<'EOF'
-x = symbol("x")
-f = x^3 + 2*x
-df = diff(f, x)
-refused = simplify((x^2 - 1)/(x - 1))
-assume(x != 1)
-still_refused = simplify((x^2 - 1)/(x - 1))
-cancelled = cancel((x^2 - 1)/(x - 1))
-assume(x != 0)
-fired = simplify(x/x)
-at_2 = subs(df, x, 2)
-approx = evalf(sqrt(2), 20)
-EOF
+cargo run -p lovelace-run -- --file docs/tutorials/examples/symbolic.ls --text
 ```
+
+`bash tools/run-tutorials.sh` reruns all four tutorials on Ubuntu and Windows (Git Bash) and
+compares this transcript with the executed script.
+
+The independent check here is the mathematics, not a second engine: differentiate `x^3 + 2*x` by
+hand to `3*x^2 + 2`, evaluate `3*2^2 + 2 = 14`, and compare `1.4142135623730950488` with a standard
+`sqrt(2)` expansion. The [tutorial runner](../../tools/run-tutorials.sh) checks that the recording
+still matches the script; it does not prove the rewriting rules.

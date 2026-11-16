@@ -2,6 +2,11 @@
 # Executes every ```lovelace block in docs/extensions/*.md and checks it
 # against the ```text block that follows it.
 #
+# Pairing contract: a ```lovelace block must be immediately followed (blank
+# lines allowed) by its ```text block, and a ```text block immediately
+# following another fence must be the output of a ```lovelace block. Either
+# half of a pair going missing is a failure, not a skipped example.
+#
 # This is the bash equivalent of run-examples.ps1 (kept in the tree for
 # Windows PowerShell users). For each pair the snippet is written to a
 # temporary .lv file and evaluated with
@@ -23,9 +28,9 @@
 # mktemp directory that is removed on exit.
 #
 # Exit status: 0 when every paired example matches, 1 when any example
-# mismatches or a lovelace block has no following text block, 2 when no
-# examples were found at all. A malformed page (unterminated fence, no pages)
-# is a fatal error, not a silently skipped page.
+# mismatches, a declared page is missing or unlisted, or a lovelace/text block
+# is unpaired, 2 when no examples were found at all. A malformed page
+# (unterminated fence) is a fatal error, not a silently skipped page.
 set -uo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -96,13 +101,45 @@ normalise_text() {
     tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//'
 }
 
-pages=()
-for page_path in "$docs_dir"/*.md; do
-    [[ -e $page_path ]] && pages+=("$page_path")
+# The page manifest, validated in both directions against the directory:
+# every page listed here must exist, and every docs/extensions/*.md file must
+# be listed here. A new page fails the run until it is added to the manifest
+# instead of being silently skipped; a removed page fails instead of shrinking
+# the checked set. No page is excluded: README.md is scanned and simply
+# contributes no example pairs.
+pages=(
+    README.md
+    dsp.md
+    mathir.md
+    symbolics.md
+)
+
+page_listed() {
+    local wanted=$1 candidate
+    for candidate in "${pages[@]}"; do
+        [[ $candidate == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+for page_name in "${pages[@]}"; do
+    if [[ ! -f $docs_dir/$page_name || ! -r $docs_dir/$page_name ]]; then
+        die "declared page is missing or unreadable: docs/extensions/$page_name"
+    fi
 done
-if (( ${#pages[@]} == 0 )); then
-    die "no pages found in docs/extensions"
+
+shopt -s nullglob
+inventory=("$docs_dir"/*.md)
+shopt -u nullglob
+if (( ${#inventory[@]} == 0 )); then
+    die "no Markdown pages found under docs/extensions"
 fi
+for page_path in "${inventory[@]}"; do
+    page_name=${page_path##*/}
+    if ! page_listed "$page_name"; then
+        die "docs/extensions/$page_name is not in the page manifest; add it to 'pages' (or exclude it with a stated reason) so it cannot be silently skipped"
+    fi
+done
 
 FENCE='```'
 checked=0
@@ -110,8 +147,8 @@ passed=0
 failed=0
 unpaired=()
 
-for page_path in "${pages[@]}"; do
-    page_name=${page_path##*/}
+for page_name in "${pages[@]}"; do
+    page_path=$docs_dir/$page_name
     if [[ ! -r $page_path ]]; then
         die "cannot read page: docs/extensions/$page_name"
     fi
@@ -122,10 +159,13 @@ for page_path in "${pages[@]}"; do
     done <"$page_path"
     line_count=${#page_lines[@]}
 
-    # Split the page into fenced blocks: language, content, first content line.
+    # Split the page into fenced blocks: language, content, first content line,
+    # and the opening/closing fence lines used by the pairing checks.
     block_lang=()
     block_content=()
     block_line=()
+    block_open=()
+    block_close=()
     in_fence=0
     lang=
     buffer=
@@ -149,6 +189,8 @@ for page_path in "${pages[@]}"; do
                 block_lang+=("$lang")
                 block_content+=("$buffer")
                 block_line+=("$start_line")
+                block_open+=("$open_line")
+                block_close+=("$((n + 1))")
             else
                 buffer+=$sep$line
                 sep=$'\n'
@@ -159,18 +201,39 @@ for page_path in "${pages[@]}"; do
         die "docs/extensions/$page_name:$open_line: unterminated fence"
     fi
 
+    # True when only blank lines separate block $1's closing fence from block
+    # $2's opening fence. An expected output immediately follows its script.
+    blocks_adjacent() {
+        local left=$1 right=$2 n
+        for (( n = block_close[left]; n < block_open[right] - 1; n++ )); do
+            [[ ${page_lines[n]} =~ ^[[:space:]]*$ ]] || return 1
+        done
+        return 0
+    }
+
     block_count=${#block_lang[@]}
     for (( idx = 0; idx < block_count; idx++ )); do
+        # A text block is only an expected output when it directly follows a
+        # lovelace block. One that directly follows another fence of a
+        # different language has lost its script and must not be skipped.
+        if [[ ${block_lang[idx]} == text ]]; then
+            if (( idx > 0 )) && blocks_adjacent $((idx - 1)) "$idx" &&
+                [[ ${block_lang[idx - 1]} != lovelace ]]; then
+                unpaired+=("$page_name:${block_open[idx]} (text block preceded by '${block_lang[idx - 1]}', not lovelace)")
+            fi
+            continue
+        fi
         if [[ ${block_lang[idx]} != lovelace ]]; then
             continue
         fi
         source=${block_content[idx]}
         start_line=${block_line[idx]}
 
-        if (( idx + 1 < block_count )) && [[ ${block_lang[idx + 1]} == text ]]; then
+        if (( idx + 1 < block_count )) && [[ ${block_lang[idx + 1]} == text ]] &&
+            blocks_adjacent "$idx" $((idx + 1)); then
             expected=${block_content[idx + 1]}
         else
-            unpaired+=("$page_name:$start_line")
+            unpaired+=("$page_name:$start_line (lovelace block has no immediately following text block)")
             continue
         fi
 
@@ -207,7 +270,7 @@ for page_path in "${pages[@]}"; do
 done
 
 if (( ${#unpaired[@]} > 0 )); then
-    printf '\nlovelace blocks with no following text block:\n'
+    printf '\nunpaired example blocks:\n'
     for entry in "${unpaired[@]}"; do
         printf '  %s\n' "$entry"
     done
@@ -216,12 +279,12 @@ fi
 printf '\npages: %d   examples checked: %d   passed: %d   failed: %d   unpaired: %d\n' \
     "${#pages[@]}" "$checked" "$passed" "$failed" "${#unpaired[@]}"
 
-if (( checked == 0 )); then
-    printf 'No examples were found; nothing was verified.\n'
-    exit 2
-fi
 if (( failed > 0 || ${#unpaired[@]} > 0 )); then
     exit 1
+fi
+if (( checked == 0 )); then
+    printf 'No examples were found in %d page(s); nothing was verified.\n' "${#pages[@]}"
+    exit 2
 fi
 printf 'OK: %d examples match the documented output.\n' "$checked"
 exit 0

@@ -42,7 +42,7 @@ Timings are wall-clock observations of the host and the build: mean and median m
 property of the crate, and they are not comparable across machines. The digest is the exact artefact
 — it is stable across runs and across `LOVELACE_THREADS` settings, which is what makes a thread-budget
 change provably result-neutral. The numeric work is the engine's: `digits` selects the precision an
-operation runs at, `eig_sym` is precision-bounded at that count, and no benchmark value is stored or
+operation runs at, `eig_sym` is precision-limited at that count, and no benchmark value is stored or
 published beyond the digest.
 
 ## Errors

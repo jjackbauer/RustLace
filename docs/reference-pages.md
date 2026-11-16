@@ -7,14 +7,27 @@ crate's public API, or a command-line binary someone runs. The shape those pages
 [`tools/check-reference-pages.sh`](../tools/check-reference-pages.sh), run by the `docs` job in
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
+The gate is **two-way**, and it is the manifest, not a convention, that decides scope. The three
+reference families — `docs/language/`, `docs/extensions/` and `docs/crates/` — are the **scoped
+trees**. Every Markdown page under a scoped tree must appear in exactly one of the two tables
+below:
+
+- in **Manifest**, as a reference page that carries the seven sections; or
+- in **Not in scope**, as a declared non-reference page with a reason.
+
+A page that appears in neither table is unclassified and fails the gate. That is the point: before
+this rule, a new callable-surface page passed by simply not being listed. A page that appears in
+both tables is a contradiction and fails. A manifested page whose file is missing fails too, and a
+required section whose heading introduces nothing before the next level-2 heading fails.
+
 ## Manifest
 
 The table is the gate's input. Each row lists one page, the surface it documents, and why that
-surface is callable or programmatic. The checker reads this section only: every row's first
+surface is callable or programmatic. The checker reads the two tables only: every row's first
 backticked token is a page path, and every page path listed here must carry the seven sections
 (`Purpose`, `Inputs`, `Outputs`, `Precision behaviour`, `Errors`, `Limitations`, `Examples`) in
-that order, with no other level-2 heading on the page. Adding a reference page means adding a row
-here in the same change.
+that order, with no other level-2 heading on the page and no empty section. Adding a reference page
+means adding a row here in the same change.
 
 | Page | Surface | Why it is in scope |
 |---|---|---|
@@ -38,8 +51,11 @@ here in the same change.
 ## Not in scope
 
 These pages live beside the reference pages but are narrative guides, indexes or evidence, not
-reference for a callable surface. They are deliberately excluded, and the exclusion is recorded
-here rather than left implicit:
+reference for a callable surface. They are the **declared non-reference pages**. Every entry needs
+a reason: an exemption without one is a defect in this manifest, and so is an entry whose file no
+longer exists, because a stale exemption would silently cover a future reference page at the same
+path. When a page is added under a scoped tree, classify it here or in the Manifest table in the
+same change.
 
 | Page | Why it is not in scope |
 |---|---|
@@ -64,10 +80,20 @@ surface.
 
 ## Conformance
 
-A page is conformant when the checker exits 0 for it. On failure the checker prints one line per
-defect, `path: section`, where the section is the required heading that is missing, the required
-heading found out of order, or the unexpected level-2 heading that should be nested. Run it from
-the repository root with:
+A page is conformant when the checker exits 0. On failure the checker prints one line per defect,
+`file:line: message`, where the file and line are the defective heading, the unclassified page
+(line 1), or the manifest row that lists or exempts a missing page. The defects are:
+
+- `missing required section '…'` — one of the seven headings is absent;
+- `'…' is out of order; it must come after …` — a heading appears before its predecessor;
+- `unexpected level-2 heading '…'` — any other level-2 heading, which must be nested;
+- `required section '…' is empty` — the heading has no content before the next level-2 heading;
+- `page is not classified in docs/reference-pages.md` — a scoped-tree page in neither table;
+- `listed reference page '…' does not exist` — a Manifest row for a missing file;
+- `declared non-reference page '…' does not exist` or `has no reason` — a stale or unjustified
+  exemption.
+
+Run it from the repository root with:
 
 ```console
 $ bash tools/check-reference-pages.sh

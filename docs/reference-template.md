@@ -16,9 +16,9 @@ CI run rather than a review comment.
 | 1 | **Purpose** | What the surface is for and who calls it: the problem it solves, the place it holds in the workspace, and the shape of the thing a reader gets — one paragraph a reader can act on. |
 | 2 | **Inputs** | What the caller supplies: the call shape, argument counts and kinds in order, the state or precondition a call needs, and — for a crate — the public surface a caller programs against and the dependencies it is built from. |
 | 3 | **Outputs** | What a call gives back: the value kind and shape, record fields, the display and typed form, and any side effect, file, stream or exit status the surface produces. |
-| 4 | **Precision behaviour** | For every numeric result, whether it is exact, precision-bounded or parity, where the budget comes from, its default and its cap, and what happens when a request exceeds the budget. |
+| 4 | **Precision behaviour** | For every numeric result, whether it is exact, precision-limited, error-bounded or parity-verified, where the budget comes from, its default and its cap, and what happens when a request exceeds the budget. |
 | 5 | **Errors** | Every refusal with the code and category it carries (or the Rust error type it returns), the condition that raises it, and the outcomes that look like errors but are documented results instead. |
-| 6 | **Limitations** | What the surface refuses or does not do: unsupported inputs and domains, missing families, documented defects and parity artifacts, and the work a caller must do instead. Every entry is checked against the code, its tests or `docs/rustlace-notes.md`; an invented limitation is worse than none. |
+| 6 | **Limitations** | What the surface refuses or does not do: unsupported inputs and domains, missing families, documented defects and parity-verified artifacts, and the work a caller must do instead. Every entry is checked against the code, its tests or `docs/rustlace-notes.md`; an invented limitation is worse than none. |
 | 7 | **Examples** | At least one call a reader can run, with the exact result the implementation produced, in the repository's example format; a page whose examples are executed by a runner keeps each fenced pair intact. |
 
 ## Rules
@@ -38,8 +38,9 @@ CI run rather than a review comment.
    one example. They stay adjacent and byte-identical, because
    `docs/language/examples/run-examples.sh` and `docs/extensions/examples/run-examples.sh` execute
    them and compare the observed output.
-5. **Claims are labelled.** Every numeric statement says whether it is exact, precision-bounded or
-   parity, per [the editorial guide](editorial.md#the-three-kinds-of-claim). A documented defect is
+5. **Claims are labelled.** Every numeric statement says whether it is exact, precision-limited,
+   error-bounded or parity-verified, per
+   [the editorial guide](editorial.md#the-four-kinds-of-claim). A documented defect is
    presented as a defect, not as the expected result.
 6. **Limits are evidence-backed.** A limitation is written only after checking what the code
    refuses or does not do. `None known` is a claim that the check was made, not a placeholder.
@@ -69,7 +70,7 @@ CI run rather than a review comment.
 
 ## Precision behaviour
 
-<exact / precision-bounded / parity, the budget and its cap>
+<exact / precision-limited / error-bounded / parity-verified, the budget and its cap>
 
 ## Errors
 

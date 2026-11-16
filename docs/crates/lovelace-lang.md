@@ -55,7 +55,7 @@ display precision is 100; `set_precision(n)` moves both and marks the precision 
 for 1 100 stored digits can still render 100, and the structured projection keeps publishing every
 digit the value stores, so the two bounds cannot make one value cross as two different payloads. A
 value is exact when its representation is exact (integers, terminating or recurring decimals) and
-precision-bounded when it is computed to the requested places; an `inexact` marker is provenance, not
+precision-limited when it is computed to the requested places; an `inexact` marker is provenance, not
 an error bound. Positions are UTF-16 code-unit offsets into the source text.
 
 ## Errors

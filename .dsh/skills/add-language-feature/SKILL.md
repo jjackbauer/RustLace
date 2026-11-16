@@ -85,15 +85,20 @@ top of `lovelace-lang/src/lib.rs` before editing anything.
 
 ## Verify
 
+`<the test you added>` is the name of your new test; substitute it before running. Read each
+`test result:` line — a filter that matches nothing prints `running 0 tests` and still exits 0, and a
+corpus filter that selects no record prints `0 passed` and also exits 0.
+
 ```console
 cargo test -p lovelace-lang suite_lex_parse_batch
-cargo test -p lovelace-lang my_feature_name
+cargo test -p lovelace-lang <the test you added>
 cargo test -p lovelace-run golden_batch
 cargo run --release -p lovelace-corpus -- lang/112
 cargo run -p lovelace-run -- --eval "1 != 2" --text
 ```
 
-Observable success: the lexer/parser test and the focused feature test pass; `golden_batch` passes
-with the environment variable unset; the corpus filter reports `1 passed, 0 failed, 214 total (filter lang/112)`; the CLI
+Observable success: `suite_lex_parse_batch` and the focused feature test each report a nonzero passed
+count with `0 failed`; `golden_batch` reports its nonzero count (8 tests today) with the environment
+variable unset; the corpus filter reports `1 passed, 0 failed, 214 total (filter lang/112)`; the CLI
 prints the exact typed value (`True (Boolean)` in the example) or the exact coded error with its
 UTF-16 position.

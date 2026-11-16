@@ -16,9 +16,9 @@ sign of the dividend. Division by zero returns `None`.
 
 ### Public surface
 
-- `Int` with `zero`, `from_i64` (without losing `i64::MIN`), `from_decimal`, `to_decimal`,
-  `is_zero`, `is_negative`, `magnitude`, `negate`, `add`, `sub`, `mul`, `div_rem`, `pow`,
-  `factorial`.
+- `Int` with `zero`, `from_i64` (without losing `i64::MIN`), `from_nat`, `from_decimal`,
+  `to_decimal`, `is_zero`, `is_negative`, `sign`, `magnitude`, `negate`, `add`, `sub`, `mul`,
+  `div_rem(&Nat)`, `div_rem_signed(&Int)`, `pow`, `factorial`.
 - `pub use lovelace_nat::Nat` — the crate re-exports the magnitude type so a consumer needs one
   import.
 - `#![forbid(unsafe_code)]`.
@@ -69,11 +69,21 @@ the dividend's sign, so `-17 / 5` is `-3` with remainder `-2` rather than floor 
 ### Using it
 
 ```rust
-use lovelace_int::Int;
+use lovelace_int::{Int, Nat};
 
-let q = Int::from_i64(-17).div_rem(&Int::from_i64(5)).unwrap();
-assert_eq!((q.0.to_decimal(), q.1.to_decimal()), ("-3".into(), "-2".into()));
-assert!(Int::from_i64(7).div_rem(&Int::from_i64(0)).is_none());
+// The divisor of `div_rem` is the magnitude type, `Nat`.
+let divisor = Nat::from_u64(5);
+let (q, r) = Int::from_i64(-17).div_rem(&divisor).expect("nonzero divisor");
+assert_eq!((q.to_decimal(), r.to_decimal()), ("-3".to_string(), "-2".to_string()));
+
+// `div_rem_signed` takes a signed `Int`, so the sign of the divisor is part of the request.
+let (q, r) = Int::from_i64(-17)
+    .div_rem_signed(&Int::from_i64(5))
+    .expect("nonzero divisor");
+assert_eq!((q.to_decimal(), r.to_decimal()), ("-3".to_string(), "-2".to_string()));
+
+assert!(Int::from_i64(7).div_rem(&Nat::zero()).is_none());
+assert!(Int::from_i64(7).div_rem_signed(&Int::zero()).is_none());
 ```
 
 The truncating rule is what the language's `divrem` builtin publishes, and it is why `-17 / 5` is

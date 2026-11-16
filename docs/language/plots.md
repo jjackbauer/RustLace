@@ -101,9 +101,11 @@ renderer:
   a smooth curve rather than an angular polygon. A series with fewer than three points falls back
   to straight segments.
 
-Coordinates are held as exact `Real` values through model construction, bounds calculation,
-padding, and normalisation; only the final pixel conversion introduces a decimal rendering. The
-tick labels are formatted numbers, while the plotted coordinates are exact model data.
+Coordinates are carried as `Real` values through model construction, bounds calculation, padding,
+and normalisation; only the final pixel conversion introduces a decimal rendering, and no binary
+floating point enters the model path. The tick labels are formatted numbers, while the plotted
+coordinates are the model's decimal data. That is a statement about the representation, not a proof
+that every interpolated sample is mathematically exact.
 
 The observed sample `plot([0, 1, 2, 3], [0, 1, 4, 9], "squares")` wrote **15,263 bytes** to
 `plot2.svg`. The size depends on the number of points and the labels, not on the path.

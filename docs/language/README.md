@@ -14,10 +14,11 @@ that can be consulted independently.
 
 RustLace is a complete scripting language for arbitrary-precision mathematics. One engine serves
 every surface: the native desktop workbench and the headless `lovelace-run` runner. The
-engine has no external crates under it and uses exact arithmetic: there is no floating-point type
-in the value path, no fixed-width integer hiding behind the syntax, and no silent rounding.
-`1 / 3` is the exact periodic decimal `0.(3)`, `2 ^ 100` is a 31-digit natural, and `sqrt(2)` is
-computed to the precision you ask for.
+engine has no external crates under it and uses arbitrary-precision decimal arithmetic: there is no
+floating-point type in the value path, no fixed-width integer hiding behind the syntax, and no silent
+rounding. Exactness is representational: `1 / 3` is the exact periodic decimal `0.(3)` and
+`2 ^ 100` is a 31-digit natural, while `sqrt(2)` is a precision-limited value computed to the
+precision you ask for.
 
 The desktop workbench runs on Windows x86_64 and on Linux x86_64 (X11) — the language is not tied to
 a platform. See [ADR-008](../adr/008-linux-gui-support.md) for what is certified and what is not,
@@ -73,8 +74,10 @@ script).
 
 1. A program is a sequence of statements separated by `;` or a newline; the value of the program
    is the value of its last statement, also stored in `_`.
-2. Numbers are exact: `Natural`, `Integer`, and `Real` (arbitrary-precision decimal with exact
-   repeating-period metadata). They widen `Natural → Integer → Real`.
+2. Numbers are decimal, not binary floating point: `Natural`, `Integer`, and `Real`
+   (arbitrary-precision decimal with repeating-period metadata). Exactness is representational — a
+   computed result can be precision-limited or carry an `inexact` provenance flag — and the numerics
+   widen `Natural → Integer → Real`.
 3. A value is one of those numerics, `Boolean`, `Text`, `Vector` (rank 1), `Array` (rank ≥ 2),
    `Complex`, `Symbolic`, `Record`, `Domain`, `Enum`, `Function`, or `Void`.
 4. `=` assigns; it is not equality. Assignment yields the assigned value and is right-associative.
@@ -143,9 +146,14 @@ func fib(n) { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }; fib(10)
 
 ## Scope and conventions
 
-The pages describe the engine tree at commit `2152218` (the `feat/eig-sym` merge on `main`) and
-were verified with a debug
-binary built from that tree. The engine's defaults are 1000 computation digits and 100 display
+The pages were originally authored against commit `2152218` (the `feat/eig-sym` merge on `main`),
+with a debug binary built from that tree; that is where the recorded transcripts come from, not a
+claim that current behaviour is still pinned to that commit. To check the pages against the current
+branch, build the runner once with `cargo build -p lovelace-run`, then run
+`bash docs/language/examples/run-examples.sh` from the repository root: it extracts every `lovelace`
+fence, runs it with `lovelace-run --file … --text`, and compares the output with the `text` block
+that follows. `docs/language/examples/run-examples.ps1` is the same check for a Windows PowerShell
+host. The engine's defaults are 1000 computation digits and 100 display
 digits; the desktop starts new documents at 30 digits. Those host differences are called out in
 [Precision and formatting](precision-and-formatting.md), because they change what a fresh session
 prints without changing the language itself.

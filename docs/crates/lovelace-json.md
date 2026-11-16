@@ -15,7 +15,8 @@ byte-for-byte, and keeping the literal avoids a binary floating-point round trip
 ### Public surface
 
 - `enum Json { Null, Bool, Num(String), Str(String), Arr(Vec<Json>), Obj(BTreeMap<String, Json>) }`
-  — objects preserve key order, numbers keep their literal.
+  — objects are a `BTreeMap`, so their keys iterate and render in sorted key order; numbers keep
+  their literal.
 - Constructors: `Json::obj(pairs)`, `Json::str_array(items)`, `Json::num_array(items)`.
 - Accessors: `get(key)`, `as_str()`, `as_arr()`.
 - `Json::parse(&str) -> Result<Json, JsonError>` and `to_pretty()`.
@@ -72,8 +73,9 @@ let doc = Json::parse(r#"{"ok": true, "value": "0.(3)"}"#).expect("valid JSON");
 assert_eq!(doc.get("value").and_then(Json::as_str), Some("0.(3)"));
 ```
 
-The runner builds its envelope with `Json::obj` so the published field order is the order the code
-writes, not a hash order (`lovelace-run/src/main.rs`).
+The runner builds its envelope with `Json::obj`; because the object is a `BTreeMap`, its published
+field order is sorted key order, not the order the code writes and not a hash order
+(`lovelace-run/src/main.rs`, `lovelace-json/src/lib.rs`).
 
 ### Tests
 

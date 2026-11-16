@@ -9,9 +9,12 @@ name: CI
 #             /dev/dri (the same failure WSLg shows). Windows keeps eframe's default wgpu
 #             renderer untouched. Both artifacts are real GUI builds; the Linux one is accepted
 #             headlessly because a CI runner has no desktop session.
-#   docs    - every fenced example in the language and extension reference pages, executed by
-#             both bash runners (bash cannot be skipped: the scripts are the gate) on Linux
-#             and Windows.
+#   docs    - every fenced example executed: the language and extension example runners, the Rust
+#             fences in docs/crates/*.md compiled and run, and the four tutorials run as contracts;
+#             the language runner also checks docs/language/builtins.md against the built runner's
+#             `--functions` registry, so a renamed, removed or misclassified builtin fails here;
+#             then all three check-docs modes, the reference-page contract, and the mutation
+#             self-test that proves each of those gates can fail - on Linux and Windows.
 
 on:
   push:
@@ -175,6 +178,9 @@ jobs:
   # output with the recorded one. The matrix is the point - a runner that only
   # works on one platform (path shapes, .exe discovery, line endings) must fail
   # on the platform that has the bug, not pass because it was never run there.
+  # The consistency gates and their self-test run in both variants for the same
+  # reason: the checkers are bash, so a line-ending or path-shape defect must
+  # fail on the platform that has it.
   docs:
     name: Documentation examples (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -203,9 +209,33 @@ jobs:
       - name: Build lovelace-run
         run: cargo build -p lovelace-run
 
+      # Compiles and runs every maintained ```rust fence under docs/crates/
+      # against the workspace crates. The script locates cargo itself ($CARGO,
+      # then PATH, then $HOME/.cargo/bin/cargo, then
+      # %USERPROFILE%/.cargo/bin/cargo.exe in Git Bash), so the gate cannot
+      # pass by not finding a compiler: it exits 2 instead. `shell: bash` is
+      # the system bash on ubuntu-latest and Git Bash on windows-latest; both
+      # variants run this step unconditionally.
+      - name: Compile and run the crate-page examples
+        shell: bash
+        run: bash tools/check-crate-examples.sh
+
+      # Executes the four tutorials as contracts: each page's ## Source block
+      # is run through the lovelace-run built above and its output is compared
+      # with the recorded ## Output block. Unconditional, like every other
+      # gate here; the runner is found under target/{debug,release}.
+      - name: Run the tutorials
+        shell: bash
+        run: bash tools/run-tutorials.sh
+
       # `shell: bash` is the system bash on ubuntu-latest and Git Bash on
       # windows-latest. Both runners always execute; the step fails if either
-      # exits non-zero, so a wrong recorded output fails the workflow.
+      # exits non-zero, so a wrong recorded output fails the workflow. The
+      # language runner verifies the fenced examples and then the builtin
+      # catalogue in docs/language/builtins.md against `lovelace-run
+      # --functions`; that second pass is why the step needs the runner built
+      # above, and it fails on either OS when a documented builtin is renamed,
+      # removed, misclassified or missing from the page.
       - name: Run the language and extension examples
         shell: bash
         run: |
@@ -215,12 +245,25 @@ jobs:
           bash docs/extensions/examples/run-examples.sh || status=1
           exit "$status"
 
-      # The documentation consistency gate: relative Markdown links, path-shaped code
-      # references and Rust symbol citations must resolve. It runs after the example
-      # gate so a documentation defect and an example drift are both reported.
-      - name: Check documentation consistency
+      # The documentation consistency gate has three implemented modes, and all
+      # three run. check-docs.sh always performs the relative-link and
+      # path-shaped-code-reference pass; each flag adds one audit on top of it:
+      #   --symbols  no .rs:NNN citations outside docs/adr/ and no dead symbols
+      #   --claims   no prohibited absolutist claim, every tutorial has ## Precision
+      #   --readme   README value proposition, limitations, command and order
+      # Separate steps keep a failure attributable to one mode. No step is
+      # conditional and none is allowed to fail without failing the job.
+      - name: Check documentation links and symbol citations
         shell: bash
         run: bash tools/check-docs.sh --symbols
+
+      - name: Check documentation claims and tutorial precision
+        shell: bash
+        run: bash tools/check-docs.sh --claims
+
+      - name: Check the README structure
+        shell: bash
+        run: bash tools/check-docs.sh --readme
 
       # The reference-page contract (DOC-014): every page listed in
       # docs/reference-pages.md carries the seven sections of
@@ -228,3 +271,37 @@ jobs:
       - name: Check reference pages
         shell: bash
         run: bash tools/check-reference-pages.sh
+
+      # Each gate above has a recorded mutation test: tools/test-docs-gates.sh
+      # builds the defect in a scratch tree, runs the real checker against it,
+      # and requires a non-zero exit with a diagnostic naming the file and the
+      # problem. A mutation that stops failing fails this step, so a gate
+      # cannot quietly become a no-op. It also asserts that this workflow still
+      # invokes every mode, so the self-test goes red when a mode is removed
+      # from the job instead of passing on a smaller set.
+      - name: Test the documentation gates (mutation)
+        shell: bash
+        run: bash tools/test-docs-gates.sh
+
+      # One transcript of every gate above, with a machine-readable DOCREPORT
+      # line per gate and a total carrying the commit and OS (RQ-023). It is
+      # additive: every gate still runs as its own step, so a failure stays
+      # attributable, and this step fails when any gate fails or a gate does
+      # not print its summary. Both matrix legs run it unconditionally and
+      # upload their own transcript below.
+      - name: Report documentation evidence
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash tools/docs-report.sh | tee "docs-report-${{ matrix.os }}.log"
+
+      # The per-OS transcript is the evidence artifact for this leg. Like every
+      # step in this job it is unconditional: no condition, no failure
+      # suppression, so a red report fails the job instead of handing over a
+      # green artifact.
+      - name: Upload the documentation evidence transcript
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-report-${{ matrix.os }}
+          path: docs-report-${{ matrix.os }}.log
+          if-no-files-found: error

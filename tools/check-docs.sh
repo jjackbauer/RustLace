@@ -3,28 +3,53 @@
 #
 # Usage: bash tools/check-docs.sh [--symbols] [--claims] [--readme]
 #
-# Current documentation is every Markdown file under docs/ except the two
-# specialised trees:
+# Scanned classes (each is checked for relative links, path-shaped code
+# references and heading fragments unless a mode below says otherwise):
+#   docs/                    current documentation, every Markdown page;
+#   root pages               README.md, AGENTS.md, CONTRACT.md - the pages a
+#                            reader or contributor is expected to open first;
+#   agent instructions       .github/copilot-instructions.md and
+#                            .dsh/skills/*/SKILL.md - the files a coding agent
+#                            is told to treat as operative.
+#
+# Three trees under docs/ are deliberately excluded, for stated reasons:
 #   docs/goal-desktop-v4/  archived specification; its capture links are
 #                          deliberately not resolvable in this repository
-#   docs/goal-docs-v1/     harness working memory, not documentation
+#   docs/goal-docs-*/      harness working memory for any goal (v2, …),
+#                          not documentation. The wildcard is deliberate: a new
+#                          goal directory must not turn the gate red, and a
+#                          journal is not a reader-facing page.
+#   docs/internal/archive/ the archived goal-docs-v1 harness journals, moved
+#                          out of the public documentation tree into the
+#                          internal archive (RQ-024). They are evidence, not
+#                          navigation, and are kept byte-for-byte.
 #
 # Checks:
 #   1. every relative Markdown link target resolves, relative to the file
 #      that contains it, to an existing file or directory;
-#   2. every path-shaped inline code reference (a `a/b.rs` style path that
+#   2. every heading fragment (`page.md#anchor`, `#anchor`) names a heading in
+#      the destination page under GitHub's slug rules: lowercase, punctuation
+#      and HTML stripped, spaces turned into hyphens, with GitHub's -1/-2
+#      suffix for a repeated heading. This is an ASCII approximation of the
+#      GitHub anchor algorithm (non-ASCII letters are dropped); it verifies
+#      that the anchor exists, not that the surrounding sentence is true;
+#   3. every path-shaped inline code reference (a `a/b.rs` style path that
 #      contains "/" and ends in .rs, .toml, .yml, .yaml, .json or .md, with an
 #      optional :NNN or :NNN-MMM line suffix) names an existing file;
-#   3. with --symbols: no *.rs:NNN line-suffix citation outside docs/adr/
-#      (those records are historical), and every cited snake_case function
-#      name (lowercase with underscores followed by "()") occurs in
-#      lovelace-*/src.
-#   4. with --claims: no page uses the literal phrases "exact 30-place",
+#   4. with --symbols: no *.rs:NNN line-suffix citation on a docs/ page
+#      outside docs/adr/ (those records are historical). Root pages and agent
+#      instructions may cite a source line as an operational anchor: AGENTS.md
+#      does, and RQ-022's command audit is that class's gate. Every cited
+#      snake_case function name (lowercase with underscores followed by "()")
+#      must occur as an identifier in lovelace-*/src - a TOKEN SEARCH, not
+#      semantic resolution: it proves the name exists somewhere in the source
+#      text, not that the cited call site or signature exists.
+#   5. with --claims: no page uses the literal phrases "exact 30-place",
 #      "exactly 30 places" or "nothing is floating point" as a claim outside
 #      the three pages that prohibit, replace or correct them, and every page
 #      under docs/tutorials/ has a "## Precision" section. Fenced blocks and
 #      inline code spans are mentions, not claims, and are not matched.
-#   5. with --readme: README.md states its value proposition in the first ten
+#   6. with --readme: README.md states its value proposition in the first ten
 #      lines, carries a "## Current limitations" section and a fenced block
 #      containing lovelace-run, and places all three before "## The crates".
 #
@@ -38,8 +63,10 @@ set -u
 
 usage() {
   printf 'usage: bash tools/check-docs.sh [--symbols] [--claims] [--readme]\n'
-  printf '  (no flag)   check relative Markdown links and code references\n'
-  printf '  --symbols   also reject .rs:NNN citations and unknown Rust symbols\n'
+  printf '  (no flag)   check relative Markdown links, heading fragments and code references\n'
+  printf '              in docs/, README.md, AGENTS.md, CONTRACT.md and the agent instructions\n'
+  printf '  --symbols   also reject .rs:NNN citations on docs/ pages and unknown Rust symbols\n'
+  printf '              (a token search of lovelace-*/src, not semantic resolution)\n'
   printf '  --claims    also reject absolutist numerical claims and tutorials without ## Precision\n'
   printf '  --readme    also assert the README value proposition, limitations, command and order\n'
 }
@@ -79,13 +106,19 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/check-docs.XXXXXX") || exit 2
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 files_checked=0
+docs_pages=0
+root_pages=0
+agent_pages=0
 links_checked=0
+anchors_checked=0
 refs_checked=0
 citations_checked=0
 symbols_checked=0
 claim_hits=0
 claim_pages=0
 tutorials_checked=0
+precision_sections=0
+readme_requirements=0
 failures=0
 
 fail() {
@@ -95,14 +128,29 @@ fail() {
 }
 
 # ---------------------------------------------------------------------------
-# Current documentation: explicit, because the exclusions are policy, not an
-# implementation detail.
+# Scanned classes. The exclusions are policy, not an implementation detail:
+# the archived specification and every goal's harness memory are not
+# reader-facing documentation, and their internal links are evidence, not
+# navigation. Everything a reader or an agent is told to open is scanned.
 # ---------------------------------------------------------------------------
 is_current_doc() {
   case "$1" in
-    docs/goal-desktop-v4/*|docs/goal-docs-v1/*) return 1 ;;
+    docs/goal-desktop-v4/*) return 1 ;;
+    docs/goal-docs-*) return 1 ;;
+    docs/internal/archive/*) return 1 ;;
     docs/*) return 0 ;;
+    README.md|AGENTS.md|CONTRACT.md) return 0 ;;
+    .github/copilot-instructions.md) return 0 ;;
+    .dsh/skills/*/SKILL.md) return 0 ;;
     *) return 1 ;;
+  esac
+}
+
+page_class() {
+  case "$1" in
+    docs/*) printf 'docs' ;;
+    README.md|AGENTS.md|CONTRACT.md) printf 'root' ;;
+    *) printf 'agent' ;;
   esac
 }
 
@@ -146,6 +194,75 @@ resolve_ref() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Heading anchors. GitHub derives a page fragment from the heading text:
+# lowercase, Markdown/HTML formatting stripped, punctuation stripped, spaces
+# turned into hyphens, and a -1/-2 suffix on a repeated heading. This awk
+# implementation is ASCII-only (a non-ASCII letter is dropped, where GitHub
+# keeps it); the file's own links are the check that matters, and every
+# destination headline currently used is ASCII. Fenced blocks are skipped: a
+# heading-shaped line in an example is not an anchor. Setext headings
+# (`Title` over `====`) are not used in this repository and are not modelled.
+# ---------------------------------------------------------------------------
+heading_anchors() {
+  awk '
+    function slugify(s,   out, i, n, ch) {
+      sub(/^[ \t]+/, "", s)
+      sub(/[ \t]+$/, "", s)
+      gsub(/<[^>]*>/, "", s)          # inline HTML
+      gsub(/\]\([^)]*\)/, "", s)      # an inline link keeps its text only
+      s = tolower(s)
+      out = ""
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        ch = substr(s, i, 1)
+        if ((ch >= "a" && ch <= "z") || (ch >= "0" && ch <= "9") ||
+            ch == "_" || ch == "-" || ch == " ") out = out ch
+      }
+      gsub(/ /, "-", out)
+      return out
+    }
+    { sub(/\r$/, "") }
+    {
+      if (match($0, /^[ \t]*(```+|~~~+)/)) {
+        marker = substr($0, RSTART, RLENGTH)
+        sub(/^[ \t]*/, "", marker)
+        if (fence == "") { fence = marker; next }
+        if (substr(marker, 1, 1) == substr(fence, 1, 1)) { fence = ""; next }
+      }
+      if (fence != "") next
+      if ($0 !~ /^#{1,6}[ \t]+/) next
+      text = $0
+      sub(/^#{1,6}[ \t]+/, "", text)
+      sub(/[ \t]+#+[ \t]*$/, "", text)
+      slug = slugify(text)
+      if (slug == "") next
+      if (slug in seen) {
+        seen[slug]++
+        print slug "-" seen[slug]
+      } else {
+        seen[slug] = 0
+        print slug
+      }
+    }
+  ' "$1"
+}
+
+# anchor_cache FILE -> print (and memoise) the anchor list of FILE. The key is
+# the path's MD5, so two destinations cannot share a cache entry (a sanitised
+# path would make `a.b.md` and `a-b.md` collide).
+anchor_cache() {
+  local dest=$1 key cache
+  key=$(printf '%s' "$dest" | md5sum)
+  key=${key%% *}
+  cache="$tmp/anchors/$key"
+  if [ ! -f "$cache" ]; then
+    mkdir -p -- "$tmp/anchors" || exit 2
+    heading_anchors "$dest" >"$cache" || return 1
+  fi
+  printf '%s\n' "$cache"
+}
+
 # The identifier index is built once: grepping lovelace-*/src for each cited
 # symbol separately would be correct but needlessly quadratic.
 symbol_index="$tmp/source-identifiers.txt"
@@ -171,12 +288,17 @@ symbol_re='[a-z][a-z0-9_]*\(\)'
 while IFS= read -r -d '' file; do
   is_current_doc "$file" || continue
   files_checked=$((files_checked + 1))
+  case $(page_class "$file") in
+    docs) docs_pages=$((docs_pages + 1)) ;;
+    root) root_pages=$((root_pages + 1)) ;;
+    agent) agent_pages=$((agent_pages + 1)) ;;
+  esac
   doc_dir=$(dirname -- "$file")
 
   # Process substitution, not a pipeline: the counters and failures below are
   # accumulated in this shell, not in a subshell.
   while IFS=$'\t' read -r line_no text; do
-    # --- links -------------------------------------------------------------
+    # --- links and heading fragments ---------------------------------------
     stripped=$text
     while [[ $stripped =~ $inline_code_re ]]; do
       stripped=${stripped/"${BASH_REMATCH[0]}"/}
@@ -196,28 +318,52 @@ while IFS= read -r -d '' file; do
       esac
       [ -z "$target" ] && continue
 
-      # External targets and pure anchors are not relative paths.
+      # External targets are not repository paths.
       case "$target" in
-        '#'*) continue ;;
         '//'*) continue ;;
       esac
       if [[ $target =~ ^[A-Za-z][A-Za-z0-9+.-]*: ]]; then
         continue
       fi
 
+      fragment=
+      case "$target" in
+        *'#'*) fragment=${target#*#} ;;
+      esac
       link_path=${target%%#*}
       link_path=${link_path%%\?*}
       link_path=${link_path//%20/ }
-      [ -z "$link_path" ] && continue
 
-      links_checked=$((links_checked + 1))
-      if [[ $link_path == /* ]]; then
-        resolved="$repo_root$link_path"
+      if [ -z "$link_path" ]; then
+        # A pure anchor points into the page that contains it.
+        resolved=$file
       else
-        resolved="$doc_dir/$link_path"
+        links_checked=$((links_checked + 1))
+        if [[ $link_path == /* ]]; then
+          resolved="$repo_root$link_path"
+        else
+          resolved="$doc_dir/$link_path"
+        fi
+        if [ ! -e "$resolved" ]; then
+          fail "$file" "$line_no" \
+            "broken link '$target' (no such file or directory: ${resolved#"$repo_root"/})"
+          continue
+        fi
       fi
-      if [ ! -e "$resolved" ]; then
-        fail "$file" "$line_no" "broken link '$target' (no such file or directory: ${resolved#"$repo_root"/})"
+
+      [ -n "$fragment" ] || continue
+      # Only a Markdown destination has headings; a fragment on a directory or
+      # a binary file is not an anchor this checker can interpret.
+      case "$resolved" in
+        *.md) ;;
+        *) continue ;;
+      esac
+      [ -f "$resolved" ] || continue
+      anchors_checked=$((anchors_checked + 1))
+      anchor_list=$(anchor_cache "$resolved") || continue
+      if ! grep -qxF -- "$fragment" "$anchor_list"; then
+        fail "$file" "$line_no" \
+          "broken heading anchor '#$fragment' in ${resolved#"$repo_root"/} (no heading has that GitHub anchor)"
       fi
     done
 
@@ -234,9 +380,14 @@ while IFS= read -r -d '' file; do
           citations_checked=$((citations_checked + 1))
           case "$file" in
             docs/adr/*) ;;
-            *)
+            docs/*)
               fail "$file" "$line_no" \
                 "line-suffix citation '$body' is not allowed outside docs/adr/"
+              ;;
+            *)
+              # Root pages and agent instructions cite a source line as an
+              # operational anchor (AGENTS.md does); the reader-facing rule
+              # above is a docs/ rule, and RQ-022 audits this class.
               ;;
           esac
         fi
@@ -305,7 +456,17 @@ while IFS= read -r -d '' file; do
       print NR "\t" $0
     }
   ' "$file")
-done < <(find docs -type f -name '*.md' -print0 | sort -z)
+done < <(
+  {
+    find docs -type f -name '*.md' -print0
+    for page in README.md AGENTS.md CONTRACT.md .github/copilot-instructions.md; do
+      [ -f "$page" ] && printf '%s\0' "$page"
+    done
+    if [ -d .dsh/skills ]; then
+      find .dsh/skills -type f -name 'SKILL.md' -print0
+    fi
+  } | sort -z
+)
 
 # ---------------------------------------------------------------------------
 # --claims: the phrase half of the audit. Every Markdown page under docs/ is
@@ -373,6 +534,8 @@ if [ "$claims" -eq 1 ]; then
     ' "$file"; then
       fail "$file" 1 \
         "missing '## Precision' section (every tutorial labels its values exact, precision-bounded or parity)"
+    else
+      precision_sections=$((precision_sections + 1))
     fi
   done < <(find docs/tutorials -type f -name '*.md' -print0 | sort -z)
 fi
@@ -480,6 +643,7 @@ check_readme() {
 }
 
 if [ "$readme" -eq 1 ]; then
+  readme_requirements=4
   check_readme
 fi
 
@@ -489,11 +653,13 @@ if [ "$files_checked" -eq 0 ]; then
 fi
 
 if [ "$symbols" -eq 1 ]; then
-  printf 'check-docs: %d Markdown files, %d relative links, %d code references, %d line-suffix citations, %d symbol citations\n' \
-    "$files_checked" "$links_checked" "$refs_checked" "$citations_checked" "$symbols_checked"
+  printf 'check-docs: %d Markdown files (%d docs/, %d root, %d agent instructions), %d relative links, %d heading anchors, %d code references, %d line-suffix citations, %d symbol citations\n' \
+    "$files_checked" "$docs_pages" "$root_pages" "$agent_pages" \
+    "$links_checked" "$anchors_checked" "$refs_checked" "$citations_checked" "$symbols_checked"
 else
-  printf 'check-docs: %d Markdown files, %d relative links, %d code references\n' \
-    "$files_checked" "$links_checked" "$refs_checked"
+  printf 'check-docs: %d Markdown files (%d docs/, %d root, %d agent instructions), %d relative links, %d heading anchors, %d code references\n' \
+    "$files_checked" "$docs_pages" "$root_pages" "$agent_pages" \
+    "$links_checked" "$anchors_checked" "$refs_checked"
 fi
 
 if [ "$claims" -eq 1 ]; then
@@ -504,9 +670,37 @@ if [ "$readme" -eq 1 ]; then
   printf 'check-docs: README.md structural audit: 4 requirements checked\n'
 fi
 
+# ---------------------------------------------------------------------------
+# The machine-readable evidence line (RQ-023). It is additive: the human
+# summary above and the exit status below keep their meaning, and this line is
+# always the last thing on stdout. `modes` lists the audits that ran on top of
+# the link/heading/reference scan, so three invocations of this gate are
+# distinguishable in tools/docs-report.sh.
+# ---------------------------------------------------------------------------
+modes=none
+if [ "$symbols" -eq 1 ] || [ "$claims" -eq 1 ] || [ "$readme" -eq 1 ]; then
+  modes=
+  [ "$symbols" -eq 1 ] && modes="${modes}symbols,"
+  [ "$claims" -eq 1 ] && modes="${modes}claims,"
+  [ "$readme" -eq 1 ] && modes="${modes}readme,"
+  modes=${modes%,}
+fi
+
+docreport_status=ok
 if [ "$failures" -gt 0 ]; then
   printf 'check-docs: FAIL (%d failure(s))\n' "$failures"
+  docreport_status=fail
+else
+  printf 'check-docs: OK\n'
+fi
+
+printf 'DOCREPORT gate=check-docs status=%s pages=%d links=%d anchors=%d refs=%d citations=%d symbols=%d claims=%d tutorials=%d sections=%d readme=%d modes=%s failures=%d\n' \
+  "$docreport_status" "$files_checked" "$links_checked" "$anchors_checked" \
+  "$refs_checked" "$citations_checked" "$symbols_checked" "$claim_hits" \
+  "$tutorials_checked" "$precision_sections" "$readme_requirements" \
+  "$modes" "$failures"
+
+if [ "$docreport_status" = fail ]; then
   exit 1
 fi
-printf 'check-docs: OK\n'
 exit 0

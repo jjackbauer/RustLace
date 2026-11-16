@@ -1,9 +1,12 @@
 # Precision and formatting
 
-Lovelace numbers are exact until an operation has to truncate: division with a period longer than
-the computation budget, an irrational square root, a transcendental function, `pi`, `e`, or an
-`evalf`. This page explains the two precision knobs, their host-specific defaults, how
-`setprecision`, `pi(n)`, `e(n)` and `evalf` interact with them, and how numbers are rendered.
+Lovelace numbers use an exact decimal representation until an operation has to truncate: division
+with a period longer than the computation budget, an irrational square root, a transcendental
+function, `pi`, `e`, or an `evalf`. That representation is not a proof of numerical correctness: a
+digit budget bounds how many digits a kernel may store, and an iterative, transcendental or
+cumulative computation can accumulate error beyond its last stored digit. This page explains the two
+precision knobs, their host-specific defaults, how `setprecision`, `pi(n)`, `e(n)` and `evalf`
+interact with them, and how numbers are rendered.
 
 ## Three numbers to keep apart
 
@@ -22,6 +25,12 @@ takes 30.
 
 That difference explains a common surprise: the same script can print more digits in the CLI than
 in a fresh desktop document. The language is the same; the host's starting precision is not.
+
+A **computation precision** is a budget, not an error bound. `setprecision(30)` permits kernels to
+store 30 decimal places; it does not prove that an arbitrary iterative, transcendental or cumulative
+result is within `10^-30` of the true value. A stated final-error bound is a separate claim and needs
+its own derivation or independent evidence; the categories are defined in the
+[editorial guide](../editorial.md#the-four-kinds-of-claim).
 
 ## `setprecision(n)`
 
@@ -78,7 +87,7 @@ the cost is paid by the next computation, not by the setter.
 ## `pi(n)` and `e(n)`
 
 `pi()` and `e()` compute the constant at the engine's **computation** precision and render it at
-the display cap. With an argument, they compute exactly `n` digits, but `n` may not exceed the
+the display cap. With an argument, they compute to `n` decimal places, but `n` may not exceed the
 current computation precision. The result is a `Real`; the computation is a truncation, not a
 rounding.
 
@@ -184,7 +193,7 @@ setprecision(5); 1/7
   _ = 0.14285
 ```
 
-At 7 places the period fits and the value is exact again:
+At 7 places the period fits and the value reports exact again:
 
 ```lovelace
 setprecision(7); 1/7
@@ -194,7 +203,8 @@ setprecision(7); 1/7
   _ = 0.(142857)
 ```
 
-The exactness difference is observable:
+The provenance difference is observable: `inspect(...).exact` records whether a digit was dropped,
+not whether the value is mathematically correct.
 
 ```lovelace
 setprecision(5); [1/7, inspect(1/7).exact]
@@ -236,7 +246,9 @@ A Real with period metadata renders its finite prefix, then the repeating block 
 Period blocks are rendered in full even when the block is longer than the display cap. The
 display cap applies to **finite** expansions only. A period that does not fit inside the
 computation budget is not stored as a period at all; the value becomes a finite truncation and
-reports `exact: False`.
+reports `exact: False`. That flag is provenance, not an error bound. A period that closes exactly at
+the cap is also not discovered: `1/7` has a six-digit period, and at `setprecision(6)` it is the
+inexact truncation `0.142857`, while at `setprecision(7)` it is `0.(142857)`.
 
 For example, `1/17` has a 16-digit period. At `setprecision(10)` it is a truncated finite value;
 at `setprecision(20)` the period fits and it renders as `0.(0588235294117647)`.

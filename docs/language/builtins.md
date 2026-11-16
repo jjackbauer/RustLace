@@ -253,8 +253,10 @@ runner's engine loads every plugin, so all 124 names are available. A bare engin
 
 ### Numerics (10)
 
-The numeric builtins preserve exactness where they can and compute at the session's computation
-precision where they cannot.
+The numeric builtins preserve the exact representation where the operation has one and otherwise
+compute at the session's computation precision. A truncated result is precision-limited, and the
+`exact` flag is provenance, not an error bound (see the
+[editorial guide](../editorial.md#the-four-kinds-of-claim)).
 
 | Builtin | What it does |
 |---|---|
@@ -395,8 +397,8 @@ mode string as the second argument it selects `"pretty"`, `"canonical"`, `"debug
 `capabilities()` returns a large `CapabilitiesResult` describing accepted solver domains and known
 unsupported operation classes.
 
-`inspect` is the reliable way to ask whether a Real is exact; the display form does not carry
-that bit. `capabilities()` is intentionally verbose on the wire; prefer reading its record fields
+`inspect` is the reliable way to read whether a Real's stored digits were truncated; the display
+form does not carry that flag. It is provenance, not an error bound. `capabilities()` is intentionally verbose on the wire; prefer reading its record fields
 rather than parsing its prose.
 
 ### Language (1)
@@ -417,15 +419,16 @@ before compiling the expression.
 
 ## Precision behaviour
 
-The catalogue publishes numbers under the three claim kinds of the
-[editorial guide](../editorial.md#the-three-kinds-of-claim); the per-family sections above state
+The catalogue publishes numbers under the four claim kinds of the
+[editorial guide](../editorial.md#the-four-kinds-of-claim); the per-family sections above state
 which case a builtin is in.
 
 | Claim kind | Where it appears in this catalogue |
 |---|---|
 | **Exact** | `Natural`/`Integer` arithmetic and rationals; integer predicates and `divrem`; array reductions over exact elements; a `Real` whose decimal expansion terminates or recurs within the computation budget, rendered with its period (`1/3` is `0.(3)`, never a rounding). |
-| **Precision-bounded** | `sqrt`, `pi`, `e`, `evalf`, `norm` and every irrational or transcendental result: the value is computed to a decimal-place budget and the error is bounded by that budget. |
-| **Parity** | A rendering that reproduces the C# reference, including a defect. The live case in this workspace is the DSP `movingavg` defect, documented on the [DSP page](../extensions/dsp.md#known-defect-movingavg-below-38-digits); a parity value is evidence about the reference, not a mathematical result. |
+| **Precision-limited** | `sqrt`, `pi`, `e`, `evalf`, `norm` and every irrational or transcendental result: the value is truncated at a decimal-place budget. The budget is not a proven final-error bound, especially for iterative, transcendental or cumulative algorithms. |
+| **Error-bounded** | No entry in this catalogue publishes a final-error bound. A precision-limited value may happen to be close, but the digit budget alone does not establish a bound; a page that states one must name the bound and its evidence. |
+| **Parity-verified** | This catalogue documents no live parity artifact. The historical `movingavg` defect is retained only as a historical record on the [DSP page](../extensions/dsp.md#historical-defect-fixed-movingavg-below-38-digits) and in ADR-004; its arithmetic was changed to the exact quotient rather than preserved for byte-parity. A parity value is evidence about the reference, not a mathematical result. |
 
 - `setprecision(n)` sets the engine's computation and display precision. `pi(n)` and `e(n)` compute
   at most the current computation precision; requesting more is an `InvalidArgument` /
@@ -437,7 +440,7 @@ which case a builtin is in.
   `Real`, ask `inspect` (its record reports exactness) rather than reading the printed form.
 - The catalogue has no binary floating-point value type: every numeric value is decimal-backed.
   That is a statement about representation, not a correctness guarantee, and it does not make a
-  precision-bounded result exact.
+  precision-limited result exact.
 
 ## Errors
 

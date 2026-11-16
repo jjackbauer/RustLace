@@ -21,32 +21,46 @@ reader's intelligence, and is comfortable admitting a limitation.
 - **Historical context is local.** Mention the C# implementation when it explains a design decision or
   a contract. Never require the reader to know LovelaceSharp to use RustLace.
 
-## The three kinds of claim
+<a id="the-three-kinds-of-claim"></a>
+## The four kinds of claim
 
-Every numerical statement must say which of these it is. Conflating them is the most common defect in
-this repository, and it has already produced one wrong result presented as evidence.
+Every numerical statement must say which of these four it is: **exact**,
+**precision-limited**, **error-bounded** or **parity-verified**. Conflating them is the most common
+defect in this repository, and it has already produced one wrong result presented as evidence.
 
 | Kind | Meaning | Example |
 |---|---|---|
-| **Exact** | The value is the mathematically correct result, exactly representable. | `fft([0,1,0,0])` → `[1, -1i, -1, 1i]`; `1/3` → `0.(3)` |
-| **Precision-bounded** | The value is correct to the stated budget; the error is bounded by it. | `sqrt(2)` at 30 places; `pi` |
-| **Parity** | The value reproduces a reference implementation, including its defects. | `movingavg([2.5], 3)` → `0.(8)` |
+| **Exact** | The value is the mathematically correct result, and the representation holds it without dropping a digit. | `fft([0,1,0,0])` → `[1, -1i, -1, 1i]`; `1/3` → `0.(3)` |
+| **Precision-limited** | The value is a truncation at a stated working precision. The budget says how many digits were computed; it is not a proven final-error bound for an iterative, transcendental or cumulative algorithm. | `sqrt(2)` at 30 places: the stored decimal is a 30-place truncation, not a proof that the final error is below `10^-30`. |
+| **Error-bounded** | The value is accompanied by a stated bound on its final error and by the evidence for that bound: a truncation analysis for the algorithm that produced it, interval arithmetic, or an independent oracle. | A result reported with a bound such as `\|x - x*\| ≤ ε`, together with the derivation of `ε`; "computed at 30 digits" alone is not this kind. |
+| **Parity-verified** | The value reproduces a named reference implementation, including its defects, and is reported as evidence about that implementation's behaviour. Parity is never mathematical correctness. | The historical `movingavg` fixed-width rendering, retained only in the DSP guide's historical defect subsection and [ADR-004](adr/004-thirty-digit-default.md). |
 
 Rules:
 
 - "Exact 30-place decimal" is a contradiction and must not appear. Say "computed to 30 places" or
   "exact" — not both.
 - "Nothing is floating point" is a statement about the representation. It is not a correctness
-  guarantee, and it may not be used as one.
+  guarantee, and it may not be used as one: it does not make a precision-limited result exact and it
+  does not bound the error of an algorithm.
+- A working precision is a budget, not a bound. "30 digits of working precision" does not by itself
+  prove a final-error bound of `10^-30` for an arbitrary iterative, transcendental or cumulative
+  algorithm; such a claim needs its own analysis or independent evidence.
+- An `inexact` marker is provenance, not an error bound: it records that a digit was dropped, not
+  how far the stored value is from the true result. It is not a correctness certificate either: a
+  value can be marked exact and still be the wrong number (the historical `movingavg` defect did
+  exactly that), and provenance propagates, so an operation on an inexact input can produce an
+  exactly representable result that is still flagged inexact. Do not use either flag to excuse a
+  wrong leading digit.
 - When a documented behaviour is a reproduced defect, say so in the same paragraph, and link the ADR
   that records it. Do not present the observed output as the expected output.
-- An `inexact` marker is provenance, not an error bound. Do not use it to excuse a wrong leading
-  digit.
+- Parity with a known-defective historical implementation is never independent proof of mathematical
+  correctness. Report the parity check and the independent oracle separately; a parity fixture can
+  pin behaviour, but it cannot certify the value.
 
 Automated wording and link checks can verify consistency, but they
-cannot establish mathematical correctness. A numerical claim needs an independent oracle, a
-reference calculation, or a stated error bound; a checker that confirms a sentence was written or a
-link resolves is not evidence that the value it states is right.
+cannot establish mathematical correctness. A numerical claim needs an independent oracle, an
+algorithm-specific truncation analysis, or a stated error bound; a checker that confirms a sentence
+was written or a link resolves is not evidence that the value it states is right.
 
 ## Structure
 
@@ -54,8 +68,8 @@ New pages follow one of four shapes, after Diátaxis:
 
 | Shape | Reader question | Where it goes |
 |---|---|---|
-| **Tutorial** | "Teach me by doing." | a new `docs/tutorials/` page (target shape; none exist yet) |
-| **How-to** | "How do I do this one thing?" | a new `docs/how-to/` page (target shape; none exist yet) |
+| **Tutorial** | "Teach me by doing." | [docs/tutorials/](tutorials/) — four end-to-end tutorials today; a new page goes there |
+| **How-to** | "How do I do this one thing?" | a new `docs/how-to/` page (no how-to pages exist yet) |
 | **Reference** | "What exactly does this do?" | `docs/language/`, `docs/crates/`, `docs/extensions/` |
 | **Explanation** | "Why is it built this way?" | `docs/architecture.md`, `docs/adr/` |
 
@@ -74,8 +88,10 @@ result.
    A headless selftest is a run-path check, not a GUI journey pass, and the two must not be described
    interchangeably.
 3. **Do not hand-edit a machine-read document as if it were prose.** `docs/goal-desktop-v4/platform-matrix.md`
-   is parsed by `--platform-claims` and by tests that assert exactly one supported row. Changing a
-   status cell is a code change.
+   is parsed by `--platform-claims` and by the `platform_claims` tests, which require a matrix row
+   with built-and-run GUI evidence for **each** platform in `SUPPORTED_PLATFORMS` (Windows x86_64
+   and Linux x86_64) and reject a support claim that has no run evidence. Adding, removing or
+   restating a supported platform is a code change.
 4. **Prefer symbols to line numbers.** Cite `dsp_movingavg` or the function's doc comment, not a
    `file:line` citation such as `builtins.rs:NNN`, which rots on the next refactor. A line number is
    acceptable only when the line itself is the subject, and then it is commit-pinned.
@@ -98,7 +114,7 @@ that changes what the project does. In particular:
 Before opening a documentation change:
 
 - [ ] Does the opening sentence describe what the reader can do, not how the code is organised?
-- [ ] Is every numerical claim labelled exact, precision-bounded or parity?
+- [ ] Is every numerical claim labelled exact, precision-limited, error-bounded or parity-verified?
 - [ ] Is each measurement tied to a version or commit?
 - [ ] Do all relative links resolve, and do they point at a current page rather than a historical one?
 - [ ] If behaviour changed, did the platform matrix, the agent instructions and the README change too?

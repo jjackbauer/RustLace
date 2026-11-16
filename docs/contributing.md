@@ -16,10 +16,15 @@
 4. **Test at the layer you touched** and then run the gate:
 
    ```console
-   $ cargo test -p <crate>
+   $ cargo test -p lovelace-lang      # the crate you touched; a desktop change runs bare here too
    $ cargo test --workspace
    $ cargo run --release -p lovelace-corpus
    ```
+
+   Read the `test result:` line, not only the exit status: a `cargo test -p <crate> <filter>` whose
+   filter matches nothing prints `running 0 tests` and still exits 0, and a `lovelace-corpus` filter
+   that selects no record prints `0 passed ... (filter ...)` and exits 0. A run with zero selected
+   items is a failed check; require a nonzero passed count and `0 failed`.
 
 5. **Format and lint** before opening the pull request:
 
@@ -76,7 +81,7 @@ A reviewer should be able to answer these from the diff alone:
 
 A documentation change is reviewed against the editorial guide,
 [docs/editorial.md](editorial.md). Two rules are blocking:
-every numerical claim says whether it is exact, precision-bounded or parity, and every example uses a
+every numerical claim says whether it is exact, precision-limited, error-bounded or parity-verified, and every example uses a
 repository-relative path or a placeholder instead of a path from one machine. A link check does not
 make a page ready to merge; the [editorial review checklist](editorial.md#review-checklist) does.
 

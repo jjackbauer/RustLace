@@ -97,7 +97,7 @@ must do is a product decision, and it needs:
    inputs, so that parity and correctness are pinned separately and neither can drift unnoticed;
 2. an explicit decision on whether the malformed `< 37` rendering is preserved for compatibility or
    fixed in both the engine and the parity fixtures (a fixture change, not a test weakening);
-3. a precision-bounded error statement in the reference docs for every DSP builtin that divides by a
+3. a precision-limited statement in the reference docs for every DSP builtin that divides by a
    non-exact constant, rather than the blanket phrase "exact 30-place decimal".
 
 ## Resolution (2026-11-15): the emulation is removed, not preserved

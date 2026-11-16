@@ -1,6 +1,10 @@
 # DSP (`Lovelace.Dsp`)
 
-**16 builtins.** Every one is a signal operation over exact numeric vectors.
+**16 builtins.** Each is a signal operation over numeric vectors whose samples are decimal-backed
+`Real` values (or `Complex` pairs of them). No binary floating point enters the
+representation, but that is a property of the representation, not a guarantee that every result is
+mathematically exact: several DSP builtins compute irrational values at the active digit budget, and
+a division whose repeating period exceeds that budget is truncated and marked `inexact`.
 
 ## Purpose
 
@@ -20,26 +24,39 @@ It is declared by the `plugin` field of 16 descriptors in
 complex helpers beside them.
 
 Samples are decimal-backed, not binary floating point. A sample is a `Real` (an integer scaled by a
-power of ten, carrying exact periodic-decimal metadata) or an exact `Complex` of two `Real`s, so
-`fft([0, 1, 0, 0])` answers exactly `[1, -1i, -1, 1i]`. The transform kernels build their roots of
-unity from exact arithmetic; there is no libm and no external crate in the path.
+power of ten, carrying periodic-decimal metadata when its expansion repeats) or a `Complex` of two
+`Real`s, so `fft([0, 1, 0, 0])` answers exactly `[1, -1i, -1, 1i]`. The transform kernels build
+their roots of unity with the engine's decimal arithmetic; there is no libm and no external crate in
+the path.
 
-Three different properties are often described as "exact" and they must not be collapsed into one
-claim:
+Four different properties are often described as "exact" and they must not be collapsed into one
+claim (the categories are defined in the [editorial guide](../editorial.md#the-four-kinds-of-claim)):
 
-- **Exact representation.** Integer results and rationals whose decimal expansion terminates or
-  recurs within the budget are represented exactly. `fft([0, 1, 0, 0])` is exact.
-- **Precision-bounded value.** `sqrt(2)`, `pi` and any irrational or transcendental result are computed
-  to the requested number of places. "30-place" names the *budget*; it does not make the value exact.
-  A 30-place result is an approximation whose error is bounded by the precision, not a rational.
-- **Reproduced reference behaviour.** Some fixed-width paths reproduce the C# implementation's
-  rendering. Where that rendering was defective it has been removed rather than preserved: the one
-  live case, `movingavg`, now divides exactly (see below). Any future parity artifact belongs here
-  only with a stated reason and a pointer to the decision that accepted it.
+- **Exact value.** Integer results and rationals whose decimal expansion terminates or recurs within
+  the budget are represented exactly, and the arithmetic that produced them is exact:
+  `fft([0, 1, 0, 0])` is `[1, -1i, -1, 1i]`. Exact representation is not by itself a correctness
+  proof: the historical `movingavg` defect recorded below stored a wrong rational and marked it
+  exact.
+- **Precision-limited value.** `sqrt(2)`, `pi` and any irrational or transcendental result are
+  truncated at the requested number of places. "30-place" names the *budget*, not a proven
+  `10^-30` final-error bound: the accumulated error of an iterative or transcendental routine needs
+  its own analysis. Printing more of the stored digits does not make the value exact.
+- **Error-bounded value.** A DSP result may be described as error-bounded only when a specific bound
+  and the argument for it are stated. No DSP page currently publishes such a bound; a digit budget
+  alone is not one.
+- **Parity-verified behaviour.** A value that reproduces the C# implementation, including a defect,
+  is evidence about the reference, not a mathematical result. The known case, `movingavg`, was fixed
+  by removing the fixed-width substitution; this page records no live parity artifact, and its wrong
+  values survive only as the labelled historical record below and in
+  [ADR-004](../adr/004-thirty-digit-default.md).
 
-"Nothing is floating point" is a statement about the representation. It is **not** a guarantee that
-every 30-place result is mathematically correct, and the sections below say which case a builtin is
-in.
+The decimal representation is a property of the values, not a correctness guarantee: it is **not**
+a proof that every 30-place result is mathematically correct, and the sections below say which case
+a builtin is in.
+
+The `exact` / `inexact` flag is provenance: it records whether a digit was dropped, not how far the
+stored value is from the true result, and it is neither an error bound nor a correctness
+certificate.
 
 A signal is a rank-1 vector. A scalar is accepted where a signal is expected and widened to a
 one-sample signal (`fft(1)` answers `[1]`, `conj(1)` answers `1 (Complex)`), and a nested array is
@@ -158,13 +175,24 @@ registry's declared metadata. All 16 were executed; the call and its exact typed
 - **30-place fast default.** Until `setprecision` is called, every DSP builtin computes at 30
   decimal places: `engine.dsp_precision()` returns `30` when `precision_explicit` is false and the
   engine knob otherwise ([`dsp_precision`](../../lovelace-lang/src/lib.rs)). The two `im(dft(...))`
-  runs above are the observed consequence (31 printed digits vs 60).
-- **38-digit fixed-width conversion bound.** `dsp_lreal128_convertible` accepts a value only while
-  its decimal magnitude fits 38 significant digits (`lovelace-lang/src/builtins.rs`); wider values stay on the
-  arbitrary-precision path. This is a value-preserving fallback, never a rounding.
-- **18/37-place working width for periodic operands.** The fixed-width tier expands a repeating
-  operand to 18 fractional places at 64-bit width and 37 at 128-bit
-  ([`fixed_dsp.rs`](../../lovelace-lang/src/fixed_dsp.rs)).
+  runs above are the observed consequence (31 printed digits vs 60). This is a working budget, not a
+  final-error bound (see the four claim kinds above).
+- **No fixed-width substitution remains in `movingavg`.** `movingavg` divides through `Real::div` at
+  every precision. The former fixed-width rendering path (`dsp_lreal128_division_render`) was
+  deleted; it was not a value-preserving fallback, because it replaced a correct quotient with the
+  defective rendering recorded in the historical defect subsection below.
+- **Long periods are truncated, not preserved.** `Real::div` builds its quotient through
+  `Real::from_fraction` (`lovelace-real/src/lib.rs`). A terminating quotient is expanded in full at
+  any budget; a non-terminating one is bounded by the budget. A repeating period longer than the
+  budget is published as a finite truncation at the budget, with no period metadata and with
+  `inexact` provenance. A period that closes exactly at the cap is also not discovered, because the
+  loop's position test runs before the repeated-remainder test. At a larger budget the same rational
+  can keep its period: `setprecision(2); movingavg([1], 7)` is `[0.14]`, and at 7 places the same
+  call is `[0.(142857)]`. At 6 places it is `[0.142857]` and inexact precisely because the 6-digit
+  period closes at the cap.
+- **18/37-place working width in the separate fixed-width tier.** The `fixed_dsp` tier (tested but
+  not called by any builtin; see Limitations) expands a repeating operand to 18 fractional places
+  at 64-bit width and 37 at 128-bit ([`fixed_dsp.rs`](../../lovelace-lang/src/fixed_dsp.rs)).
 - **`fft` is power-of-two only; `dft` is not.** `dft(x, n)` zero-pads or truncates to `n`; `n = 0`
   answers `[]`.
 - **Argument counts and ranges are refused, not clamped.** Negative counts and a non-positive
@@ -220,23 +248,36 @@ and `fft([1, 2, 3])` for the power-of-two refusal.
 - **`re`/`im`/`conj` are trivial accessors**, not a complex-number namespace: there is no `arg`,
   `magnitude`, or complex-exponential builtin here (`abs` is core `Numerics`).
 
-### Fixed: `movingavg` below 38 digits
+### Historical defect (fixed): `movingavg` below 38 digits
+
+This subsection is a historical record, not current behaviour. The "Before (historical, wrong)"
+column gives values observed from the removed fixed-width substitution; they must not be cited as
+expected results. The "Now (current)" column is the current arithmetic.
 
 Earlier builds of this port reproduced the reference implementation's fixed-width division rendering
 for `movingavg` below 38 digits, and that rendering misplaces the recurring period. The emulation has
-been **removed**: `movingavg` now divides through the engine's exact `Real::div` at every precision.
+been **removed**: `movingavg` now divides through the engine's `Real::div` at every precision.
 
-| Call | Before (wrong) | Now |
+| Call | Before (historical, wrong) | Now (current) |
 |---|---|---|
 | `movingavg([2.5], 3)` | `[0.(8)]` = 8/9 | `[0.8(3)]` = 5/6 |
 | `movingavg([0.1], 3)` | `[0.(0)]` = 0 | `[0.0(3)]` = 1/30 |
 | `movingavg([1/3], 3)` | `[0.(1)]`, reported **inexact** | `[0.(1)]` = 1/9, reported **exact** |
 
-The result no longer depends on the digit budget, and the `exact` flag is now correct for all three:
-each is an exact rational. The incident, its mechanism and the decision to prefer arithmetic
-soundness over byte-parity with a defective reference are recorded in
-[ADR-004](../../docs/adr/004-thirty-digit-default.md). `0.(8)` and `0.(0)` are no longer produced by
-any input and must not be cited as expected results.
+The old incorrect fixed-width substitution was removed, and the demonstrated rational examples are
+correct and produce the same values at every budget tested here: 30, 37, 38 and 1000 decimal places.
+This is a scoped statement about those examples, not a claim that every `movingavg` result is exact
+at every budget. A repeating period longer than the budget may be truncated and marked inexact, in accordance
+with `Real::from_fraction`; the "Precision and limits" rule above states that behaviour and gives an
+observed example.
+
+The former incorrect `movingavg([2.5], 3)` result is no longer produced for that input. `0.(8)` is
+the legitimate representation of `8/9` and still renders for `8/9`; it is simply not the
+`movingavg([2.5], 3)` result. `0.(0)` is likewise the representation of zero. Neither historical row
+is an expected result.
+
+The incident, its mechanism and the decision to prefer arithmetic soundness over byte-parity with a
+defective reference are recorded in [ADR-004](../adr/004-thirty-digit-default.md).
 
 ## Examples
 

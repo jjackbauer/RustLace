@@ -82,15 +82,22 @@ so the descriptor is not optional metadata.
 
 ## Verify
 
+`<name>` below is the builtin you added; X and Y are its arguments. Substitute real values before
+running, and read each `test result:` line: a filter that matches nothing prints `running 0 tests`
+and still exits 0, which is a failed check rather than a pass.
+
 ```console
-cargo test -p lovelace-lang my_builtin
+cargo test -p lovelace-lang <name>
 cargo test -p lovelace-lang every_builtin_refuses_every_count_outside_its_declared_arity
-cargo run -p lovelace-run -- --function my_builtin
-cargo run -p lovelace-run -- --eval "my_builtin(2, 3)" --text
+cargo run -p lovelace-run -- --function <name>
+cargo run -p lovelace-run -- --eval "<name>(X, Y)" --text
 cargo run --release -p lovelace-corpus -- lang/112
 ```
 
-Observable success: the focused test and the arity property test pass; `--function` prints the
-descriptor JSON with `parameters`, `minArity`, `parameterCount`, `summary` and, for a plugin
-builtin, the plugin name; `--eval` prints `6 (Natural)` (the exact value you chose); the corpus
-filter ends with `corpus: 1 passed, 0 failed, 214 total (filter lang/112)` and exit 0.
+Observable success: the focused test names the builtin and reports at least one passed test with
+`0 failed`; the arity property test reports `1 passed` (it sweeps every registry entry); `--function`
+prints the descriptor JSON with `parameters`, `minArity`, `parameterCount`, `summary` and, for a
+plugin builtin, the plugin name; `--eval` prints the exact typed value you chose, for example
+`6 (Natural)`; the corpus filter ends with `corpus: 1 passed, 0 failed, 214 total (filter lang/112)`
+and exit 0 — a filter that matches no record prints `0 passed` and also exits 0, so the count is the
+check.

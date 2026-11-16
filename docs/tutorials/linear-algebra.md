@@ -23,6 +23,8 @@ d = det(A)
 residual
 ```
 
+The same script is checked in as [linear-algebra.ls](examples/linear-algebra.ls).
+
 ## Output
 
 ```text
@@ -61,8 +63,10 @@ requires. Write the right-hand side as a column.
 
 ## Assumptions
 
-- RustLace 0.4.1, run through the debug CLI built at `/tmp/rl-target/debug/lovelace-run` on WSL
-  Ubuntu. `--text` selects the human format shown above.
+- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+  `cargo run -p lovelace-run -- --file docs/tutorials/examples/linear-algebra.ls --text` on
+  Windows, Linux or WSL. `--text` selects the human format shown above. The first run compiles the
+  runner.
 - `A` is invertible over the rationals; `det(A) = 5` is non-zero.
 - `inv` computes the rational inverse exactly. Here every inverse entry has denominator 5, so the
   decimal expansion terminates.
@@ -72,38 +76,41 @@ requires. Write the right-hand side as a column.
 
 ## Precision
 
-The three labels below are the project's editorial categories (see
-[the editorial guide](../editorial.md)): **exact**, **precision-bounded** and **parity**.
+The four claim kinds are **exact**, **precision-limited**, **error-bounded** and
+**parity-verified**, following [the editorial guide](../editorial.md#the-four-kinds-of-claim).
 
 | Value | Label | Justification |
 |---|---|---|
 | `2`, `1`, `1`, `3` in `A` | **exact** | Integers, stored without a fractional part. |
 | `5`, `6` in `b` | **exact** | Integers. |
-| `0.6`, `-0.2`, `-0.2`, `0.4` in `Inv` | **exact** | Terminating decimals: 3/5, -1/5, -1/5, 2/5. |
+| `0.6`, `-0.2`, `-0.2`, `0.4` in `Inv` | **exact** | Terminating decimals: 3/5, -1/5, -1/5, 2/5. Each is the exact rational inverse. |
 | `1.8`, `1.4` in `sol` | **exact** | Terminating decimals: 9/5 and 7/5. |
 | `5`, `6` in `residual` | **exact** | Integers, with denominator 1 in the structured projection. |
 | `0`, `0` in `gap` | **exact** | The exact integer zero in each entry. |
 | `5` in `d` | **exact** | Integer-valued determinant, displayed as a `Real`. |
 
-Every number in this run is **exact**; there are no precision-bounded or parity values. Exactness
-here is a property of the arithmetic, not a claim that every future division terminates: a system
-whose determinant has a prime factor other than 2 or 5 produces a recurring decimal. The engine
-renders that with period notation, still exact when the period fits the precision budget, rather
-than as a rounded tail.
+Every value in this run is **exact**: the inputs are integers, and every inverse and solution entry
+is a terminating rational held without a dropped digit. No value is **precision-limited**, because
+no division is truncated and no transcendental is evaluated. No value is **error-bounded**, and none
+needs to be: `gap` is the exact zero vector, not a bound on an approximation. No value is
+**parity-verified**: the results come from the engine's own rational arithmetic and are not a
+reproduction of a reference implementation.
+
+Exactness here is a property of this arithmetic, not a claim that every future division terminates:
+a system whose determinant has a prime factor other than 2 or 5 produces a recurring decimal. When
+the period fits the active budget the engine stores it exactly; when the period does not fit, the
+quotient is truncated and becomes a **precision-limited** value. This run has no recurring quotient.
 
 ## Verification
 
-Run this from any directory. It prints exactly the output above and writes no files.
+Run this from the repository root. It prints the output above on standard output and the script
+writes no files. The command is the same in bash, PowerShell and Command Prompt because the script
+is a checked-in file, not a shell here-document.
 
 ```console
-/tmp/rl-target/debug/lovelace-run --stdin --text <<'EOF'
-A = [[2, 1], [1, 3]]
-b = [[5], [6]]
-Inv = inv(A)
-sol = matmul(Inv, b)
-residual = matmul(A, sol)
-gap = residual - b
-d = det(A)
-residual
-EOF
+cargo run -p lovelace-run -- --file docs/tutorials/examples/linear-algebra.ls --text
 ```
+
+`bash tools/run-tutorials.sh` reruns all four tutorials on Ubuntu and Windows (Git Bash), compares
+this transcript with the executed script, and recomputes `det(A)` and `A * sol = b` with
+[integer arithmetic that does not call the engine](../../tools/run-tutorials.sh).

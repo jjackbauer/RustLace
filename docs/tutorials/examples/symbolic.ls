@@ -1,0 +1,11 @@
+x = symbol("x")
+f = x^3 + 2*x
+df = diff(f, x)
+refused = simplify((x^2 - 1)/(x - 1))
+assume(x != 1)
+still_refused = simplify((x^2 - 1)/(x - 1))
+cancelled = cancel((x^2 - 1)/(x - 1))
+assume(x != 0)
+fired = simplify(x/x)
+at_2 = subs(df, x, 2)
+approx = evalf(sqrt(2), 20)

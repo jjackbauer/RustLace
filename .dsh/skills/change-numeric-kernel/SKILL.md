@@ -102,10 +102,22 @@ cargo test -p lovelace-nat proof_small_domain
 cargo test -p lovelace-lang
 cargo run --release -p lovelace-corpus
 cargo run --release -p lovelace-bench -- sqrt 10000 3
+```
+
+Then the same benchmark with one worker, in the host's own syntax:
+
+```console
+# bash (Linux, or Git Bash on Windows)
+LOVELACE_THREADS=1 cargo run --release -p lovelace-bench -- sqrt 10000 3
+```
+
+```powershell
+# Windows PowerShell
 $env:LOVELACE_THREADS=1; cargo run --release -p lovelace-bench -- sqrt 10000 3
 ```
 
-Observable success: the Real and Nat suites pass; the corpus reports `214 passed, 0 failed`; the two
-benchmark runs print the same `DIGEST` for `sqrt` and only their timings differ; the regression test
-asserts the exact decimal text and period metadata (for example `0.(3)` with start 0 and length 1),
-not merely that two values are "close".
+Observable success: the Real and Nat suites each report a nonzero passed count with `0 failed`; the
+corpus reports `214 passed, 0 failed`; the two benchmark runs print `RESULT sqrt 10000 <mean_ms>
+<median_ms>` and the same `DIGEST` — today `DIGEST sqrt 10002:1.4142135623730950488016` — with only
+the timings differing; the regression test asserts the exact decimal text and period metadata (for
+example `0.(3)` with start 0 and length 1), not merely that two values are "close".

@@ -21,7 +21,8 @@ re-implementing language behaviour. This file is the portable entry point; task 
 Run from the repository root. The engine crates build anywhere; the desktop workbench builds and
 runs on Windows and on Linux (X11). Linux needs the X11/GL/font packages and, on a display-less
 machine, Xvfb - see [Build on Linux](#build-on-linux).
-Requires Rust 1.85+ (the tree was built with 1.99.1) and, on Windows, the MSVC build tools.
+Requires Rust 1.85+ (`rust-version` in `Cargo.toml`; the tree was built with 1.100.0) and, on
+Windows, the MSVC build tools.
 
 ```console
 # build
@@ -44,9 +45,12 @@ cargo clippy --workspace --all-targets
 cargo run --release -p lovelace-corpus
 cargo run --release -p lovelace-corpus -- lang/001
 
-# desktop headless modes (use a writable APPDATA)
+# desktop headless modes. The application directory must be writable: set
+# APPDATA on Windows, or XDG_CONFIG_HOME/HOME on Linux, to a scratch directory.
+# Every mode below runs on both platforms except --platform-parity, which needs
+# the Windows build and exits 2 with a named refusal elsewhere.
 cargo run -p lovelace-desktop -- --gui-selftest
-cargo run -p lovelace-desktop -- --journey J-02 --out .tmp\journey
+cargo run -p lovelace-desktop -- --journey J-02 --out .tmp/journey
 cargo run -p lovelace-desktop -- --selftest
 cargo run -p lovelace-desktop -- --contrast-check
 cargo run -p lovelace-desktop -- --legibility-check
@@ -55,19 +59,27 @@ cargo run -p lovelace-desktop -- --glyph-check
 cargo run -p lovelace-desktop -- --ui-audit
 cargo run -p lovelace-desktop -- --thread-audit
 cargo run -p lovelace-desktop -- --shortcuts
-cargo run -p lovelace-desktop -- --platform-parity
-cargo run -p lovelace-desktop -- --raster-svg in.svg --out out.png --scale 2
+cargo run -p lovelace-desktop -- --platform-claims
+cargo run -p lovelace-desktop -- --platform-parity            # Windows build only; exit 2 elsewhere
+cargo run -p lovelace-desktop -- --raster-svg in.svg --out out.png --scale 2   # in.svg: any SVG file
 cargo run -p lovelace-desktop -- --help
 ```
 
-Observed counts on this tree: `cargo test --workspace` gives 6135 passed and 1 ignored (the
-ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in place); the
-desktop suite's measured count is recorded in
-[docs/testing.md](docs/testing.md#1-unit-tests-in-crate-test) — measured on Linux under `xvfb-run`
-at v0.4.1, with the Windows count not measured in this environment; `--gui-selftest` gives 20
-checks, 0 failed on both platforms;
-`--selftest` gives 15 checks on Windows and 14 plus a named `no-network-imports` skip on Linux; the
-corpus gives 214 passed, 0 failed. A run that needs the application directory needs it writable:
+The paths above are POSIX, for bash on Linux or Git Bash on Windows. Windows PowerShell spells the
+same output directory `.tmp\journey`; a backslash path handed to bash creates a file literally named
+`.tmp\journey`, so the two forms are not interchangeable. `--journey` is headless on both platforms
+(the modes that need the Windows build are `--legacy-win32`, `--ime-probe` and `--platform-parity`),
+and `--journey J-02` writes no artifact: only J-09 and J-15 write into `--out`, so the success line
+for J-02 is `JOURNEY summary journeys=1 failed=0`.
+
+Test counts are not duplicated here: [docs/testing.md](docs/testing.md#1-unit-tests-in-crate-test)
+carries the measured aggregate with its commit SHA, OS, command and date, keeps the Linux and
+Windows desktop observations separate, and records the one ignored test
+(`property_assertions::mathir_evaluates_like_symbolic`, annotated in place). Read the count from a
+run at the commit you are changing; do not quote a historical total as current.
+`--gui-selftest` gives 20 checks, 0 failed on both platforms; `--selftest` gives 15 checks on
+Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 214 passed, 0
+failed. A run that needs the application directory needs it writable:
 set `APPDATA` on Windows, or `XDG_CONFIG_HOME`/`HOME` on Linux, to a scratch directory first.
 
 ### Build on Linux
@@ -101,21 +113,27 @@ sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcurso
 
 ### CI jobs
 
-`.github/workflows/ci.yml` has two jobs and runs on pushes to `main`, pull requests and manual
-dispatch:
+`.github/workflows/ci.yml` has three job definitions and runs on pushes to `main`, pull requests and
+manual dispatch:
 
 | Job | Commands |
 |---|---|
 | Windows (full workspace) | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `cargo build --release -p lovelace-desktop`, then upload `target/release/lovelace-desktop.exe` as `lovelace-desktop-windows-x86_64` |
-| Linux (engine crates + GUI desktop under Xvfb) | `cargo fmt --all -- --check`, the Linux GUI runtime, `cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics`, `cargo build --release -p lovelace-desktop`, `xvfb-run ... --gui-selftest` (exit 0 and `checks=20 failed=0`), `xvfb-run ... cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-gui-x86_64` |
+| Linux (engine crates + GUI desktop under Xvfb) | `cargo fmt --all -- --check`, the Linux GUI runtime, `cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics`, `cargo build --release -p lovelace-desktop`, the glibc ABI guard over the built artifact, `xvfb-run ... --gui-selftest` (exit 0 and `checks=20 failed=0`), `xvfb-run ... cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-gui-x86_64` |
+| Documentation examples (`ubuntu-latest` and `windows-latest`) | twelve steps, one definition, two OS variants: checkout pinning `core.autocrlf=false`, Rust toolchain, cargo cache, `cargo build -p lovelace-run`, `bash tools/check-crate-examples.sh`, `bash tools/run-tutorials.sh`, `bash docs/language/examples/run-examples.sh` (fenced examples plus the builtin-catalogue check against `--functions`) and `bash docs/extensions/examples/run-examples.sh`, `bash tools/check-docs.sh --symbols`, `--claims`, `--readme`, `bash tools/check-reference-pages.sh`, and `bash tools/test-docs-gates.sh` (the mutation self-test) |
 
 The Linux job is the GUI acceptance gate: it compiles the workbench, runs the 20-check selftest and
 the full desktop suite (editor, panes, theme, plot rasteriser, journeys) under Xvfb, and uploads the
-GUI binary. The Windows job is untouched: it still runs the workspace suite, builds the release
-executable and uploads `lovelace-desktop-windows-x86_64`. Neither job captures a window: the
-Windows frames come from the documenting host and the one Linux frame is
-`docs/images/gui-linux.png` (WSLg). A `--gui-selftest` pass is a run-path check, not a GUI journey
-pass. The Linux job was also the first to compile the desktop crate there; it found the missing
+GUI binary. The Windows job still runs the workspace suite, builds the release executable and uploads
+`lovelace-desktop-windows-x86_64`. The documentation job compiles and runs the crate-page Rust
+fences and the four tutorials, executes both example runners (the language one also verifies the
+builtin catalogue against the built runner's `--functions` registry), runs the three consistency
+modes and the reference-page contract, and proves each gate can fail with the mutation self-test — on
+Ubuntu and on Windows, so a path-shape, `.exe`-discovery or line-ending bug
+fails on the platform that has it; its checkout pins `core.autocrlf=false` so the bash runners see
+LF on Windows. No job captures a window: the Windows frames come from the documenting host and the
+one Linux frame is `docs/images/gui-linux.png` (WSLg). A `--gui-selftest` pass is a run-path check,
+not a GUI journey pass. The Linux job was also the first to compile the desktop crate there; it found the missing
 `std::os::unix::fs::OpenOptionsExt` import in the atomic-save path. Clippy is run without
 `-D warnings` because the workspace has pre-existing warnings; do not add new ones silently.
 
@@ -189,8 +207,9 @@ For a bug, add the regression test first and watch it fail on the old code.
 ### Documentation requirements
 
 Documentation changes are reviewed against [docs/editorial.md](docs/editorial.md). Two rules are
-blocking: every numerical claim is labelled exact, precision-bounded or parity, and every example
-uses a repository-relative path or a placeholder rather than a path from one machine.
+blocking: every numerical claim says which of the four kinds it is — exact, precision-limited,
+error-bounded or parity-verified — and every example uses a repository-relative path or a
+placeholder rather than a path from one machine.
 
 ### Where new things go
 
@@ -254,7 +273,8 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
   `LOVELACE_RECORD_GOLDENS=1`; `docs/goal-desktop-v4/reference/REF-*.json` are captured from a real
   run. Re-run the consuming test after regenerating.
 - Never push a feature branch to `main` without a green CI run. Branch, open a pull request, and let
-  the Windows and Linux jobs pass; `main` moves only through that gate.
+  the Windows, Linux and documentation jobs pass (both OS variants of the documentation job);
+  `main` moves only through that gate.
 - No external crate may enter an engine crate (ADR-001). The desktop's GUI stack is the only
   external dependency, declared in the desktop crate only: eframe's default wgpu on Windows, plus
   glow on Linux.

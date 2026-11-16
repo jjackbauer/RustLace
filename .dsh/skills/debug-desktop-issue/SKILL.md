@@ -91,16 +91,21 @@ evidence.
 
 ## Verify
 
+`<regression_test_name>` is the test you added. Read each `test result:` line: a filter that matches
+nothing prints `running 0 tests` and still exits 0, so require a nonzero passed count.
+
 ```console
 cargo test -p lovelace-desktop <regression_test_name>
-cargo test -p lovelace-desktop
+cargo test -p lovelace-desktop                  # on Linux: xvfb-run -a -s "-screen 0 1600x1000x24" …
 cargo run -p lovelace-desktop -- --gui-selftest
-cargo run -p lovelace-desktop -- --journey J-02 --out .tmp\journey
+cargo run -p lovelace-desktop -- --journey J-02 --out .tmp/journey
 cargo run -p lovelace-desktop -- --ui-audit
 ```
 
-Observable success: the regression test fails on the parent commit and passes after the fix; the
-full desktop suite reports `716 passed; 0 failed` (or more with the new test); `--gui-selftest` ends
-with `failed=0`; the journey prints `JOURNEY J-02 PASS`; `--ui-audit` exits 0; and the after UIA dump
-names the control with a rectangle inside the client while the after PNG shows the corrected state,
-both with the recorded SHA-256.
+Observable success: the regression test fails on the parent commit and passes after the fix; the full
+desktop suite reports a nonzero passed count with `0 failed` — read this commit's measured rows in
+[docs/testing.md](../../../docs/testing.md), which keeps the Linux and Windows counts separate, rather
+than quoting a historical total; `--gui-selftest` ends with `failed=0`; the journey prints
+`JOURNEY J-02 PASS` and writes no artifact (J-09 and J-15 are the artifact-writing IDs); `--ui-audit`
+exits 0; and the after UIA dump names the control with a rectangle inside the client while the after
+PNG shows the corrected state, both with the recorded SHA-256.

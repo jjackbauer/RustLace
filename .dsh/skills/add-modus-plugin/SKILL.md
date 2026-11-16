@@ -88,14 +88,21 @@ Loading a plugin is a host decision, not a language feature.
 
 ## Verify
 
+`<name>` is the name you registered and `<the test you added>` is your new test. Read each
+`test result:` line: a filter that matches nothing prints `running 0 tests` and still exits 0.
+
 ```console
 cargo test -p lovelace-lang round67_modus
-cargo test -p lovelace-lang my_plugin_registers_and_answers
-cargo test -p lovelace-desktop
-cargo run -p lovelace-run -- --functions
+cargo test -p lovelace-lang <the test you added>
+cargo test -p lovelace-desktop                      # on Linux: xvfb-run -a -s "-screen 0 1600x1000x24" …
+cargo run -p lovelace-run -- --function <name>
+cargo run -p lovelace-run -- --functions --function-limit 500
 ```
 
 Observable success: the plugin tests pass; `plugin_name_of` returns the plugin name; the duplicate
 load refusal names "already loaded"; the collision refusal names "already registered"; the desktop
-suite still passes; `--functions` either lists the name (static descriptor) or does not (runtime
-plugin), and the answer matches the design decision recorded in step 6.
+suite still passes; `--function <name>` prints the descriptor only when a static registry descriptor
+publishes it, and `--functions --function-limit 500` either lists the name (static descriptor) or
+does not (runtime plugin), matching the design decision recorded in step 6. A bare `--functions`
+listing is truncated by default — today it returns 50 of 124 with `"truncated":true` — so do not read
+an absent name there as proof that a static descriptor is missing.

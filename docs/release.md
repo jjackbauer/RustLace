@@ -10,9 +10,12 @@ binary prints the version compiled into it from its package metadata (`--version
 
 The version is derived from the commit history, not chosen by hand. `tools/next-version.ps1` reads
 the current workspace version and the commits since the last `vX.Y.Z` tag (every commit when no tag
-exists yet) and prints the next version:
+exists yet) and prints the next version. It is a PowerShell script with no bash port, so run it with
+Windows PowerShell or PowerShell 7; the workflow calls it on `windows-latest`:
 
 ```console
+# Windows PowerShell (add -NoProfile -ExecutionPolicy Bypass if the policy blocks local scripts);
+# on a host that has PowerShell 7 instead: pwsh -File tools/next-version.ps1 <same arguments>
 $ ./tools/next-version.ps1 -CurrentVersion 0.1.0 -Commits 'feat: publish the RustLace workspace'
 previous=0.1.0 next=0.2.0 bump=minor reason="feat: publish the RustLace workspace" policy=0.x
 range=supplied -Commits
@@ -63,6 +66,33 @@ only when a CI run triggered by a push to `main` finishes with `conclusion == 's
 or unvalidated tree can never be tagged. It has two jobs: `release` (`windows-latest`) creates the
 tag and the GitHub Release and attaches the Windows executable; `linux` (`ubuntu-24.04`) runs after
 it, checks the same tag out and attaches the Linux executable.
+
+### What must be green before a tag
+
+The release workflow's success condition is the **whole `CI` workflow** on the validated commit, so
+every CI job is a release gate — not only the two that produce an executable. `ci.yml` has three
+job definitions and produces four job results; all four must be green before anything is tagged:
+
+| Job | Runner | What it proves before a tag |
+|---|---|---|
+| `Windows (full workspace)` | `windows-latest` | `cargo fmt --all -- --check`, clippy, `cargo test --workspace`, and the release desktop build (uploaded as `lovelace-desktop-windows-x86_64`) |
+| `Linux (engine crates + GUI desktop under Xvfb)` | `ubuntu-24.04`, pinned rather than `ubuntu-latest` | the engine crates, the GUI desktop built and self-tested under Xvfb, the glibc guard, and the Linux GUI binary (uploaded as `lovelace-desktop-linux-gui-x86_64`) |
+| `Documentation examples (ubuntu-latest)` | `ubuntu-latest` | both example runners, **Compile and run the crate-page examples** (`bash tools/check-crate-examples.sh`), **Run the tutorials** (`bash tools/run-tutorials.sh`), all three `check-docs.sh` modes (links and symbols, claims, README), `check-reference-pages.sh`, and the mutation self-test in `test-docs-gates.sh` |
+| `Documentation examples (windows-latest)` | `windows-latest` | the same documentation gate on Windows |
+
+The documentation job is **one definition that runs twice**, and the two results are separate gates:
+a documentation-only defect blocks the tag exactly like a failing test. That includes a broken
+relative link, a `.rs:NNN` citation outside `docs/adr/`, a dead symbol citation, a prohibited
+numerical claim, a tutorial without its precision section, a README without its limitations section,
+an undeclared example page, an unpaired `lovelace` block, a Rust fence on a crate page that no longer
+compiles and runs, a tutorial whose execution no longer matches its recorded output, a reference
+page missing or reordering a section, and a gate whose own mutation test stops failing. One green
+documentation variant does not vouch for the other: a path shape, `.exe` lookup or line ending can
+work on one platform and fail on the other.
+
+No test count is a release criterion in this section: the gate is an exit status, and the counts a
+release note quotes are read from this commit's run and compared with the dated per-commit table in
+[testing.md](testing.md).
 
 The `release` job:
 
@@ -165,10 +195,11 @@ $ cargo build --release -p lovelace-desktop
 ```
 
 The release profile is `opt-level = 3`, `lto = "thin"`, `codegen-units = 1` (`Cargo.toml`). The
-artifact is:
+artifact is the host's own file name:
 
 ```text
-target/release/lovelace-desktop.exe
+target/release/lovelace-desktop.exe    the Windows build
+target/release/lovelace-desktop        the Linux build
 ```
 
 Its size and SHA-256 change with every build, so the authoritative values are the ones in the
@@ -236,17 +267,40 @@ prove the same things on the release commit:
 2. `cargo clippy --workspace --all-targets` — read the warnings; the workspace has pre-existing ones
    and CI does not use `-D warnings`.
 3. `cargo test --workspace` — every suite. Expect the counts in [testing.md](testing.md).
-4. `cargo run --release -p lovelace-corpus` — `corpus: 214 passed, 0 failed, 214 total`.
-5. `cargo test -p lovelace-desktop` — the desktop gate.
-6. `cargo run -p lovelace-desktop -- --gui-selftest` with a writable `APPDATA` —
-   `GUI_SELFTEST summary checks=20 failed=0`.
+4. `cargo run --release -p lovelace-corpus` — prints `corpus: <N> passed, 0 failed, <N> total` for
+   the corpus at this commit, with N nonzero and no failure.
+5. `cargo test -p lovelace-desktop` — the desktop gate. On Linux run it under Xvfb, as CI does:
+   `xvfb-run -a -s "-screen 0 1600x1000x24" cargo test -p lovelace-desktop`.
+6. `cargo run -p lovelace-desktop -- --gui-selftest` with a writable application directory
+   (`APPDATA` on Windows, `XDG_CONFIG_HOME` or `HOME` on Linux) — prints
+   `GUI_SELFTEST summary checks=<N> failed=0` with N nonzero and no failed check.
 7. `cargo run -p lovelace-desktop -- --contrast-check` — "every required pair passes".
-8. `cargo run -p lovelace-desktop -- --journey <the documented set> --out <dir>` — the recorded
-   journeys match their expected observables.
+8. `cargo run -p lovelace-desktop -- --journey J-02 J-03 J-07 J-08 J-09 J-10 J-15 --out <dir>` — the
+   seven documented journeys match their expected observables (`<dir>` is POSIX on bash and a
+   backslash path in Windows PowerShell).
 9. `cargo build --release -p lovelace-desktop` — the artifact above.
-10. Record each artifact's size and SHA-256 in the release note or its checksum file, along with the
+10. The documentation gate, exactly as the `Documentation examples` job runs it — both example
+    runners, the crate-page examples, the four tutorials, all three `check-docs.sh` modes, the
+    reference-page contract, and the gate self-test:
+
+    ```console
+    bash docs/language/examples/run-examples.sh
+    bash docs/extensions/examples/run-examples.sh
+    bash tools/check-crate-examples.sh
+    bash tools/run-tutorials.sh
+    bash tools/check-docs.sh --symbols
+    bash tools/check-docs.sh --claims
+    bash tools/check-docs.sh --readme
+    bash tools/check-reference-pages.sh
+    bash tools/test-docs-gates.sh
+    ```
+
+    Every command exits 0, the self-test prints one `PASS` line per mutation and ends with
+    `test-docs-gates: OK`, neither example runner reports a failed or unpaired example, every
+    crate-page Rust fence compiles and runs, and the tutorial runner ends with `run-tutorials: OK`.
+11. Record each artifact's size and SHA-256 in the release note or its checksum file, along with the
     unsigned/SmartScreen caveat. The automatic workflow does this from the executables it built at
     the tag and verified with `--version`: the Windows size/hash go into the release note and
     `SHA256SUMS.windows`; the Linux digest goes into `SHA256SUMS.linux`.
-11. Update `[workspace.package] version` in `Cargo.toml`, commit `Cargo.lock` with it, and tag
+12. Update `[workspace.package] version` in `Cargo.toml`, commit `Cargo.lock` with it, and tag
     `vX.Y.Z`. The automatic workflow does this; do not tag by hand while it is green.

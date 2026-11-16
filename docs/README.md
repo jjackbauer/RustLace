@@ -2,6 +2,12 @@
 
 Start with the [README](../README.md). This directory holds the long-form documentation.
 
+New to RustLace? The [README](../README.md) names the supported platforms (Windows x86_64 and
+Linux x86_64/X11) and gives a first runnable script; the [tutorials](tutorials/) run four complete
+scripts end to end; [precision and formatting](language/precision-and-formatting.md) and the
+[DSP guide](extensions/dsp.md) state the numerical model's limits; the
+[language reference](language/) and the [crate pages](crates/) are the API references.
+
 | Page | Read it when |
 |---|---|
 | [architecture.md](architecture.md) | you need the layering, the threading model, cancellation, the incremental cache, or the data flow of one run |

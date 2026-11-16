@@ -23,6 +23,9 @@ setprecision(50)
 wide_spectrum = fft(wave)
 ```
 
+The same script is checked in as
+[signal-processing.ls](examples/signal-processing.ls).
+
 ## Output
 
 ```text
@@ -68,8 +71,10 @@ or design the signal at a power-of-two length; trimming would compute a differen
 
 ## Assumptions
 
-- RustLace 0.4.1, run through the debug CLI at `/tmp/rl-target/debug/lovelace-run` on WSL Ubuntu.
-  The DSP builtins are part of the CLI's builtin registry.
+- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+  `cargo run -p lovelace-run -- --file docs/tutorials/examples/signal-processing.ls --text` on
+  Windows, Linux or WSL. The DSP builtins are part of the CLI's builtin registry, and the first run
+  compiles the runner.
 - A DSP builtin computes at 30 decimal places until `setprecision` moves the engine precision; that
   default is documented in [the DSP reference](../extensions/dsp.md). `setprecision(50)` raises both
   the computation and display precision for subsequent computations.
@@ -87,8 +92,8 @@ or design the signal at a power-of-two length; trimming would compute a differen
 
 ## Precision
 
-Labels follow [the editorial guide](../editorial.md): **exact**, **precision-bounded** or
-**parity**.
+The four claim kinds are **exact**, **precision-limited**, **error-bounded** and
+**parity-verified**, following [the editorial guide](../editorial.md#the-four-kinds-of-claim).
 
 | Value | Label | Justification |
 |---|---|---|
@@ -99,30 +104,47 @@ Labels follow [the editorial guide](../editorial.md): **exact**, **precision-bou
 | `6`, `-2`, `2`, `-2` in `padded_spectrum` | **exact** | Integer real parts and imaginary coefficients. |
 | `4` in the padded FFT length | **exact** | Integer sample count after padding. |
 | `1` through `8` in `wave` | **exact** | Integers; `8` is also the transform length. |
-| `36` and `-4` in both spectra | **exact** | Integers. |
+| `36` and `-4` in both spectra | **exact** | Integer real components: the DFT of this real ramp has integer real parts, and the stored values are exactly those integers. |
 | `4` in `-4 + 4i` | **exact** | Integer imaginary coefficient. |
-| `9.656854249492380195206754896836` and `1.656854249492380195206754896836` (default) | **precision-bounded** | Irrational components computed at the DSP 30-place budget; the displayed tail is a budget, not an exact value. |
-| `9.65685424949238019520675489683879231427868750150776` and `1.65685424949238019520675489683879231427868750150776` (wide) | **precision-bounded** | The same irrational components computed at the 50-place budget; the tail moves with the budget. |
+| `9.656854249492380195206754896836` and `1.656854249492380195206754896836` (default) | **precision-limited** | Irrational components computed at the DSP 30-place budget; the displayed tail is a truncation at that budget, not an exact value and not a final-error bound. |
+| `9.65685424949238019520675489683879231427868750150776` and `1.65685424949238019520675489683879231427868750150776` (wide) | **precision-limited** | The same irrational components computed at the 50-place budget; the tail moves with the budget, so it is not an error-bounded value. |
 | `30` in the DSP default budget | **exact** | Integer decimal-place budget documented by the DSP reference. |
 | `50` in `setprecision(50)` | **exact** | Integer precision parameter. |
 | `3` in the refused length-3 FFT | **exact** | Integer sample count. |
 
-No **parity** values appear in this run. The integer-valued entries are exact; the irrational
-imaginary parts are precision-bounded at the stated budget.
+Every integer-valued component is **exact**, including the real parts of both spectra. The
+irrational imaginary components of `default_spectrum` and `wide_spectrum` are
+**precision-limited**: each is computed at a stated decimal-place budget, and the stored tail moves
+when the budget moves. A complex value that contains one of those tails is precision-limited as a
+whole even when its real component is exact. Neither tail is **error-bounded**: the page publishes no
+final-error bound for either transform, and a decimal-place budget is not a bound. No value is
+**parity-verified**: `movingavg` here is the engine's corrected arithmetic, not a reproduction of the
+historical fixed-width rendering, which [ADR-004](../adr/004-thirty-digit-default.md) records as a
+defect rather than an expected result.
 
 ## Verification
 
-Run this from any directory. It prints exactly the output above and writes no files.
+Run this from the repository root. It prints the output above on standard output and the script
+writes no files. The command is the same in bash, PowerShell and Command Prompt.
 
 ```console
-/tmp/rl-target/debug/lovelace-run --stdin --text <<'EOF'
-signal = [0, 1, 0, 0]
-smoothed = movingavg(signal, 2)
-spectrum = fft(signal)
-padded_spectrum = fft(append([1, 2, 3], [0]))
-wave = [1, 2, 3, 4, 5, 6, 7, 8]
-default_spectrum = fft(wave)
-setprecision(50)
-wide_spectrum = fft(wave)
-EOF
+cargo run -p lovelace-run -- --file docs/tutorials/examples/signal-processing.ls --text
 ```
+
+`bash tools/run-tutorials.sh` reruns all four tutorials on Ubuntu and Windows (Git Bash) and
+compares this transcript with the executed script.
+
+The independent checks are the transform definition and the budget pair: a unit impulse at sample 1
+transforms to the four fourth roots of unity (`1`, `-1i`, `-1`, `1i`), the ramp's DC bin is its
+sample sum `36`, and the irrational tails change with the budget from 30 to 50 places. The
+[tutorial runner](../../tools/run-tutorials.sh) checks the recording; it does not re-derive the
+transform.
+
+The length-3 refusal quoted above is reproducible on both platforms:
+
+```console
+cargo run -p lovelace-run -- --eval 'fft([1, 2, 3])' --text
+```
+
+PowerShell and bash both accept the single quotes around the expression; in Command Prompt write
+`--eval "fft([1, 2, 3])"` instead.
