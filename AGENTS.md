@@ -51,6 +51,8 @@ cargo run --release -p lovelace-corpus -- lang/001
 # the mutation suite has 21 scenarios, and CODEOWNERS declares the policy and kernel owners)
 python tools/check-architecture.py
 python tools/test-architecture-gates.py
+python tools/harness/check-agent-contracts.py        # after building lovelace-run
+python tools/harness/test-agent-contracts.py         # proves stale skill checks fail
 cargo test -p lovelace-rational
 cargo test -p lovelace-lang --test cross_library
 
@@ -273,6 +275,10 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
 
 ## Guardrails
 
+- Before following a task skill, validate its current schema references with
+  `python tools/harness/check-agent-contracts.py --static-only`. The builtin registry uses
+  the static `module` field, never the retired `plugin` field. Runtime verification is
+  mandatory for changes affecting a builtin contract; run the checker without `--static-only`.
 - Never weaken a test to make a change pass: do not delete it, `#[ignore]` it, relax an assertion,
   or drop a fixture. If a contract must move, move the fixture with it and say so in the commit.
 - Never invent capability. If a code path does not exist, report it as missing rather than
