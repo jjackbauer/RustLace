@@ -3017,15 +3017,22 @@ pub fn call(
                     if shape.len() != 2 {
                         return Err(LangError::plain("matrix_rank needs a rank-2 matrix."));
                     }
+                    // Exact rational matrices use true row rank, including rectangular
+                    // matrices and nullity greater than one. Symbolic matrices retain the
+                    // legacy generic estimate pending a condition-aware symbolic rank API.
                     let (rows, cols) = (shape[0], shape[1]);
-                    let mut rank = rows.min(cols);
-                    if rows == cols {
-                        let d = det(a)?;
-                        let zero = as_expr(&d).map(|e| e == Sym::num(0)).unwrap_or(false);
-                        if zero {
-                            rank = rows.saturating_sub(1);
+                    let rank = if let Some(rank) = matrix_rank_exact_numeric(a)? {
+                        rank
+                    } else {
+                        let mut estimate = rows.min(cols);
+                        if rows == cols {
+                            let d = det(a)?;
+                            if as_expr(&d).is_some_and(|e| e == Sym::num(0)) {
+                                estimate = rows.saturating_sub(1);
+                            }
                         }
-                    }
+                        estimate
+                    };
                     Ok(Value::Integer(Int::from_i64(rank as i64)))
                 }
                 other => Err(LangError::plain(format!(
@@ -5072,6 +5079,61 @@ fn det_numeric(m: &[Vec<Value>]) -> Result<Value, LangError> {
         }
     }
     Ok(det)
+}
+
+/// Compute the rank over the canonical exact rational kernel, with no lossy Real
+/// projection. Return None only when a genuinely symbolic entry prevents
+/// unconditional rational elimination. That case currently follows the legacy
+/// symbolic-rank path, which is NOT an unconditional mathematical certificate.
+fn matrix_rank_exact_numeric(matrix: &NdArray<Value>) -> Result<Option<usize>, LangError> {
+    let shape = matrix.shape();
+    let (rows, cols) = (shape[0], shape[1]);
+    let mut work = vec![vec![Rat::zero(); cols]; rows];
+    for (index, value) in matrix.iter().enumerate() {
+        poll(index as u64)?;
+        if matches!(value, Value::Real(r) if !r.is_exact())
+            || matches!(value, Value::RealClamped(_, _, _))
+        {
+            return Err(LangError::plain(
+                "matrix_rank() requires exact numeric entries; a precision-limited Real cannot certify rank.",
+            ));
+        }
+        let expr = as_expr(value).ok_or_else(|| {
+            LangError::plain("matrix_rank() requires exact numeric or symbolic entries.")
+        })?;
+        let Sym::Num(rational) = expr else {
+            return Ok(None);
+        };
+        work[index / cols][index % cols] = rational;
+    }
+    let mut rank = 0usize;
+    for column in 0..cols {
+        checkpoint()?;
+        let Some(pivot) = (rank..rows).find(|&row| !work[row][column].is_zero()) else {
+            continue;
+        };
+        work.swap(rank, pivot);
+        let pivot_row = work[rank].clone();
+        for row in (rank + 1)..rows {
+            poll(row as u64)?;
+            if work[row][column].is_zero() {
+                continue;
+            }
+            let factor = work[row][column]
+                .checked_div(&pivot_row[column])
+                .map_err(|error| LangError::plain(error.to_string()))?;
+            work[row][column] = Rat::zero();
+            for col in (column + 1)..cols {
+                poll(col as u64)?;
+                work[row][col] = work[row][col].sub(&factor.mul(&pivot_row[col]));
+            }
+        }
+        rank += 1;
+        if rank == rows {
+            break;
+        }
+    }
+    Ok(Some(rank))
 }
 
 fn inv_matrix(a: &NdArray<Value>) -> Result<Value, LangError> {
