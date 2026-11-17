@@ -14,24 +14,31 @@ desktop reach it through the language, and none of those layers re-implements a 
 
 ### Design decisions
 
-- **Exact rationals, reduced with `Nat::gcd`.** `lovelace_symbolics::Rat` was audited and rejected
-  for this workload: it reduces only when both parts fit `u64` and rebuilds denominators through
-  decimal strings, while an MVA recurrence multiplies denominators every iteration. The crate keeps
-  one rational implementation, not two.
+- **One shared rational kernel.** `Q` is a type-identical alias of `lovelace_rational::Rat`
+  (`pub use lovelace_rational::Rat as Q;`). The crate owns queueing formulas, not arithmetic; the
+  former Systems rational module was deleted in RNL-MIG-002. Full arbitrary-precision GCD normalization,
+  cross-cancellation, checked division and budgets live in the kernel.
 - **One workload per model.** Mixed open/closed networks are a different solver, not a silent mode.
 - **Explicit unsupported combinations.** Multi-server closed MVA, priorities, finite buffers,
   class switching, routing matrices, fork-join and simulation are refused with `UnsupportedModel`
   naming the failing assumption. No M/M/1 substitution.
+- **In-network occupancy.** A collected MVA population reports `Q_network(n) = n - X(n)*Z`; a
+  customer in the think state is not in the network. The reported aggregate equals the sum of
+  station occupancies.
+- **One sweep grid.** An inclusive endpoint is accepted only when the range is exactly divisible by
+  the step; a partial final step is refused with `SweepEndpointNotOnGrid`, never clamped.
 - **Complexity.** Single-class MVA is `O(N*K)` arithmetic and `O(K)` state; intermediate
   populations are opt-in and bounded by `SolverOptions::max_state_space`.
 
 ## Inputs
 
-- `numeric::Q` — exact rational over `lovelace-nat`/`lovelace-int`; checked division, exact powers,
-  `to_real`/`from_real`, digit-growth measure, canonical reduction after every operation.
+- `Q` — the canonical exact rational from `lovelace-rational`; `from_parts` returns a `Result`,
+  `div` returns `Option`, `checked_div` and `checked_pow` return categorized errors.
 - `model` — `Station`, `StationId`, `ServiceDiscipline` (`FcfsSingleServer`, `Delay`,
   `MultiServer { servers }`), `OpenWorkload`, `ClosedWorkload`, `Workload`, `QueueNetwork`,
-  `SolverOptions`, `Cancel`/`NeverCancel`/`FlagCancel`.
+  `SolverOptions`, `Cancel`/`NeverCancel`/`FlagCancel`. A `Station` or `QueueNetwork` record may
+  carry the additive `exact_values` sidecar; the language adapter consumes it, and a record without
+  the sidecar still parses from the decimal fields for backward compatibility.
 - `queueing` — `mm1`, `mmc`, `mm_infinity`, `solve_station`.
 - `operational_laws` — `little_law`, `utilization_law`, `forced_flow`, `interactive_response` and
   the exact `check_*` forms.
@@ -44,8 +51,8 @@ desktop reach it through the language, and none of those layers re-implements a 
 - `errors` — `SystemsError`, `ErrorCategory`.
 - `analyze` — the workload dispatcher.
 
-Dependencies are `lovelace-nat`, `lovelace-int` and `lovelace-real` only. There is no external crate,
-no floating point and no `unsafe` (`#![forbid(unsafe_code)]`).
+Dependencies are `lovelace-nat`, `lovelace-int` and `lovelace-rational` only. There is no external
+crate, no floating point and no `unsafe` (`#![forbid(unsafe_code)]`).
 
 ## Outputs
 
@@ -55,12 +62,27 @@ network aggregates, exact law checks and provenance: model class, solver name an
 assumptions, exactness, approximation (empty for P0), precision, warnings, status and any resource
 limit. A refusal is a stable code plus one of the frozen categories.
 
+Through the language, every numeric field is a decimal `Real` projection and an additive
+`exact_values` record carries the canonical numerator/denominator pair
+(`sys_mm1(8, 10).exact_values.utilization` is `ExactRational(numerator: 4, denominator: 5)`).
+
+The model-construction records are values too, and they carry the same sidecar. A `Station` record
+has `exact_values` with `service_time`, `visits` and `service_demand`; a `QueueNetwork` record has
+`arrival_rate` for an open workload or `think_time` for a closed one. The language adapter's
+`parse_station` and `parse_network` read that sidecar first and fall back to the decimal field only
+when the whole `exact_values` record is absent. A present but malformed sidecar is refused rather
+than silently replaced by the projection, so `sys_station("cpu", 1/97, 1)` reaches `sys_open` or
+`sys_closed` and then `sys_analyze` or `sys_mva` with denominator 97, not with the truncated decimal
+`0.0103...`.
+
 ## Precision behaviour
 
-Every value is an exact `Q`. The rendering precision in `SolverOptions` is used only by
-`Q::to_real`, which preserves `lovelace-real`'s terminating/periodic metadata; it is not an
-iteration tolerance and not a certified numerical error bound. A cancelled or budget-exhausted
-computation returns `Err`, never a partial successful result.
+Every value is an exact `Q`. The rendering precision in `SolverOptions` is used only at the language
+adapter's `Real::from_rational`, which preserves `lovelace-real`'s terminating/periodic metadata and
+reports a truncated projection when the period does not fit the budget; it is not an iteration
+tolerance and not a certified numerical error bound. A cancelled or budget-exhausted computation
+returns `Err`, never a partial successful result. A precision-limited `Real` is refused as a model
+input rather than promoted to an exact rational.
 
 ## Errors
 
@@ -69,6 +91,7 @@ computation returns `Err`, never a partial successful result.
 | A rate, population, identifier or discipline outside the model vocabulary | `InvalidArrivalRate`, `InvalidPopulation`, `InvalidIdentifier`, `UnsupportedDiscipline` / `DomainError` or `UnsupportedOperation` |
 | A finite-capacity station at or above utilization 1 | `UnstableStation` / `DomainError` |
 | No defined stationary throughput (zero demand and zero think time) | `DegenerateModel` / `DomainError` |
+| A sweep endpoint not on the exact step grid | `SweepEndpointNotOnGrid` / `DomainError` |
 | A discipline or workload the chosen solver does not implement | `UnsupportedModel` / `UnsupportedOperation`, naming the assumption |
 | An iteration, state-space or exact-digit budget exhausted | `IterationBudgetExceeded`, `StateSpaceBudgetExceeded`, `RationalBudgetExceeded` / `BudgetExceeded` |
 | Caller cancellation | `Cancelled` / `BudgetExceeded`, no partial result |
@@ -130,6 +153,10 @@ assert_eq!(mva.aggregate.throughput.to_string(), "2000/101");
 ### Tests
 
 `cargo test -p lovelace-systems` runs the unit and golden tests: the M/M/1 and M/M/c published
-values, the MVA recurrence at N=1 and N=2, conservation checks, degenerate and unstable refusals,
-budget and cancellation paths, and the adapter/queueing contract. `parity/corpus/systems.json`
-pins the same models through the language.
+values, the MVA recurrence at N=1 and N=2, the think-state occupancy regression, the exact sweep
+grid, conservation checks, degenerate and unstable refusals, budget and cancellation paths, and
+the adapter/queueing contract. The language family adds the `1/97` construction-to-analysis
+regressions through both open and closed networks, plus the decimal-only backward-compatibility
+path. `tests/oracle.rs` compares selected results against the independent
+Python `fractions.Fraction` formulas in `parity/systems/oracle.tsv`.
+`parity/corpus/systems.json` pins the same models through the language.

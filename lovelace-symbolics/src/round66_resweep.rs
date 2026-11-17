@@ -77,14 +77,16 @@ fn usage_snippet_16_4_canonical_text_round_trip() {
 /// approximation. Expr::is_exact is the flag the snippet reads.
 #[test]
 fn usage_snippet_16_8_exactness_discipline() {
-    let third = Rat::new(
+    let third = Rat::from_parts(
         lovelace_int::Int::from_i64(1),
         lovelace_nat::Nat::from_u64(3),
-    );
-    let half = Rat::new(
+    )
+    .expect("a rational denominator is non-zero");
+    let half = Rat::from_parts(
         lovelace_int::Int::from_i64(1),
         lovelace_nat::Nat::from_u64(2),
-    );
+    )
+    .expect("a rational denominator is non-zero");
     assert!(Expr::Num(third).is_exact(), "an exact rational is exact");
     assert!(
         Expr::pow(Expr::num(2), Expr::Num(half)).is_exact(),

@@ -72,14 +72,21 @@ top of `lovelace-lang/src/lib.rs` before editing anything.
    is the parity fixture, not a duplicate test. Run it in release because the debug corpus binary
    overflows its stack at `lang/061` on this host.
 
-7. **Update the wire fixtures only if the envelope moves.** A new statement kind, a new error code or
+7. **Check architecture and cross-library semantics.** A feature that touches numeric promotion,
+   arithmetic or systems values must go through the canonical kernel. Read
+   `docs/architecture-ownership.md`, run `python tools/check-architecture.py` and
+   `cargo test -p lovelace-lang --test cross_library`. Do not introduce a Rational value kind or a
+   domain-local arithmetic type as a side effect: those are separately specified decisions
+   (RNL-MIG-005) and a second implementation fails the `architecture-policy` job.
+
+8. **Update the wire fixtures only if the envelope moves.** A new statement kind, a new error code or
    a change in token positions changes the runner's positions and envelope. Edit the `.ls` input
    under `docs/csharp-oracle/Lovelace.Run.Tests/fixtures/`, then regenerate with
    `LOVELACE_RECORD_GOLDENS=1 cargo test -p lovelace-run`, inspect the `.json` diff, and run the test
    again **without** the variable. The recorder is inert unless the variable is set; never hand-edit
    a golden to make a comparison pass.
 
-8. **Update the prose.** `docs/crates/lovelace-lang.md` for the public surface, `docs/glossary.md` for
+9. **Update the prose.** `docs/crates/lovelace-lang.md` for the public surface, `docs/glossary.md` for
    a new term, `docs/parity-with-studio.md` when the feature deliberately differs from the C#
    reference, and `docs/testing.md` if a new test layer is added.
 
@@ -92,6 +99,8 @@ corpus filter that selects no record prints `0 passed` and also exits 0.
 ```console
 cargo test -p lovelace-lang suite_lex_parse_batch
 cargo test -p lovelace-lang <the test you added>
+cargo test -p lovelace-lang --test cross_library
+python tools/check-architecture.py
 cargo test -p lovelace-run golden_batch
 cargo run --release -p lovelace-corpus -- lang/112
 cargo run -p lovelace-run -- --eval "1 != 2" --text

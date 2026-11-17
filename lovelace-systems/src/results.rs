@@ -5,7 +5,7 @@
 //! approximation was used, the rendering precision, and any warning or resource limit. A result is
 //! ordered by station declaration, never by a hash map, so two identical runs serialize identically.
 
-use crate::numeric::Q;
+use crate::Q;
 
 /// Whether the reported numbers are exact rationals or a precision-limited rendering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

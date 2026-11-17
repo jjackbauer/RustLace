@@ -253,6 +253,85 @@ inexact truncation `0.142857`, while at `setprecision(7)` it is `0.(142857)`.
 For example, `1/17` has a 16-digit period. At `setprecision(10)` it is a truncated finite value;
 at `setprecision(20)` the period fits and it renders as `0.(0588235294117647)`.
 
+## Exactness and projection
+
+"Exact" is four independent claims, and a value can be exact in one sense and lossy in another:
+
+| Claim | Question | Where it is visible |
+|---|---|---|
+| Computation exactness | Did the algorithm take an approximation step? | `inspect(...).exact`; `Conversion.provenance.computation` in Rust |
+| Input fidelity | Had an input already lost digits before this operation? | `Real::to_rat()` reports `InputFidelity::Truncated`; `sys_*` refuses such an input |
+| Representation exactness | Does the returned representation carry the value exactly? | `Real::from_rational` returns `Conversion` with a `lossless` flag |
+| Render precision | How many digits were printed? | the display cap / `setprecision` |
+
+An **exact rational** is the strongest value. The systems family returns one and exposes it beside
+the decimal projection through `exact_values`:
+
+```lovelace
+sys_mm1(8, 10).exact_values.utilization
+```
+```text
+= ExactRational(numerator: 4, denominator: 5) (ExactRational)
+  _ = ExactRational(numerator: 4, denominator: 5)
+```
+
+The decimal field is only a projection of that number:
+
+```lovelace
+sys_mm1(8, 10).utilization
+```
+```text
+= 0.8 (Real)
+  _ = 0.8
+```
+
+An **exact decimal** is also exact: `1/8` terminates, so `0.125` is the value, not an
+approximation. A **precision-limited computation** is one where a digit was dropped: at
+`setprecision(5)`, `1/7` is stored as the truncation `0.14285`, and `inspect` reports that no
+digits were stored beyond it:
+
+```lovelace
+setprecision(5); [1/7, inspect(1/7).exact]
+```
+```text
+= [0.14285, False] (Vector)
+  _ = [0.14285, False]
+```
+
+At `setprecision(7)` the period fits and the same quotient is exact again:
+
+```lovelace
+setprecision(7); [1/7, inspect(1/7).exact]
+```
+```text
+= [0.(142857), True] (Vector)
+  _ = [0.(142857), True]
+```
+
+A **truncated decimal projection** of an exact rational must not be mistaken for an exact decimal.
+The systems record keeps both: `sys_mm1(8, 10).utilization` is the `Real` `0.8`, while
+`sys_mm1(8, 10).exact_values.utilization` is `4/5` with no precision loss. Likewise, a `Real`
+returned by `pi(30)` is a bounded computation; converting its stored digits back to a rational gives
+an exact representation of those digits, not of π. Passing `pi(30)` to a `sys_*` builtin is refused
+with `InvalidArgument`/`TypeMismatch` rather than silently promoting it to an exact model input.
+
+Exact model construction is transported the same way. `sys_station` and `sys_open`/`sys_closed`
+carry `exact_values` for their numerical parameters (`service_time`, `visits`, `service_demand`,
+and `arrival_rate` or `think_time`); the decimal field is only their projection for display. The
+systems adapter reads `exact_values` first and falls back to the decimal field only when the whole
+sidecar is absent, so `sys_station("cpu", 1/97, 1)` reaches `sys_analyze` with denominator 97
+instead of its truncated decimal projection.
+
+The same distinction is why `evalf(1/3, 10)` renders ten digits but is not the exact `1/3`:
+
+```lovelace
+evalf(1/3, 10)
+```
+```text
+= 0.3333333333 (Real)
+  _ = 0.3333333333
+```
+
 ## Printing versus the result line
 
 There are two renderings of the same value:

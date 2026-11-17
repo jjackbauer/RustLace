@@ -1,24 +1,25 @@
 # Architecture
 
-RustLace is one workspace of thirteen crates arranged as five layers. Each layer may depend only on
-the ones below it; the dependency graph is in `Cargo.toml` of each crate and is reproduced here.
+RustLace is one workspace of fourteen crates arranged as five layers. Each layer may depend only on
+the ones below it; the dependency graph is in `Cargo.toml` of each crate and is reproduced here. The
+canonical numerical kernel is `lovelace-rational`; `docs/architecture-ownership.md` is the normative
+ownership policy and `tools/check-architecture.py` verifies the real graph and source declarations.
 
 ```mermaid
 flowchart TB
     ui["lovelace-desktop<br/>native workbench (eframe/egui)"]
     host["lovelace-run · lovelace-know · lovelace-corpus · lovelace-bench<br/>execution hosts, wire protocol, parity gate, micro-benchmarks"]
     lang["lovelace-lang<br/>values, lexer, parser, interpreter, builtins, MathIR, plots"]
-    sys["lovelace-systems<br/>exact queueing, operational laws, networks, MVA, capacity, sweeps"]
-    num["lovelace-real · lovelace-array · lovelace-symbolics<br/>numeric kernels and symbolic algebra"]
+    dom["lovelace-symbolics · lovelace-systems<br/>symbolic algebra and exact queueing models"]
+    num["lovelace-rational · lovelace-real · lovelace-array<br/>canonical rational, real and array kernels"]
     val["lovelace-json · lovelace-nat · lovelace-int<br/>values and wire primitives"]
 
     ui --> host
     ui --> lang
     host --> lang
-    lang --> sys
+    lang --> dom
     lang --> num
-    sys --> num
-    sys --> val
+    dom --> num
     num --> val
 ```
 
@@ -45,22 +46,34 @@ non-Windows targets. `lovelace-run` carries `#![deny(unsafe_code)]`; its sole al
 Windows terminal module in `src/repl.rs` (three kernel32 console calls, documented with SAFETY
 comments and validated handles).
 
-## 2. Numeric kernels (`lovelace-real`, `lovelace-array`, `lovelace-symbolics`)
+## 2. Numeric kernels (`lovelace-rational`, `lovelace-real`, `lovelace-array`)
+
+`lovelace-rational` owns the workspace's one general-purpose rational implementation: a canonical
+`Rat` with a positive denominator, full arbitrary-precision GCD reduction, checked division,
+budgeted exponentiation and the exactness/conversion report
+(`lovelace-rational/src/lib.rs`). Arithmetic uses `Nat`/`Int` directly, with cross-cancellation in
+multiplication/division and LCM addition. `ExactnessProvenance` keeps computation exactness, input
+fidelity, representation exactness and render precision as separate claims.
 
 `lovelace-real` stores `int * 10^exp` plus optional period metadata: a repeating decimal keeps the
 repeating block once, so `1/3` renders `0.(3)` and is never rounded
 (`lovelace-real/src/lib.rs`). Arithmetic on terminating values works on scaled integers; an
-operation involving a period converts to an exact rational first. `Real::sqrt` and `Real::pi` live in
-`transcendental.rs`, with a fixed-width fast path in `fast_path.rs` gated by
-`lovelace_lang::complex::FAST_PATH_MAX_DIGITS` (37).
+operation involving a period converts to an exact rational first. `Real::from_rational` and
+`Real::to_rat` are the canonical conversions and report whether the projection lost digits.
+`Real::sqrt` and `Real::pi` live in `transcendental.rs`, with a fixed-width fast path in
+`fast_path.rs` gated by `lovelace_lang::complex::FAST_PATH_MAX_DIGITS` (37).
 
 `lovelace-array` is a generic, row-major `NdArray<T>` with shape algebra, indexing, slicing,
 reductions and elementwise operations expressed over the `Field` trait
 (`lovelace-array/src/lib.rs`). `dense.rs` adds the typed `DenseArray`/`Precision` surface.
 
-`lovelace-symbolics` owns canonical expressions (`Expr`), exact rationals (`Rat`), term ordering,
-printing, differentiation, series, polynomial algebra, Gröbner bases and the cooperative
-cancellation token that every long kernel polls (`lovelace-symbolics/src/lib.rs`).
+## 2a. Symbolic algebra (`lovelace-symbolics`)
+
+`lovelace-symbolics` owns canonical expressions (`Expr`), term ordering, printing,
+differentiation, series, polynomial algebra, Gröbner bases and the cooperative cancellation token
+that every long kernel polls (`lovelace-symbolics/src/lib.rs`). It does **not** own rational
+arithmetic: `Rat` is re-exported from `lovelace-rational` and the crate keeps no numerator/
+denominator implementation of its own (ADR-011).
 
 ## 3. Language and engine (`lovelace-lang`)
 
@@ -82,13 +95,16 @@ Two seams matter for every host:
 
 ## 4. Systems models (`lovelace-systems`)
 
-`lovelace-systems` is an exact queueing and operations-research library: rational arithmetic
-(`numeric::Q` over `Nat`/`Int` with gcd reduction), units, typed models, validation, M/M/1, M/M/c,
-M/M/∞, operational laws, open Jackson networks, exact single-class MVA, bottleneck/capacity
-analysis and sweeps. Every result carries its model class, solver name and version, assumptions,
-exactness status, precision and warnings. Unsupported models and unstable systems are stable
-categorized errors, never fabricated steady-state metrics. It depends only on the numeric crates;
-the `sys_*` adapter in section 3 is the only interpreter code that knows it exists.
+`lovelace-systems` is an exact queueing and operations-research library: typed models, validation,
+M/M/1, M/M/c, M/M/∞, operational laws, open Jackson networks, exact single-class MVA,
+bottleneck/capacity analysis and sweeps. `Q` is a type-identical alias of `lovelace_rational::Rat`
+(`pub use lovelace_rational::Rat as Q;`); the crate owns no rational arithmetic of its own. Every
+result carries its model class, solver name and version, assumptions, exactness status, precision
+and warnings. Unsupported models and unstable systems are stable categorized errors, never
+fabricated steady-state metrics. It depends only on the numeric kernel; the `sys_*` adapter in
+section 3 is the only interpreter code that knows it exists. MVA reports the in-network occupancy
+`Q(n) = n - X(n)*Z`, and both sweep axes accept an inclusive endpoint only when the range is
+exactly divisible by the step.
 
 ## 5. Execution hosts (`lovelace-run`, `lovelace-know`, `lovelace-corpus`, `lovelace-bench`)
 

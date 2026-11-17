@@ -310,6 +310,38 @@ fn registry_envelope_still_carries_the_full_registry() {
     assert!(opt(det, "summary").is_some());
 }
 
+/// RNL-NUM-011: the exact systems values are an additive structured record beside the decimal
+/// projection, and the wire protocol version does not move for an additive field.
+#[test]
+fn sys_exact_values_are_additive_and_protocol_compatible() {
+    let r = eval("sys_mm1(8, 10)");
+    assert_eq!(r.exit, 0);
+    assert_eq!(number(get(&r.env, "protocolVersion")), 2);
+    let structured = get(get(&r.env, "result"), "structured");
+    assert_eq!(text(get(structured, "kind")), "Record");
+    assert_eq!(text(get(structured, "type")), "StationAnalysis");
+
+    // The existing decimal projection is unchanged.
+    let utilization = record_field(structured, "utilization");
+    assert_eq!(text(get(utilization, "kind")), "Real");
+    assert_eq!(text(get(utilization, "value")), "0.8");
+
+    // The additive exact sidecar keeps the canonical numerator/denominator pair.
+    let exact = record_field(structured, "exact_values");
+    assert_eq!(text(get(exact, "kind")), "Record");
+    assert_eq!(text(get(exact, "type")), "ExactValues");
+    let exact_utilization = record_field(exact, "utilization");
+    assert_eq!(text(get(exact_utilization, "type")), "ExactRational");
+    assert_eq!(
+        text(get(record_field(exact_utilization, "numerator"), "value")),
+        "4"
+    );
+    assert_eq!(
+        text(get(record_field(exact_utilization, "denominator"), "value")),
+        "5"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // LimitShortFormRecordTests
 // ---------------------------------------------------------------------------

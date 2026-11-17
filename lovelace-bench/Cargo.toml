@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 lovelace-nat = { path = "../lovelace-nat" }
 lovelace-int = { path = "../lovelace-int" }
+lovelace-rational = { path = "../lovelace-rational" }
 lovelace-real = { path = "../lovelace-real" }
 lovelace-lang = { path = "../lovelace-lang" }
 lovelace-systems = { path = "../lovelace-systems" }

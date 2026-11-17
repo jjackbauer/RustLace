@@ -803,10 +803,13 @@ fn match_nary(patterns: &[Pattern], items: &[Expr], bindings: &mut Match) -> boo
 pub fn shipped_registry() -> RewriteRuleRegistry {
     let mut registry = RewriteRuleRegistry::new();
     let two = Expr::num(2);
-    let half = Expr::Num(Rat::from_parts(
-        lovelace_int::Int::from_i64(1),
-        lovelace_nat::Nat::from_u64(2),
-    ));
+    let half = Expr::Num(
+        Rat::from_parts(
+            lovelace_int::Int::from_i64(1),
+            lovelace_nat::Nat::from_u64(2),
+        )
+        .expect("a rational denominator is non-zero"),
+    );
     let minus_one = Expr::num(-1);
 
     // trig: sin(x)^2 + cos(x)^2 -> 1. The canonical sum sorts the cos term first.
@@ -1279,7 +1282,10 @@ mod tests {
     }
 
     fn half() -> Expr {
-        Expr::Num(Rat::from_parts(Int::from_i64(1), Nat::from_u64(2)))
+        Expr::Num(
+            Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+                .expect("a rational denominator is non-zero"),
+        )
     }
 
     fn sqrt_square(inner: Expr) -> Expr {

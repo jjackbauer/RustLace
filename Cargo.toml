@@ -4,6 +4,7 @@ members = [
   "lovelace-json",
   "lovelace-nat",
   "lovelace-int",
+  "lovelace-rational",
   "lovelace-real",
   "lovelace-array",
   "lovelace-symbolics",

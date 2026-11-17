@@ -241,6 +241,20 @@ impl SystemsError {
         )
     }
 
+    /// A sweep endpoint is not reachable from the start in exact steps.
+    ///
+    /// The grid contract accepts an inclusive endpoint only when the range is exactly divisible
+    /// by the step; a partial final step is refused rather than clamped to the endpoint.
+    pub fn sweep_endpoint_not_on_grid(from: &str, to: &str, step: &str) -> Self {
+        Self::new(
+            "SweepEndpointNotOnGrid",
+            ErrorCategory::DomainError,
+            format!(
+                "The sweep endpoint {to} is not reachable from {from} in exact steps of {step}; adjust the endpoint or the step."
+            ),
+        )
+    }
+
     /// The caller cancelled the computation; no partial result is returned.
     pub fn cancelled() -> Self {
         Self::new(

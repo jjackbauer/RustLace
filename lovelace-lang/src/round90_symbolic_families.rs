@@ -25,6 +25,7 @@ use crate::numeric::{Num, integer_pow};
 
 fn rat(numerator: i64, denominator: u64) -> Rat {
     Rat::from_parts(Int::from_i64(numerator), Nat::from_u64(denominator))
+        .expect("a rational denominator is non-zero")
 }
 
 fn num(value: i64) -> Num {

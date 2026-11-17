@@ -76,7 +76,8 @@ fn rat(text: &str) -> Rat {
         Some((numerator, denominator)) => Rat::from_parts(
             Int::from_decimal(numerator).expect("a decimal numerator"),
             Nat::from_decimal(denominator).expect("a decimal denominator"),
-        ),
+        )
+        .expect("a rational denominator is non-zero"),
         None => Rat::from_i64(text.parse().expect("an integer")),
     }
 }
@@ -152,10 +153,13 @@ fn expr(source: &str) -> Sym {
         Value::Integer(value) => {
             Sym::Num(Rat::from_i64(value.to_decimal().parse().expect("an i64")))
         }
-        Value::Natural(value) => Sym::Num(Rat::from_parts(
-            Int::from_decimal(&value.to_decimal()).expect("a decimal numerator"),
-            Nat::from_u64(1),
-        )),
+        Value::Natural(value) => Sym::Num(
+            Rat::from_parts(
+                Int::from_decimal(&value.to_decimal()).expect("a decimal numerator"),
+                Nat::from_u64(1),
+            )
+            .expect("a rational denominator is non-zero"),
+        ),
         Value::Real(value) => Sym::Real(value.to_decimal_fixed(30)),
         other => panic!("`{source}` is not an expression: {other:?}"),
     }

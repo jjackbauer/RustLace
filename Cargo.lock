@@ -1862,6 +1862,7 @@ dependencies = [
  "lovelace-int",
  "lovelace-lang",
  "lovelace-nat",
+ "lovelace-rational",
  "lovelace-real",
  "lovelace-systems",
 ]
@@ -1906,6 +1907,7 @@ dependencies = [
  "lovelace-int",
  "lovelace-json",
  "lovelace-nat",
+ "lovelace-rational",
 ]
 
 [[package]]
@@ -1916,6 +1918,7 @@ dependencies = [
  "lovelace-int",
  "lovelace-json",
  "lovelace-nat",
+ "lovelace-rational",
  "lovelace-real",
  "lovelace-symbolics",
  "lovelace-systems",
@@ -1926,11 +1929,20 @@ name = "lovelace-nat"
 version = "0.7.1"
 
 [[package]]
+name = "lovelace-rational"
+version = "0.7.1"
+dependencies = [
+ "lovelace-int",
+ "lovelace-nat",
+]
+
+[[package]]
 name = "lovelace-real"
 version = "0.7.1"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
+ "lovelace-rational",
 ]
 
 [[package]]
@@ -1950,6 +1962,7 @@ version = "0.7.1"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
+ "lovelace-rational",
 ]
 
 [[package]]
@@ -1958,7 +1971,7 @@ version = "0.7.1"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
- "lovelace-real",
+ "lovelace-rational",
 ]
 
 [[package]]

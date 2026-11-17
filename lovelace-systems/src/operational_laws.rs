@@ -5,8 +5,8 @@
 //! [`LawCheck`] whose `holds` is the exact rational comparison, so a solver can publish its own
 //! conservation evidence instead of asserting it in prose.
 
+use crate::Q;
 use crate::errors::SystemsError;
-use crate::numeric::Q;
 use crate::results::LawCheck;
 
 /// Little's law: `L = lambda * W`.

@@ -8,8 +8,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::Q;
 use crate::errors::SystemsError;
-use crate::numeric::Q;
 
 /// A validated station or class identifier.
 ///

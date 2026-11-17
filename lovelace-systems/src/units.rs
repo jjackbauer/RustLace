@@ -9,8 +9,8 @@
 //! A conversion is explicit (`Time::minutes`) and exact: it multiplies or divides by 60 or 3600,
 //! so a minute is `60` seconds, not a rounded decimal.
 
+use crate::Q;
 use crate::errors::SystemsError;
-use crate::numeric::Q;
 
 /// A time unit accepted by the conversion constructors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +82,11 @@ impl Rate {
             RateUnit::PerMinute => Q::from_u64(60),
             RateUnit::PerHour => Q::from_u64(3600),
         };
-        Rate(value.div(&divisor).unwrap_or_else(Q::zero))
+        Rate(
+            value
+                .checked_div(&divisor)
+                .expect("a unit conversion divides by one of the non-zero constants 1, 60 or 3600"),
+        )
     }
 
     /// The canonical value in jobs per second.
@@ -186,10 +190,12 @@ mod tests {
             Some(2)
         );
         assert_eq!(
-            Rate::in_unit(Q::from_u64(1), RateUnit::PerHour)
-                .as_per_second()
-                .to_decimal(6),
-            "0.0002(7)"
+            Rate::in_unit(Q::from_u64(1), RateUnit::PerHour).as_per_second(),
+            &Q::from_parts(
+                lovelace_int::Int::from_i64(1),
+                lovelace_nat::Nat::from_u64(3600)
+            )
+            .expect("non-zero denominator")
         );
     }
 

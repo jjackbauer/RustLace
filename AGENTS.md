@@ -47,6 +47,13 @@ cargo clippy --workspace --all-targets
 cargo run --release -p lovelace-corpus
 cargo run --release -p lovelace-corpus -- lang/001
 
+# canonical numerical kernel and architecture policy (run before calling a change done;
+# the mutation suite has 21 scenarios, and CODEOWNERS declares the policy and kernel owners)
+python tools/check-architecture.py
+python tools/test-architecture-gates.py
+cargo test -p lovelace-rational
+cargo test -p lovelace-lang --test cross_library
+
 # desktop headless modes. The application directory must be writable: set
 # APPDATA on Windows, or XDG_CONFIG_HOME/HOME on Linux, to a scratch directory.
 # Every mode below runs on both platforms except --platform-parity, which needs
@@ -115,13 +122,15 @@ sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcurso
 
 ### CI jobs
 
-`.github/workflows/ci.yml` has three job definitions and runs on pushes to `main`, pull requests and
+`.github/workflows/ci.yml` has five job definitions and runs on pushes to `main`, pull requests and
 manual dispatch:
 
 | Job | Commands |
 |---|---|
 | Windows (full workspace) | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `cargo build --release -p lovelace-desktop`, then upload `target/release/lovelace-desktop.exe` as `lovelace-desktop-windows-x86_64` |
-| Linux (engine crates + GUI desktop under Xvfb) | `cargo fmt --all -- --check`, the Linux GUI runtime, `cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics`, `cargo build --release -p lovelace-desktop`, the glibc ABI guard over the built artifact, `xvfb-run ... --gui-selftest` (exit 0 and `checks=20 failed=0`), `xvfb-run ... cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-gui-x86_64` |
+| Linux (engine crates + GUI desktop under Xvfb) | `cargo fmt --all -- --check`, the Linux GUI runtime, `cargo clippy -p lovelace-lang -p lovelace-rational -p lovelace-real -p lovelace-nat -p lovelace-symbolics -p lovelace-systems --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics -p lovelace-systems`, `cargo build --release -p lovelace-desktop`, the glibc ABI guard over the built artifact, `xvfb-run ... --gui-selftest` (exit 0 and `checks=20 failed=0`), `xvfb-run ... cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-gui-x86_64` |
+| Architecture policy (`ubuntu-latest` and `windows-latest`) | `python tools/check-architecture.py --report architecture-impact-<os>.md`, `python tools/test-architecture-gates.py` (21 scenarios, including the two-field/two-method `partial-duplicate-kernel`), `python tools/rational-oracle.py --check`, `python tools/systems-oracle.py --check`, then upload the impact report. Ownership is abstraction-specific (`reservedTypeNames`, `permittedRepresentations`), and `.github/CODEOWNERS` routes policy, checker, mutation-fixture, ownership-document and rational-kernel changes to the owner. Independent of the unit-test jobs: a green suite cannot outvote a second rational kernel. |
+| Numerical kernel | `cargo test -p lovelace-rational -p lovelace-int -p lovelace-nat -p lovelace-real`, `cargo test -p lovelace-rational --test properties`, `--test oracle`, `cargo test -p lovelace-systems --test oracle`, `cargo test -p lovelace-lang --test cross_library` |
 | Documentation examples (`ubuntu-latest` and `windows-latest`) | twelve steps, one definition, two OS variants: checkout pinning `core.autocrlf=false`, Rust toolchain, cargo cache, `cargo build -p lovelace-run`, `bash tools/check-crate-examples.sh`, `bash tools/run-tutorials.sh`, `bash docs/language/examples/run-examples.sh` (fenced examples plus the builtin-catalogue check against `--functions`) and `bash docs/extensions/examples/run-examples.sh`, `bash tools/check-docs.sh --symbols`, `--claims`, `--readme`, `bash tools/check-reference-pages.sh`, and `bash tools/test-docs-gates.sh` (the mutation self-test) |
 
 The Linux job is the GUI acceptance gate: it compiles the workbench, runs the 20-check selftest and
@@ -148,13 +157,14 @@ One line per crate, and what it owns:
 | `lovelace-json` | JSON reader/writer; numbers kept as their source text |
 | `lovelace-nat` | arbitrary-precision naturals over base-2^64 limbs, NTT multiplication, Burnikel-Ziegler division, Newton square root |
 | `lovelace-int` | sign + magnitude integers; truncating division; no negative zero |
-| `lovelace-real` | reals as `int * 10^exp` with exact periodic decimal metadata; `sqrt`, `pi`, display-precision scoping |
+| `lovelace-rational` | the one canonical exact rational kernel: full arbitrary-precision GCD reduction, checked arithmetic, growth budgets, exactness provenance and conversions |
+| `lovelace-real` | reals as `int * 10^exp` with exact periodic decimal metadata; `sqrt`, `pi`, display-precision scoping; the `Rat`↔`Real` projections |
 | `lovelace-array` | generic row-major `NdArray<T>`, shape algebra, indexing, slicing, reductions |
-| `lovelace-symbolics` | canonical expressions, differentiation, series, polynomial algebra, Groebner bases, the cooperative cancellation token |
+| `lovelace-symbolics` | canonical expressions, differentiation, series, polynomial algebra, Groebner bases, the cooperative cancellation token; re-exports `Rat` from the kernel |
 | `lovelace-lang` | values, the active lexer/parser (`src/syntax.rs`), interpreter and builtins (`src/lib.rs`, `src/builtins.rs`), registry, MathIR, plots, the `sys_*` systems adapter |
-| `lovelace-systems` | exact queueing/operations-research models: rational arithmetic, M/M/1, M/M/c, M/M/∞, operational laws, open Jackson networks, exact single-class MVA, bottleneck/capacity, sweeps; no dependency on the interpreter |
+| `lovelace-systems` | exact queueing/operations-research models: M/M/1, M/M/c, M/M/∞, operational laws, open Jackson networks, exact single-class MVA, bottleneck/capacity, sweeps; `Q` is the canonical `Rat` alias; no dependency on the interpreter |
 | `lovelace-run` | the CLI, the JSON wire envelope, registry discovery and golden envelopes |
-| `lovelace-know` | the observation-driven behavioural graph, JSON persistence and convergence tests |
+| `lovelace-know` | the observation-driven behavioural graph, JSON persistence and convergence tests; `ExactNumber` is a facade over `Rat` |
 | `lovelace-corpus` | the documentation-corpus parity gate over `parity/corpus/*.json` |
 | `lovelace-bench` | the micro-benchmark harness shaped like the C# reference harness |
 | `lovelace-desktop` | the native workbench (Windows and Linux), execution host, incremental cache, persistence, accessibility and headless acceptance modes |
@@ -219,7 +229,7 @@ placeholder rather than a path from one machine.
 | You are adding | Put it here |
 |---|---|
 | a builtin | descriptor in `lovelace-lang/src/registry.rs`, implementation arm in `lovelace-lang/src/builtins.rs`, test beside the existing batch files, corpus record in `parity/corpus/` |
-| a statically integrated library family | a workspace crate under `lovelace-systems/` (typed models, exact arithmetic, no interpreter dependency) plus a thin adapter and static descriptors in `lovelace-lang`; follow `docs/extending.md` §2 |
+| a statically integrated library family | a workspace crate under `lovelace-systems/` (typed models, exact arithmetic through `lovelace-rational`, no interpreter dependency) plus a thin adapter and static descriptors in `lovelace-lang`; follow `docs/extending.md` §2 and declare the crate in `tools/architecture-policy.json` |
 | a workbench pane | focus group in `lovelace-desktop/src/keyboard.rs`, layout and paint in `lovelace-desktop/src/ui/app.rs`, empty state in `lovelace-desktop/src/ui/empty.rs`, tokens in `lovelace-desktop/src/ui/theme.rs` |
 
 ### Fixture naming
@@ -276,8 +286,19 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
   `LOVELACE_RECORD_GOLDENS=1`; `docs/goal-desktop-v4/reference/REF-*.json` are captured from a real
   run. Re-run the consuming test after regenerating.
 - Never push a feature branch to `main` without a green CI run. Branch, open a pull request, and let
-  the Windows, Linux and documentation jobs pass (both OS variants of the documentation job);
-  `main` moves only through that gate.
+  the Windows, Linux, architecture-policy and documentation jobs pass (both OS variants of the
+  architecture and documentation jobs); `main` moves only through that gate.
+- One numerical foundation. `lovelace-rational` owns the only general-purpose rational
+  implementation; `lovelace-symbolics::Rat` is a re-export, `lovelace-systems::Q` is an alias, and
+  `lovelace-know::ExactNumber` is a delegating facade. Do not add numerator/denominator storage,
+  GCD normalization or scalar arithmetic traits outside the owners. Improve the owner instead
+  (RNL-ARC-001, RNL-AGT-003). Run `python tools/check-architecture.py` and the cross-library tests;
+  a local test pass is not completion evidence. The mutation suite is 21 scenarios, including the
+  two-field/two-method partial representation; ownership is per reserved type, not per crate; an
+  arithmetic impl the scanner cannot classify is reported as `review-required`, not passed. Policy,
+  checker, mutation-fixture, ownership-document and rational-kernel changes are declared in
+  `.github/CODEOWNERS`. Never weaken the policy, delete a failing test or grant yourself an
+  exception (RNL-AGT-006).
 - No external crate may enter an engine crate (ADR-001). The desktop's GUI stack is the only
   external dependency, declared in the desktop crate only: eframe's default wgpu on Windows, plus
   glow on Linux.
@@ -295,7 +316,7 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
 | add or change a workbench pane | [add-ui-pane](.dsh/skills/add-ui-pane/SKILL.md) |
 | change the lexer, parser or interpreter | [add-language-feature](.dsh/skills/add-language-feature/SKILL.md) |
 | add a headless acceptance mode or journey | [add-acceptance-mode](.dsh/skills/add-acceptance-mode/SKILL.md) |
-| change `lovelace-real` / `lovelace-nat` arithmetic | [change-numeric-kernel](.dsh/skills/change-numeric-kernel/SKILL.md) |
+| change `lovelace-rational`, `lovelace-real` or `lovelace-nat` arithmetic | [change-numeric-kernel](.dsh/skills/change-numeric-kernel/SKILL.md) |
 | reproduce and fix a desktop defect with evidence | [debug-desktop-issue](.dsh/skills/debug-desktop-issue/SKILL.md) |
 | build, tag and publish a release | [release-and-publish](.dsh/skills/release-and-publish/SKILL.md) |
 | update the dependent documentation after a change | [sync-docs](.dsh/skills/sync-docs/SKILL.md) |

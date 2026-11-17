@@ -1596,7 +1596,8 @@ fn apply(op: IrOpKind, args: &[Num], places: usize) -> Result<Num, LangError> {
         },
         IrOpKind::Pow => args[0].pow(&args[1], places),
         IrOpKind::Sqrt => {
-            let half = Rat::from_parts(Int::from_i64(1), Nat::from_u64(2));
+            let half = Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+                .expect("a rational denominator is non-zero");
             args[0].pow(&Num::Exact(half), places)
         }
         IrOpKind::Exp => match &args[0] {
@@ -1768,7 +1769,7 @@ fn rational_floor(value: &Rat) -> Rat {
             integer = integer.add(&Int::from_i64(1).negate());
         }
     }
-    Rat::from_parts(integer, Nat::from_u64(1))
+    Rat::from_parts(integer, Nat::from_u64(1)).expect("a rational denominator is non-zero")
 }
 
 fn real_floor(value: &Real) -> Real {

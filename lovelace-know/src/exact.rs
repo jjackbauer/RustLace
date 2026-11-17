@@ -1,16 +1,23 @@
-//! Exact rational arithmetic for Lovelace numeric literals.
+//! Exact numeric literals for the knowledge graph, backed by the canonical rational kernel.
 //!
-//! The C# pipeline models every operand, axis position and guard threshold as an exact
-//! rational (Lovelace.Knowledge ExactNumber) so that boundary detection never sees a
-//! floating-point artefact. This module preserves that representation, including the
-//! round trip with the Lovelace literal syntax: whole numbers, terminating decimals, and
-//! periodic fractions such as 0.(3) and 0.1(6).
+//! The C# pipeline models every operand, axis position and guard threshold as an exact number so
+//! that boundary detection never sees a floating-point artefact. In RustLace that exact number is
+//! `lovelace_rational::Rat`; [`ExactNumber`] is a **facade**, not a second implementation. It owns
+//! no numerator/denominator fields, no GCD, no sign normalization and no arithmetic: every
+//! operation below delegates to the canonical type. The only logic here is the knowledge crate's
+//! literal grammar (periodic syntax such as `0.(3)`) and its literal renderer.
+//!
+//! Historically this module carried a third independent rational implementation. The architecture
+//! checker (`tools/check-architecture.py`) found it during the RNL-001 consolidation; the
+//! acceptance invariant is that a second kernel fails CI regardless of passing unit tests.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
-use lovelace_int::{Int, Nat};
+use lovelace_int::Int;
+use lovelace_nat::Nat;
+use lovelace_rational::Rat;
 
 /// A failure while parsing or normalizing a number literal.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,112 +47,88 @@ impl fmt::Display for NumberParseError {
 
 impl std::error::Error for NumberParseError {}
 
-/// An exact rational number in canonical form: lowest terms, positive denominator.
+/// An exact rational number, canonically represented by the shared kernel.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExactNumber {
-    num: Int,
-    den: Nat,
-}
+pub struct ExactNumber(Rat);
 
 impl ExactNumber {
-    /// Builds a normalized rational. Returns None when the denominator is zero.
+    /// Builds a normalized rational. Returns `None` when the denominator is zero.
     #[must_use]
     pub fn new(num: Int, den: Nat) -> Option<Self> {
-        if den.is_zero() {
-            return None;
-        }
-        let divisor = num.magnitude().gcd(&den);
-        if divisor.is_one() {
-            return Some(Self { num, den });
-        }
-        let (num, num_remainder) = num.div_rem(&divisor)?;
-        let (den, den_remainder) = den.div_rem(&divisor)?;
-        if !num_remainder.is_zero() || !den_remainder.is_zero() {
-            return None;
-        }
-        Some(Self { num, den })
+        Rat::from_parts(num, den).ok().map(ExactNumber)
     }
 
     /// The additive identity.
     #[must_use]
     pub fn zero() -> Self {
-        Self {
-            num: Int::zero(),
-            den: Nat::from_u64(1),
-        }
+        ExactNumber(Rat::zero())
     }
 
     /// The multiplicative identity.
     #[must_use]
     pub fn one() -> Self {
-        Self {
-            num: Int::from_i64(1),
-            den: Nat::from_u64(1),
-        }
+        ExactNumber(Rat::one())
     }
 
     /// Builds an exact integer.
     #[must_use]
     pub fn from_i64(value: i64) -> Self {
-        Self {
-            num: Int::from_i64(value),
-            den: Nat::from_u64(1),
-        }
+        ExactNumber(Rat::from_i64(value))
     }
 
     /// The signed numerator.
     #[must_use]
     pub fn num(&self) -> &Int {
-        &self.num
+        self.0.numerator()
     }
 
     /// The non-negative denominator.
     #[must_use]
     pub fn den(&self) -> &Nat {
-        &self.den
+        self.0.denominator()
     }
 
     /// Whether the value is exactly zero.
     #[must_use]
     pub fn is_zero(&self) -> bool {
-        self.num.is_zero()
+        self.0.is_zero()
     }
 
     /// Whether the value is strictly negative.
     #[must_use]
     pub fn is_negative(&self) -> bool {
-        self.num.is_negative()
+        self.0.is_negative()
     }
 
     /// Whether the value is a whole number.
     #[must_use]
     pub fn is_integer(&self) -> bool {
-        self.den.is_one()
+        self.0.is_integer()
     }
 
-    /// Exact addition.
+    /// The canonical rational behind this facade.
+    #[must_use]
+    pub fn as_rat(&self) -> &Rat {
+        &self.0
+    }
+
+    /// Exact addition, delegated to [`Rat::add`].
     #[must_use]
     pub fn add(&self, other: &Self) -> Self {
-        let num = self
-            .num
-            .mul(&Int::from_nat(other.den.clone()))
-            .add(&other.num.mul(&Int::from_nat(self.den.clone())));
-        let den = self.den.mul(&other.den);
-        Self::new(num, den).expect("a product of non-zero denominators is non-zero")
+        ExactNumber(self.0.add(&other.0))
     }
 
-    /// Exact subtraction.
+    /// Exact subtraction, delegated to [`Rat::sub`].
     #[must_use]
     pub fn subtract(&self, other: &Self) -> Self {
-        let num = self
-            .num
-            .mul(&Int::from_nat(other.den.clone()))
-            .sub(&other.num.mul(&Int::from_nat(self.den.clone())));
-        let den = self.den.mul(&other.den);
-        Self::new(num, den).expect("a product of non-zero denominators is non-zero")
+        ExactNumber(self.0.sub(&other.0))
     }
 
     /// Parses a Lovelace numeric literal: 42, -7, 3.14, .5, 0.(3), 0.1(6), -1.2(34).
+    ///
+    /// This is a grammar boundary: it builds the exact numerator/denominator from the literal's
+    /// digits and then hands the pair to the canonical constructor, which performs the only
+    /// normalization.
     pub fn parse(literal: &str) -> Result<Self, NumberParseError> {
         let trimmed = literal.trim();
         if trimmed.is_empty() {
@@ -228,15 +211,18 @@ impl ExactNumber {
     }
 
     /// Emits a Lovelace literal that parses back to this exact value.
+    ///
+    /// This is a renderer: the digits are produced directly from the canonical numerator and
+    /// denominator, with no separate rational arithmetic.
     #[must_use]
     pub fn to_lovelace_literal(&self) -> String {
         if self.is_integer() {
-            return self.num.to_decimal();
+            return self.num().to_decimal();
         }
-        let negative = self.num.is_negative();
-        let magnitude = self.num.magnitude();
+        let negative = self.is_negative();
+        let magnitude = self.num().magnitude();
         let (integer_part, mut remainder) = magnitude
-            .div_rem(&self.den)
+            .div_rem(self.den())
             .expect("the denominator is never zero");
         let ten = Nat::from_u64(10);
         // Nat's interior mutability is a memoized limb/decimal cache; Eq and Hash are
@@ -253,7 +239,7 @@ impl ExactNumber {
             seen.insert(remainder.clone(), digits.len());
             let shifted = remainder.mul(&ten);
             let (digit, next) = shifted
-                .div_rem(&self.den)
+                .div_rem(self.den())
                 .expect("the denominator is never zero");
             digits.push(
                 u8::try_from(digit.to_u64().expect("a decimal digit fits in u64"))
@@ -288,9 +274,7 @@ impl PartialOrd for ExactNumber {
 
 impl Ord for ExactNumber {
     fn cmp(&self, other: &Self) -> Ordering {
-        let left = self.num.mul(&Int::from_nat(other.den.clone()));
-        let right = other.num.mul(&Int::from_nat(self.den.clone()));
-        left.cmp(&right)
+        self.0.cmp(&other.0)
     }
 }
 

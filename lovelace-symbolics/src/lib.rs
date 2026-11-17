@@ -24,206 +24,12 @@ pub mod series_kink;
 pub mod solution_set;
 pub mod symbolic_matrix;
 
-/// An exact rational coefficient.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Rat {
-    num: Int,
-    den: Nat,
-}
-
-impl Rat {
-    /// Zero.
-    pub fn zero() -> Rat {
-        Rat {
-            num: Int::zero(),
-            den: Nat::from_u64(1),
-        }
-    }
-
-    /// One.
-    pub fn one() -> Rat {
-        Rat {
-            num: Int::from_i64(1),
-            den: Nat::from_u64(1),
-        }
-    }
-
-    /// Builds a rational from an i64.
-    pub fn from_i64(v: i64) -> Rat {
-        Rat {
-            num: Int::from_i64(v),
-            den: Nat::from_u64(1),
-        }
-    }
-
-    /// Numerator.
-    pub fn numerator(&self) -> &Int {
-        &self.num
-    }
-
-    /// Denominator.
-    pub fn denominator(&self) -> &Nat {
-        &self.den
-    }
-
-    /// True when the value is zero.
-    pub fn is_zero(&self) -> bool {
-        self.num.is_zero()
-    }
-
-    /// True when the value is one.
-    pub fn is_one(&self) -> bool {
-        !self.num.is_negative() && self.num.to_decimal() == "1" && self.den.to_decimal() == "1"
-    }
-
-    /// True when the value is a negative number.
-    pub fn is_negative(&self) -> bool {
-        self.num.is_negative()
-    }
-
-    /// Negation.
-    pub fn neg(&self) -> Rat {
-        Rat {
-            num: self.num.negate(),
-            den: self.den.clone(),
-        }
-    }
-
-    /// Absolute value.
-    pub fn abs(&self) -> Rat {
-        if self.is_negative() {
-            self.neg()
-        } else {
-            self.clone()
-        }
-    }
-
-    /// Addition.
-    pub fn add(&self, other: &Rat) -> Rat {
-        let left = self
-            .num
-            .mul(&Int::from_decimal(&other.den.to_decimal()).unwrap_or_else(Int::zero));
-        let right = other
-            .num
-            .mul(&Int::from_decimal(&self.den.to_decimal()).unwrap_or_else(Int::zero));
-        let den = self.den.mul(&other.den);
-        Rat::new(left.add(&right), den)
-    }
-
-    /// Multiplication.
-    pub fn mul(&self, other: &Rat) -> Rat {
-        Rat::new(self.num.mul(&other.num), self.den.mul(&other.den))
-    }
-
-    /// Division; `None` when the divisor is zero.
-    pub fn div(&self, other: &Rat) -> Option<Rat> {
-        if other.is_zero() {
-            return None;
-        }
-        let num = self
-            .num
-            .mul(&Int::from_decimal(&other.den.to_decimal()).unwrap_or_else(Int::zero));
-        let den = self.den.mul(other.num.magnitude());
-        let mut r = Rat::new(num, den);
-        if other.is_negative() {
-            r = r.neg();
-        }
-        Some(r)
-    }
-
-    /// Raises to an integer power.
-    pub fn pow_i64(&self, exp: i64) -> Option<Rat> {
-        if exp == 0 {
-            return Some(Rat::one());
-        }
-        if exp < 0 {
-            // Negating i64::MIN overflows in debug builds. The reciprocal of base^(2^63) is not
-            // representable as a Rat here, so this is a refusal, not a panic.
-            let positive = exp.checked_neg()?;
-            let base = self.pow_i64(positive)?;
-            return Rat::one().div(&base);
-        }
-        let mut acc = Rat::one();
-        for _ in 0..exp {
-            acc = acc.mul(self);
-        }
-        Some(acc)
-    }
-
-    fn new(num: Int, den: Nat) -> Rat {
-        if num.is_zero() {
-            return Rat::zero();
-        }
-        let mut n = num;
-        let mut d = den;
-        if let (Some(a), Some(b)) = (n.magnitude().to_u64(), d.to_u64()) {
-            let g = gcd_u64(a, b);
-            if g > 1 {
-                let gn = Nat::from_u64(g);
-                n = n.div_rem(&gn).map(|(q, _)| q).unwrap_or(n);
-                d = d.div_rem(&gn).map(|(q, _)| q).unwrap_or(d);
-            }
-        }
-        Rat { num: n, den: d }
-    }
-
-    /// Builds a rational from an arbitrary-precision numerator and denominator.
-    pub fn from_parts(num: Int, den: Nat) -> Rat {
-        Rat::new(num, den)
-    }
-
-    /// True when this is an integral value.
-    pub fn is_integer(&self) -> bool {
-        self.den.to_decimal() == "1"
-    }
-
-    /// The integer value, when integral.
-    pub fn to_i64(&self) -> Option<i64> {
-        if !self.is_integer() {
-            return None;
-        }
-        self.num.to_decimal().parse::<i64>().ok()
-    }
-}
-
-/// Numeric comparison via cross-multiplication. Two integral values compare their
-/// numerators directly: the general path rebuilds both denominators as Ints through their
-/// decimal rendering, which is the hot spot in the assumption engine's bound reasoning.
-impl Ord for Rat {
-    fn cmp(&self, other: &Self) -> Ordering {
-        if self.is_integer() && other.is_integer() {
-            return self.num.cmp(&other.num);
-        }
-        let left = self
-            .num
-            .mul(&Int::from_decimal(&other.den.to_decimal()).unwrap_or_else(Int::zero));
-        let right = other
-            .num
-            .mul(&Int::from_decimal(&self.den.to_decimal()).unwrap_or_else(Int::zero));
-        left.cmp(&right)
-    }
-}
-
-impl PartialOrd for Rat {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(Ord::cmp(self, other))
-    }
-}
-
-impl std::fmt::Display for Rat {
-    /// Renders the coefficient as it appears in a product: `2`, `-1/2`, `3/4`.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let one = Nat::from_u64(1);
-        if self.den.cmp(&one) == Ordering::Equal {
-            return f.write_str(&self.num.to_decimal());
-        }
-        f.write_str(&format!(
-            "{}/{}",
-            self.num.to_decimal(),
-            self.den.to_decimal()
-        ))
-    }
-}
+/// The canonical exact rational coefficient.
+///
+/// `lovelace-symbolics` owns symbolic semantics, not arithmetic. `Rat` is the workspace kernel's
+/// type, re-exported under the name the symbolic expression model already used; there is no
+/// independent numerator/denominator implementation in this crate (RNL-ARC-002, RNL-MIG-001).
+pub use lovelace_rational::Rat;
 
 /// A relation operator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -302,7 +108,9 @@ impl Expr {
 
     /// A rational constant.
     pub fn rational(num: &Int, den: &Nat) -> Expr {
-        Expr::Num(Rat::new(num.clone(), den.clone()))
+        Expr::Num(
+            Rat::from_parts(num.clone(), den.clone()).expect("a rational denominator is non-zero"),
+        )
     }
 
     /// A symbol.
@@ -417,7 +225,10 @@ impl Expr {
             let factor = match factor {
                 Expr::Fun(name, args) if name == "sqrt" && args.len() == 1 => Expr::Pow(
                     Box::new(args.into_iter().next().expect("one argument")),
-                    Box::new(Expr::Num(Rat::new(Int::from_i64(1), Nat::from_u64(2)))),
+                    Box::new(Expr::Num(
+                        Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+                            .expect("a rational denominator is non-zero"),
+                    )),
                 ),
                 other => other,
             };
@@ -1531,7 +1342,10 @@ fn rational_sqrt(q: &Rat) -> Expr {
         perfect_square(q.denominator()),
     ) {
         if let Some(n_int) = Int::from_decimal(&n.to_string()) {
-            return Expr::Num(Rat::new(n_int, Nat::from_u64(d)));
+            return Expr::Num(
+                Rat::from_parts(n_int, Nat::from_u64(d))
+                    .expect("a rational denominator is non-zero"),
+            );
         }
     }
     Expr::Fun("sqrt".to_string(), vec![Expr::Num(q.clone())])
@@ -1583,7 +1397,7 @@ fn rational_root(q: &Rat, n: u64) -> Option<Rat> {
     };
     let num = Int::from_decimal(&signed_numerator)?;
     let den = Nat::from_decimal(&root_denominator.to_string())?;
-    Some(Rat::new(num, den))
+    Some(Rat::from_parts(num, den).expect("a rational denominator is non-zero"))
 }
 
 /// The principal value of a NEGATIVE rational base raised to a half-integer exponent:
@@ -2169,8 +1983,10 @@ fn latex_render(e: &Expr, parent_prec: i32) -> String {
             latex_delimit(text, parent_prec, LATEX_MUL_PREC)
         }
         Expr::Pow(base, exponent) => {
-            let half = Rat::new(Int::from_i64(1), Nat::from_u64(2));
-            let minus_half = Rat::new(Int::from_i64(-1), Nat::from_u64(2));
+            let half = Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+                .expect("a rational denominator is non-zero");
+            let minus_half = Rat::from_parts(Int::from_i64(-1), Nat::from_u64(2))
+                .expect("a rational denominator is non-zero");
             if let Expr::Num(n) = exponent.as_ref() {
                 if *n == half {
                     return latex_delimit(
@@ -2561,7 +2377,7 @@ fn rat_integer(value: &Rat, floor: bool) -> Rat {
     } else {
         quotient
     };
-    Rat::from_parts(rounded, one)
+    Rat::from_parts(rounded, one).expect("a rational denominator is non-zero")
 }
 
 /// Substitutes a symbol with an expression, leaving everything else alone.
@@ -3272,34 +3088,6 @@ pub fn real_root_count(coeffs: &[Rat]) -> usize {
 // arithmetic (so the digits are the requested ones, never a float cast of them).
 // ---------------------------------------------------------------------------
 
-/// The reduced form of a rational. `Rat::new` only cancels a common factor when both parts fit
-/// u64, and an exact polynomial remainder chain routinely leaves a common factor much wider than
-/// that: without this the square-free part of a degree-3 polynomial carries 70-digit numerators
-/// and denominators whose value is 1.
-fn rat_reduce(r: &Rat) -> Rat {
-    if r.numerator().is_zero() {
-        return Rat::zero();
-    }
-    let numerator = r.numerator().magnitude();
-    let denominator = r.denominator();
-    let (common, _) = match gcd_int(numerator, denominator) {
-        Some(pair) => pair,
-        None => return r.clone(),
-    };
-    if common.is_zero() || common.to_decimal() == "1" {
-        return r.clone();
-    }
-    let (num, _) = match r.numerator().div_rem(&common) {
-        Some(pair) => pair,
-        None => return r.clone(),
-    };
-    let (den, _) = match denominator.div_rem(&common) {
-        Some(pair) => pair,
-        None => return r.clone(),
-    };
-    Rat::from_parts(num, den)
-}
-
 /// The monic normalization of a coefficient vector (the leading coefficient becomes one).
 fn poly_monic(p: &[Rat]) -> Vec<Rat> {
     let trimmed = trim_poly(p.to_vec());
@@ -3310,7 +3098,7 @@ fn poly_monic(p: &[Rat]) -> Vec<Rat> {
     let mut out: Vec<Rat> = Vec::with_capacity(trimmed.len());
     for c in &trimmed {
         match c.div(&lead) {
-            Some(v) => out.push(rat_reduce(&v)),
+            Some(v) => out.push(v),
             None => return trimmed,
         }
     }
@@ -3450,7 +3238,7 @@ fn poly_normalize_positive(p: &[Rat]) -> Vec<Rat> {
     let mut out: Vec<Rat> = Vec::with_capacity(trimmed.len());
     for c in &trimmed {
         match c.div(&lead) {
-            Some(v) => out.push(rat_reduce(&v)),
+            Some(v) => out.push(v),
             None => return trimmed,
         }
     }
@@ -3507,24 +3295,9 @@ fn lcm_int(a: &Int, b: &Int) -> Option<Int> {
     if a.is_zero() || b.is_zero() {
         return Some(Int::from_i64(1));
     }
-    let (g, _) = gcd_int(a.magnitude(), b.magnitude())?;
+    let g = a.magnitude().gcd(b.magnitude());
     let (divided, _) = a.div_rem(&g)?;
     Some(divided.mul(b))
-}
-
-/// The greatest common divisor of two magnitudes.
-fn gcd_int(a: &Nat, b: &Nat) -> Option<(Nat, Nat)> {
-    let mut left = a.clone();
-    let mut right = b.clone();
-    for _ in 0..4096 {
-        if right.is_zero() {
-            return Some((left, Nat::from_u64(0)));
-        }
-        let (_, remainder) = left.div_rem(&right)?;
-        left = right;
-        right = remainder;
-    }
-    None
 }
 
 /// The sign of `poly(X / scale)` in EXACT integer arithmetic: every coefficient is cleared of its
@@ -3632,7 +3405,7 @@ pub fn nth_real_root_digits(
     // gcd carries a large constant content has large coefficients, and the isolation below is
     // only polynomial in their width. A positive normalization leaves every sign unchanged.
     let quotient = poly_div_exact(&p, &common).unwrap_or_else(|| p.clone());
-    let reduced: Vec<Rat> = quotient.iter().map(rat_reduce).collect();
+    let reduced: Vec<Rat> = quotient.clone();
     let square_free = poly_normalize_positive(&reduced);
     let count = real_root_count(&square_free);
     if count == 0 {
@@ -3688,7 +3461,7 @@ pub fn nth_real_root_digits(
         .div_rem(&Nat::from_u64(2))
         .ok_or(RootOfError::NotIsolated)?;
     let denominator = Nat::from_decimal(&scale_text).ok_or(RootOfError::NotIsolated)?;
-    Ok(Rat::from_parts(middle, denominator))
+    Ok(Rat::from_parts(middle, denominator).expect("a rational denominator is non-zero"))
 }
 
 /// The numeric value of a `rootof(p, index)` node to the requested number of digits - the
@@ -3947,7 +3720,8 @@ fn find_rational_root(coeffs: &[Rat]) -> Option<Rat> {
         };
         for q in divisors(leading) {
             for sign in [1i64, -1i64] {
-                let candidate = Rat::new(Int::from_i64(sign * p), Nat::from_u64(q));
+                let candidate = Rat::from_parts(Int::from_i64(sign * p), Nat::from_u64(q))
+                    .expect("a rational denominator is non-zero");
                 if eval_poly(coeffs, &candidate)
                     .map(|v| v.is_zero())
                     .unwrap_or(false)
@@ -4086,7 +3860,8 @@ fn quadratic_roots(coeffs: &[Rat]) -> Option<(Rat, Rat)> {
     // discriminant must be a perfect square of a rational
     let rn = perfect_square(num.magnitude())?;
     let rd = perfect_square(&den)?;
-    let root = Rat::new(Int::from_i64(rn as i64), Nat::from_u64(rd));
+    let root = Rat::from_parts(Int::from_i64(rn as i64), Nat::from_u64(rd))
+        .expect("a rational denominator is non-zero");
     let two_a = a.mul(&Rat::from_i64(2));
     let r1 = Rat::zero().add(&b.neg()).add(&root).div(&two_a)?;
     let r2 = Rat::zero().add(&b.neg()).add(&root.neg()).div(&two_a)?;
@@ -4130,8 +3905,10 @@ fn cubic_root_expressions(coeffs: &[Rat]) -> Option<Vec<Expr>> {
         .mul(&q)
         .div(&Rat::from_i64(4))?
         .add(&p.mul(&p).mul(&p).div(&Rat::from_i64(27))?);
-    let one_third = Rat::new(Int::from_i64(1), Nat::from_u64(3));
-    let minus_one_third = Rat::new(Int::from_i64(-1), Nat::from_u64(3));
+    let one_third = Rat::from_parts(Int::from_i64(1), Nat::from_u64(3))
+        .expect("a rational denominator is non-zero");
+    let minus_one_third = Rat::from_parts(Int::from_i64(-1), Nat::from_u64(3))
+        .expect("a rational denominator is non-zero");
     let mut ts: Vec<Expr> = Vec::new();
     if !disc.is_negative() {
         // One real root through Cardano; the other two are the omega rotations. u and v are
@@ -4150,14 +3927,20 @@ fn cubic_root_expressions(coeffs: &[Rat]) -> Option<Vec<Expr>> {
             )
         };
         let omega = Expr::add(
-            Expr::Num(Rat::new(Int::from_i64(-1), Nat::from_u64(2))),
+            Expr::Num(
+                Rat::from_parts(Int::from_i64(-1), Nat::from_u64(2))
+                    .expect("a rational denominator is non-zero"),
+            ),
             Expr::mul(
                 Expr::div(Expr::sqrt(Expr::num(3)), Expr::num(2)),
                 imaginary_unit(),
             ),
         );
         let omega2 = Expr::sub(
-            Expr::Num(Rat::new(Int::from_i64(-1), Nat::from_u64(2))),
+            Expr::Num(
+                Rat::from_parts(Int::from_i64(-1), Nat::from_u64(2))
+                    .expect("a rational denominator is non-zero"),
+            ),
             Expr::mul(
                 Expr::div(Expr::sqrt(Expr::num(3)), Expr::num(2)),
                 imaginary_unit(),
@@ -5247,7 +5030,7 @@ impl CanonicalParser<'_> {
                     self.error(tag_position, format!("(int) needs an integer, got '{text}'"))
                 })?;
                 self.expect_close()?;
-                Ok(Expr::Num(Rat::new(value, Nat::from_u64(1))))
+                Ok(Expr::Num(Rat::from_parts(value, Nat::from_u64(1)).expect("a rational denominator is non-zero")))
             }
             "cplx" => {
                 let re_numerator_text = self.next_atom("a real numerator")?;
@@ -5277,7 +5060,7 @@ impl CanonicalParser<'_> {
                             parser.error(tag_position, "(cplx) denominator must not be zero")
                         );
                     }
-                    Ok(Rat::new(numerator, denominator))
+                    Ok(Rat::from_parts(numerator, denominator).expect("a rational denominator is non-zero"))
                 };
                 let re = parse_component(&re_numerator_text, &re_denominator_text, self)?;
                 let im = parse_component(&im_numerator_text, &im_denominator_text, self)?;
@@ -5305,7 +5088,7 @@ impl CanonicalParser<'_> {
                     return Err(self.error(tag_position, "(rat) denominator must not be zero"));
                 }
                 self.expect_close()?;
-                Ok(Expr::Num(Rat::new(numerator, denominator)))
+                Ok(Expr::Num(Rat::from_parts(numerator, denominator).expect("a rational denominator is non-zero")))
             }
             "sym" => {
                 let name = self.next_atom("a symbol name")?;
@@ -5362,7 +5145,7 @@ impl CanonicalParser<'_> {
                 self.expect_close()?;
                 Ok(Expr::Fun(
                     "rootof".to_string(),
-                    vec![polynomial, Expr::Num(Rat::new(index, Nat::from_u64(1)))],
+                    vec![polynomial, Expr::Num(Rat::from_parts(index, Nat::from_u64(1)).expect("a rational denominator is non-zero"))],
                 ))
             }
             "integ" => {
@@ -5469,7 +5252,10 @@ fn canonical_shape(e: &Expr) -> Option<Expr> {
         ])),
         Expr::Fun(name, args) if name == "sqrt" && args.len() == 1 => Some(Expr::Pow(
             Box::new(args[0].clone()),
-            Box::new(Expr::Num(Rat::new(Int::from_i64(1), Nat::from_u64(2)))),
+            Box::new(Expr::Num(
+                Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+                    .expect("a rational denominator is non-zero"),
+            )),
         )),
         _ => None,
     }
@@ -5654,10 +5440,13 @@ fn real_text_to_rational(text: &str) -> Option<Rat> {
     if scale >= 0 {
         let factor = Nat::from_u64(10).pow(scale as u64);
         numerator = numerator.mul(&Int::from_decimal(&factor.to_decimal())?);
-        Some(Rat::new(numerator, Nat::from_u64(1)))
+        Some(
+            Rat::from_parts(numerator, Nat::from_u64(1))
+                .expect("a rational denominator is non-zero"),
+        )
     } else {
         let denominator = Nat::from_u64(10).pow((-scale) as u64);
-        Some(Rat::new(numerator, denominator))
+        Some(Rat::from_parts(numerator, denominator).expect("a rational denominator is non-zero"))
     }
 }
 
@@ -6025,7 +5814,8 @@ mod tests {
 
     #[test]
     fn Rat_GivenSixthReducesToLowestTerms() {
-        let r = Rat::new(Int::from_i64(2), Nat::from_u64(4));
+        let r = Rat::from_parts(Int::from_i64(2), Nat::from_u64(4))
+            .expect("a rational denominator is non-zero");
         assert_eq!(r.to_string(), "1/2");
     }
 
@@ -6083,13 +5873,19 @@ mod tests {
 
     #[test]
     fn Rational_GivenHalf_PrintsFraction() {
-        let half = Expr::Num(Rat::new(Int::from_i64(1), Nat::from_u64(2)));
+        let half = Expr::Num(
+            Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+                .expect("a rational denominator is non-zero"),
+        );
         assert_eq!(s(Expr::neg(half)), "-1/2");
     }
 
     #[test]
     fn Latex_GivenRationalConstant_IsAFraction() {
-        let half = Expr::Num(Rat::new(Int::from_i64(1), Nat::from_u64(2)));
+        let half = Expr::Num(
+            Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+                .expect("a rational denominator is non-zero"),
+        );
         assert_eq!(half.latex(), "\\frac{1}{2}");
         assert_eq!(Expr::neg(half).latex(), "-\\frac{1}{2}");
         assert_eq!(Expr::num(7).latex(), "7");
@@ -6133,18 +5929,20 @@ mod tests {
         assert_eq!(s(Expr::sqrt(Expr::num(-4))), "2*i");
         assert_eq!(s(Expr::sqrt(Expr::num(-2))), "i*sqrt(2)");
         assert_eq!(
-            s(Expr::sqrt(Expr::Num(Rat::new(
-                Int::from_i64(-1),
-                Nat::from_u64(4)
-            )))),
+            s(Expr::sqrt(Expr::Num(
+                Rat::from_parts(Int::from_i64(-1), Nat::from_u64(4))
+                    .expect("a rational denominator is non-zero")
+            ))),
             "1/2*i"
         );
     }
 
     #[test]
     fn Pow_GivenNegativeHalfInteger_IsThePrincipalImaginaryValue() {
-        let three_halves = Rat::new(Int::from_i64(3), Nat::from_u64(2));
-        let minus_half = Rat::new(Int::from_i64(-1), Nat::from_u64(2));
+        let three_halves = Rat::from_parts(Int::from_i64(3), Nat::from_u64(2))
+            .expect("a rational denominator is non-zero");
+        let minus_half = Rat::from_parts(Int::from_i64(-1), Nat::from_u64(2))
+            .expect("a rational denominator is non-zero");
         assert_eq!(s(Expr::pow(Expr::num(-4), Expr::Num(three_halves))), "-8*i");
         assert_eq!(s(Expr::pow(Expr::num(-4), Expr::Num(minus_half))), "-1/2*i");
     }

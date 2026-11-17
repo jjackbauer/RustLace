@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 lovelace-nat = { path = "../lovelace-nat" }
 lovelace-int = { path = "../lovelace-int" }
+lovelace-rational = { path = "../lovelace-rational" }
 lovelace-real = { path = "../lovelace-real" }
 lovelace-array = { path = "../lovelace-array" }
 lovelace-json = { path = "../lovelace-json" }

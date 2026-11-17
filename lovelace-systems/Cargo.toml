@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 lovelace-nat = { path = "../lovelace-nat" }
 lovelace-int = { path = "../lovelace-int" }
-lovelace-real = { path = "../lovelace-real" }
+lovelace-rational = { path = "../lovelace-rational" }
 
 [lints]
 workspace = true

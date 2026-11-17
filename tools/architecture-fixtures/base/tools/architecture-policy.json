@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "layers": {
+    "values": 0,
+    "numeric-kernel": 1,
+    "domain": 2,
+    "language": 3
+  },
+  "crates": {
+    "lovelace-nat": {
+      "layer": "values",
+      "responsibility": "natural integers",
+      "reuses": []
+    },
+    "lovelace-int": {
+      "layer": "values",
+      "responsibility": "signed integers",
+      "reuses": [
+        "lovelace-nat"
+      ]
+    },
+    "lovelace-rational": {
+      "layer": "numeric-kernel",
+      "responsibility": "the canonical rational kernel",
+      "reuses": [
+        "lovelace-nat",
+        "lovelace-int"
+      ]
+    },
+    "lovelace-real": {
+      "layer": "numeric-kernel",
+      "responsibility": "the canonical real kernel",
+      "reuses": [
+        "lovelace-rational"
+      ]
+    },
+    "lovelace-symbolics": {
+      "layer": "domain",
+      "responsibility": "symbolic expressions",
+      "reuses": [
+        "lovelace-rational"
+      ]
+    },
+    "lovelace-systems": {
+      "layer": "domain",
+      "responsibility": "queueing models",
+      "reuses": [
+        "lovelace-rational"
+      ]
+    },
+    "lovelace-lang": {
+      "layer": "language",
+      "responsibility": "language and dispatch",
+      "reuses": [
+        "lovelace-rational",
+        "lovelace-real",
+        "lovelace-symbolics",
+        "lovelace-systems"
+      ]
+    }
+  },
+  "excludedPackages": {},
+  "allowedEdges": {
+    "lovelace-nat": [],
+    "lovelace-int": [
+      "lovelace-nat"
+    ],
+    "lovelace-rational": [
+      "lovelace-nat",
+      "lovelace-int"
+    ],
+    "lovelace-real": [
+      "lovelace-rational"
+    ],
+    "lovelace-symbolics": [
+      "lovelace-rational"
+    ],
+    "lovelace-systems": [
+      "lovelace-rational"
+    ],
+    "lovelace-lang": [
+      "lovelace-rational",
+      "lovelace-real",
+      "lovelace-symbolics",
+      "lovelace-systems"
+    ]
+  },
+  "devEdgesAllowed": {},
+  "thirdPartyAllowed": {},
+  "numericOwners": {
+    "natural": "lovelace-nat",
+    "signed-integer": "lovelace-int",
+    "rational": "lovelace-rational",
+    "real": "lovelace-real",
+    "symbolic-expression": "lovelace-symbolics",
+    "systems-models": "lovelace-systems",
+    "numeric-promotion": "lovelace-lang"
+  },
+  "duplicateDetection": {
+    "reservedTypeNames": {
+      "Nat": "lovelace-nat",
+      "Int": "lovelace-int",
+      "Rat": "lovelace-rational",
+      "Rational": "lovelace-rational",
+      "Fraction": "lovelace-rational",
+      "BigRational": "lovelace-rational",
+      "BigFraction": "lovelace-rational",
+      "Frac": "lovelace-rational",
+      "Q": "lovelace-rational",
+      "Real": "lovelace-real",
+      "NdArray": "lovelace-array"
+    },
+    "permittedRepresentations": {
+      "lovelace-lang": [
+        "Complex"
+      ]
+    },
+    "forbiddenTypeNames": [
+      "Rat",
+      "Rational",
+      "Fraction",
+      "BigRational",
+      "BigFraction",
+      "Frac",
+      "Q"
+    ],
+    "freeFunctionPatterns": [
+      "^(?:rat|rational|fraction|frac|q)_(?:add|sub|mul|div|rem|neg|abs|gcd|lcm|reduce|normalize|reciprocal)$"
+    ],
+    "freeFunctionOwners": [
+      "lovelace-rational"
+    ],
+    "numericFieldPairs": [
+      [
+        "numerator",
+        "denominator"
+      ],
+      [
+        "num",
+        "den"
+      ]
+    ],
+    "numericFieldTypes": [
+      "Int",
+      "Nat",
+      "Rat",
+      "i64",
+      "u64"
+    ],
+    "arithmeticMethods": [
+      "add",
+      "sub",
+      "mul",
+      "div",
+      "neg",
+      "abs",
+      "pow",
+      "gcd",
+      "reduce"
+    ],
+    "arithmeticTraits": [
+      "Add",
+      "Sub",
+      "Mul",
+      "Div",
+      "Neg",
+      "AddAssign"
+    ],
+    "minimumArithmeticMethods": 4,
+    "minimumRepresentationMethods": 2,
+    "permittedSpecializations": [
+      {
+        "crate": "lovelace-systems",
+        "type": "ServiceTime",
+        "reason": "typed unit wrapper that delegates to Rat"
+      }
+    ],
+    "permittedAliases": []
+  },
+  "forbiddenPaths": [
+    {
+      "path": "lovelace-systems/src/numeric.rs",
+      "rule": "forbidden-numeric-location",
+      "reason": "the Systems rational implementation was deleted"
+    }
+  ],
+  "exceptions": [],
+  "requiredChecks": {
+    "minimumSourceFiles": 1,
+    "minimumWorkspaceCrates": 7,
+    "requiredCrates": [
+      "lovelace-rational",
+      "lovelace-real",
+      "lovelace-symbolics",
+      "lovelace-systems"
+    ],
+    "requiredFiles": [],
+    "cratePages": false
+  }
+}

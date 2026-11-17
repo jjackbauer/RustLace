@@ -1,0 +1,355 @@
+{
+  "schemaVersion": 1,
+  "description": "Normative machine-readable architecture policy for RustLace. tools/check-architecture.py interprets this file; docs/architecture-ownership.md explains it.",
+  "layers": {
+    "values": 0,
+    "numeric-kernel": 1,
+    "domain": 2,
+    "language": 3,
+    "hosts": 4,
+    "ui": 5
+  },
+  "crates": {
+    "lovelace-json": {
+      "layer": "values",
+      "responsibility": "The only JSON reader/writer; numbers keep their source text.",
+      "reuses": []
+    },
+    "lovelace-nat": {
+      "layer": "values",
+      "responsibility": "Arbitrary-precision natural numbers over base-2^64 limbs, NTT multiplication, Burnikel-Ziegler division and Newton square root.",
+      "reuses": []
+    },
+    "lovelace-int": {
+      "layer": "values",
+      "responsibility": "Sign + magnitude signed integers; truncating division and no negative zero.",
+      "reuses": [
+        "natural integers from lovelace-nat"
+      ]
+    },
+    "lovelace-rational": {
+      "layer": "numeric-kernel",
+      "responsibility": "The single canonical exact rational implementation: full arbitrary-precision GCD normalization, checked arithmetic, budgets, exactness provenance and Nat/Int conversion helpers.",
+      "reuses": [
+        "limbs and GCD from lovelace-nat",
+        "sign+magnitude arithmetic from lovelace-int"
+      ]
+    },
+    "lovelace-real": {
+      "layer": "numeric-kernel",
+      "responsibility": "Arbitrary-precision reals as int * 10^exp with exact periodic decimal metadata; owns the Rat<->Real conversion and projection APIs.",
+      "reuses": [
+        "canonical rationals from lovelace-rational",
+        "limbs from lovelace-nat",
+        "signed integers from lovelace-int"
+      ]
+    },
+    "lovelace-array": {
+      "layer": "values",
+      "responsibility": "Generic row-major NdArray<T>, shape algebra, indexing, slicing and reductions over the Field trait.",
+      "reuses": []
+    },
+    "lovelace-symbolics": {
+      "layer": "domain",
+      "responsibility": "Canonical symbolic expressions, differentiation, series, polynomial algebra, Groebner bases and the cooperative cancellation token.",
+      "reuses": [
+        "exact coefficients from lovelace-rational",
+        "limbs/integers from lovelace-nat and lovelace-int"
+      ]
+    },
+    "lovelace-systems": {
+      "layer": "domain",
+      "responsibility": "Exact queueing and operations-research models: M/M/1, M/M/c, M/M/infinity, operational laws, open Jackson networks, single-class MVA, capacity and sweeps.",
+      "reuses": [
+        "exact rationals from lovelace-rational (published as the Q alias)",
+        "limbs/integers from lovelace-nat and lovelace-int"
+      ]
+    },
+    "lovelace-lang": {
+      "layer": "language",
+      "responsibility": "Values, lexer, parser, interpreter, builtins, static scientific families, MathIR, plots and the numeric promotion/dispatch policy.",
+      "reuses": [
+        "all canonical numeric and symbolic primitives at or below the language layer"
+      ]
+    },
+    "lovelace-run": {
+      "layer": "hosts",
+      "responsibility": "The non-interactive runner and the stable JSON wire envelope.",
+      "reuses": [
+        "the engine from lovelace-lang",
+        "reals from lovelace-real",
+        "JSON from lovelace-json"
+      ]
+    },
+    "lovelace-know": {
+      "layer": "hosts",
+      "responsibility": "The observation-driven behavioural graph, JSON persistence and convergence tests.",
+      "reuses": [
+        "JSON from lovelace-json",
+        "integers/naturals from lovelace-int and lovelace-nat"
+      ]
+    },
+    "lovelace-corpus": {
+      "layer": "hosts",
+      "responsibility": "The documentation-corpus parity gate over parity/corpus/*.json.",
+      "reuses": [
+        "the engine from lovelace-lang",
+        "symbolic expressions from lovelace-symbolics",
+        "JSON from lovelace-json"
+      ]
+    },
+    "lovelace-bench": {
+      "layer": "hosts",
+      "responsibility": "The micro-benchmark harness, including exact-output digests for numerical, symbolic and systems workloads.",
+      "reuses": [
+        "systems models from lovelace-systems",
+        "reals from lovelace-real",
+        "the engine from lovelace-lang"
+      ]
+    },
+    "lovelace-desktop": {
+      "layer": "ui",
+      "responsibility": "The native workbench (Windows and Linux), execution host, incremental cache, persistence, accessibility and headless acceptance modes.",
+      "reuses": [
+        "the engine from lovelace-lang",
+        "symbolic expressions from lovelace-symbolics",
+        "JSON from lovelace-json"
+      ]
+    }
+  },
+  "excludedPackages": {
+    "lovelace-desktop-spike": "A standalone measured UI spike with its own [workspace]; deliberately outside the workspace and outside architecture enforcement."
+  },
+  "allowedEdges": {
+    "lovelace-json": [],
+    "lovelace-nat": [],
+    "lovelace-int": [
+      "lovelace-nat"
+    ],
+    "lovelace-rational": [
+      "lovelace-nat",
+      "lovelace-int"
+    ],
+    "lovelace-real": [
+      "lovelace-nat",
+      "lovelace-int",
+      "lovelace-rational"
+    ],
+    "lovelace-array": [],
+    "lovelace-symbolics": [
+      "lovelace-nat",
+      "lovelace-int",
+      "lovelace-rational"
+    ],
+    "lovelace-systems": [
+      "lovelace-nat",
+      "lovelace-int",
+      "lovelace-rational"
+    ],
+    "lovelace-lang": [
+      "lovelace-array",
+      "lovelace-int",
+      "lovelace-json",
+      "lovelace-nat",
+      "lovelace-rational",
+      "lovelace-real",
+      "lovelace-symbolics",
+      "lovelace-systems"
+    ],
+    "lovelace-run": [
+      "lovelace-int",
+      "lovelace-json",
+      "lovelace-lang",
+      "lovelace-real"
+    ],
+    "lovelace-know": [
+      "lovelace-int",
+      "lovelace-json",
+      "lovelace-nat",
+      "lovelace-rational"
+    ],
+    "lovelace-corpus": [
+      "lovelace-json",
+      "lovelace-lang",
+      "lovelace-symbolics"
+    ],
+    "lovelace-bench": [
+      "lovelace-int",
+      "lovelace-lang",
+      "lovelace-nat",
+      "lovelace-rational",
+      "lovelace-real",
+      "lovelace-systems"
+    ],
+    "lovelace-desktop": [
+      "lovelace-json",
+      "lovelace-lang",
+      "lovelace-symbolics"
+    ]
+  },
+  "devEdgesAllowed": {
+    "lovelace-run": [
+      "lovelace-nat"
+    ],
+    "lovelace-know": [
+      "lovelace-int",
+      "lovelace-json",
+      "lovelace-nat"
+    ]
+  },
+  "thirdPartyAllowed": {
+    "lovelace-desktop": [
+      "eframe",
+      "egui",
+      "resvg",
+      "raw-window-handle"
+    ]
+  },
+  "numericOwners": {
+    "natural": "lovelace-nat",
+    "signed-integer": "lovelace-int",
+    "rational": "lovelace-rational",
+    "real": "lovelace-real",
+    "array": "lovelace-array",
+    "symbolic-expression": "lovelace-symbolics",
+    "systems-models": "lovelace-systems",
+    "numeric-promotion": "lovelace-lang"
+  },
+  "duplicateDetection": {
+    "reservedTypeNames": {
+      "Nat": "lovelace-nat",
+      "Int": "lovelace-int",
+      "Rat": "lovelace-rational",
+      "Rational": "lovelace-rational",
+      "Fraction": "lovelace-rational",
+      "BigRational": "lovelace-rational",
+      "BigFraction": "lovelace-rational",
+      "Frac": "lovelace-rational",
+      "Q": "lovelace-rational",
+      "Real": "lovelace-real",
+      "NdArray": "lovelace-array"
+    },
+    "permittedRepresentations": {
+      "lovelace-lang": [
+        "Complex"
+      ],
+      "lovelace-real": [
+        "Fixed"
+      ]
+    },
+    "forbiddenTypeNames": [
+      "Rat",
+      "Rational",
+      "Fraction",
+      "BigRational",
+      "BigFraction",
+      "Frac",
+      "Q"
+    ],
+    "freeFunctionPatterns": [
+      "^(?:rat|rational|fraction|frac|q)_(?:add|sub|mul|div|rem|neg|abs|gcd|lcm|reduce|normalize|reciprocal)$"
+    ],
+    "freeFunctionOwners": [
+      "lovelace-rational"
+    ],
+    "numericFieldPairs": [
+      [
+        "numerator",
+        "denominator"
+      ],
+      [
+        "num",
+        "den"
+      ],
+      [
+        "sign",
+        "magnitude"
+      ],
+      [
+        "mantissa",
+        "exponent"
+      ]
+    ],
+    "numericFieldTypes": [
+      "Int",
+      "Nat",
+      "Rat",
+      "Real",
+      "i64",
+      "u64",
+      "i128",
+      "u128",
+      "BigInt"
+    ],
+    "arithmeticMethods": [
+      "add",
+      "sub",
+      "mul",
+      "div",
+      "rem",
+      "neg",
+      "abs",
+      "pow",
+      "gcd",
+      "lcm",
+      "reduce",
+      "normalize",
+      "reciprocal",
+      "gcd_normalize"
+    ],
+    "arithmeticTraits": [
+      "Add",
+      "Sub",
+      "Mul",
+      "Div",
+      "Rem",
+      "Neg",
+      "AddAssign",
+      "SubAssign",
+      "MulAssign",
+      "DivAssign",
+      "RemAssign"
+    ],
+    "minimumArithmeticMethods": 4,
+    "minimumRepresentationMethods": 2,
+    "permittedSpecializations": [],
+    "permittedAliases": []
+  },
+  "forbiddenPaths": [
+    {
+      "path": "lovelace-systems/src/numeric.rs",
+      "rule": "forbidden-numeric-location",
+      "reason": "RNL-MIG-002 deleted the Systems rational implementation; only the re-export alias in lib.rs is permitted."
+    },
+    {
+      "path": "lovelace-symbolics/src/rational.rs",
+      "rule": "forbidden-numeric-location",
+      "reason": "RNL-MIG-001 moved the Symbolics rational type to lovelace-rational."
+    }
+  ],
+  "exceptions": [],
+  "requiredChecks": {
+    "minimumSourceFiles": 250,
+    "minimumWorkspaceCrates": 14,
+    "requiredCrates": [
+      "lovelace-rational",
+      "lovelace-symbolics",
+      "lovelace-systems",
+      "lovelace-lang"
+    ],
+    "requiredFiles": [
+      "CONTRACT.md",
+      "docs/architecture-ownership.md",
+      "docs/adr/011-shared-rational-kernel.md",
+      "tools/check-architecture.py"
+    ],
+    "ciWorkflow": ".github/workflows/ci.yml",
+    "ciJobs": [
+      "architecture-policy",
+      "numerical-kernel",
+      "windows",
+      "linux",
+      "docs"
+    ]
+  }
+}

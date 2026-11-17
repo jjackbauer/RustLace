@@ -68,15 +68,18 @@ impl RealLiteral {
             digits.push('0');
         }
         if self.exponent >= 0 {
-            Some(Rat::new(
-                self.significand.mul(&Int::from_decimal(&digits)?),
-                Nat::from_u64(1),
-            ))
+            Some(
+                Rat::from_parts(
+                    self.significand.mul(&Int::from_decimal(&digits)?),
+                    Nat::from_u64(1),
+                )
+                .expect("a rational denominator is non-zero"),
+            )
         } else {
-            Some(Rat::new(
-                self.significand.clone(),
-                Nat::from_decimal(&digits)?,
-            ))
+            Some(
+                Rat::from_parts(self.significand.clone(), Nat::from_decimal(&digits)?)
+                    .expect("a rational denominator is non-zero"),
+            )
         }
     }
 }

@@ -16,7 +16,7 @@ use lovelace_int::Int;
 use lovelace_nat::Nat;
 
 use crate::{
-    Rat, integer_coefficients, poly_derivative, poly_div, poly_gcd, poly_remainder, rat_reduce,
+    Rat, integer_coefficients, poly_derivative, poly_div, poly_gcd, poly_remainder,
     square_free_univariate, trim_poly,
 };
 
@@ -30,8 +30,8 @@ fn is_zero_poly(p: &[Rat]) -> bool {
 fn gcd_rational(a: &Rat, b: &Rat) -> Rat {
     let numerator = a.numerator().magnitude().gcd(b.numerator().magnitude());
     let denominator = a.denominator().lcm(b.denominator());
-    let signed = Int::from_decimal(&numerator.to_decimal()).unwrap_or_else(Int::zero);
-    rat_reduce(&Rat::from_parts(signed, denominator))
+    Rat::from_parts(Int::from_nat(numerator), denominator)
+        .expect("a rational denominator is non-zero")
 }
 
 /// The rational content of a polynomial: the gcd of its nonzero coefficient magnitudes. The
@@ -66,7 +66,7 @@ pub fn primitive_part(coeffs: &[Rat]) -> Vec<Rat> {
     let mut out = Vec::with_capacity(p.len());
     for coefficient in &p {
         match coefficient.div(&divisor) {
-            Some(quotient) => out.push(rat_reduce(&quotient)),
+            Some(quotient) => out.push(quotient),
             None => out.push(coefficient.clone()),
         }
     }
@@ -86,7 +86,7 @@ fn multiply(a: &[Rat], b: &[Rat]) -> Vec<Rat> {
             continue;
         }
         for (j, right) in b.iter().enumerate() {
-            out[i + j] = rat_reduce(&out[i + j].add(&left.mul(right)));
+            out[i + j] = out[i + j].add(&left.mul(right));
         }
     }
     trim_poly(out)
@@ -141,11 +141,11 @@ fn determinant(matrix: &[Vec<Rat>]) -> Rat {
         }
         for i in k + 1..n {
             for j in k + 1..n {
-                let left = rat_reduce(&m[i][j].mul(&m[k][k]));
-                let right = rat_reduce(&m[i][k].mul(&m[k][j]));
+                let left = m[i][j].mul(&m[k][k]);
+                let right = m[i][k].mul(&m[k][j]);
                 let numerator = left.add(&right.neg());
                 m[i][j] = match numerator.div(&previous) {
-                    Some(value) => rat_reduce(&value),
+                    Some(value) => value,
                     None => Rat::zero(),
                 };
             }
@@ -208,7 +208,7 @@ pub fn discriminant(f: &[Rat]) -> Rat {
     let flip = ((n * (n - 1)) / 2) % 2 != 0;
     let signed = if flip { resultant.neg() } else { resultant };
     match signed.div(&leading) {
-        Some(value) => rat_reduce(&value),
+        Some(value) => value,
         None => Rat::zero(),
     }
 }
@@ -289,7 +289,8 @@ fn rational_roots(coeffs: &[Rat]) -> Vec<Rat> {
                 } else {
                     magnitude
                 };
-                let candidate = Rat::new(signed, denominator.clone());
+                let candidate = Rat::from_parts(signed, denominator.clone())
+                    .expect("a rational denominator is non-zero");
                 if roots
                     .iter()
                     .any(|root| root.cmp(&candidate) == Ordering::Equal)
@@ -369,7 +370,7 @@ pub fn factor(coeffs: &[Rat]) -> PolynomialFactors {
         factors.push((primitive, 1));
     }
     let content = if emitted {
-        rat_reduce(&primitive_content.mul(&leading))
+        primitive_content.mul(&leading)
     } else {
         primitive_content
     };

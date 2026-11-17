@@ -12,13 +12,19 @@
    runs on (`push: branches: [main]` plus `pull_request` in `.github/workflows/ci.yml`).
 3. **Make the change in the layer that owns it.** Behaviour belongs in `lovelace-lang` (or below);
    a host that re-implements a rule is a bug even when its output matches. The desktop drives the
-   engine through `Evaluator`, never around it.
+   engine through `Evaluator`, never around it. Before adding a data type, numerical primitive,
+   serializer or execution subsystem, read [`docs/architecture-ownership.md`](architecture-ownership.md)
+   and identify the canonical owner. If the primitive exists, improve it there; a domain-local
+   replacement needs an ADR and a documented exception, not a new type.
 4. **Test at the layer you touched** and then run the gate:
 
    ```console
    $ cargo test -p lovelace-lang      # the crate you touched; a desktop change runs bare here too
    $ cargo test --workspace
    $ cargo run --release -p lovelace-corpus
+   $ python tools/check-architecture.py
+   $ python tools/test-architecture-gates.py
+   $ cargo test -p lovelace-lang --test cross_library
    ```
 
    Read the `test result:` line, not only the exit status: a `cargo test -p <crate> <filter>` whose
@@ -76,6 +82,38 @@ A reviewer should be able to answer these from the diff alone:
 5. **Is anything weaker?** Deleting a test, skipping one, relaxing an assertion, or dropping a
    fixture is a change to the contract and needs its own justification (the repository has one
    recorded residual of this kind, in `docs/rustlace-notes.md`).
+6. **Is ownership preserved?** A new numerical type, arithmetic trait implementation or dependency
+   edge needs a policy decision, not only a passing test. The `architecture-policy` job is a
+   required check; a green unit-test suite cannot outvote a second rational implementation. Changes
+   to the architecture policy, checker, mutation fixtures, `docs/architecture-ownership.md` or the
+   rational kernel are declared in `.github/CODEOWNERS`, so the owner is requested even though
+   GitHub's required code-owner review cannot be enabled while the repository has one collaborator,
+   the PR author (DEC-002). An arithmetic impl whose target is empty or one of its generic
+   parameters is reported as `review-required`; that is a review gate, not a pass, and the author
+   classifies or narrows the impl instead of dismissing it. A partial representation with two
+   numeric-typed fields and two arithmetic methods is flagged as
+   `duplicate-numeric-representation` below the four-method threshold, through
+   `minimumRepresentationMethods: 2`. The reviewer asks the five questions in
+   RNL-AGT-002: does it exist, is it suitable, can the shared
+   implementation be improved, would a new one create competing semantics, and does an approved ADR
+   authorize it?
+7. **Do the surfaces still agree?** A change to exact arithmetic, promotion, conversion or systems
+   values is checked through the kernel, Symbolics, Systems and the language with
+   `cargo test -p lovelace-lang --test cross_library`, not only through the layer that changed.
+
+## Required status checks
+
+`main` moves only through the CI jobs named in `tools/architecture-policy.json`
+(`requiredChecks.ciJobs`): `architecture-policy` (both OS variants), `numerical-kernel`, `windows`
+(full workspace tests and the release corpus), `linux` and `docs` (both OS variants). `main`
+protection requires the seven PR checks, strict up-to-date branches, `enforce_admins`, and it
+disables force pushes and branch deletion. A negative-probe PR carrying a deliberately forbidden
+Systems rational failed both architecture checks and its merge was refused. A job removed from
+`.github/workflows/ci.yml` fails the architecture checker (`required-ci-job-missing`), so the claim
+that a check is required is itself checked. `.github/CODEOWNERS` routes architecture-policy,
+checker, mutation-fixture, ownership-document and rational-kernel changes to the owner; required
+code-owner review is not enabled because the only collaborator is the PR author and GitHub does not
+allow self-approval (DEC-002).
 
 ## Documentation requirements
 
@@ -93,7 +131,14 @@ A change is done when all of the following hold:
   `cargo build --release -p lovelace-desktop`.
 - The tests for its layer pass, and `cargo test --workspace` has the same pass/fail shape as before
   (the single known-ignored test stays the only ignore).
+- `python tools/check-architecture.py` exits 0 and `python tools/test-architecture-gates.py`
+  passes its 21 scenarios, including the two-field/two-method `partial-duplicate-kernel`; a new
+  crate is declared in `tools/architecture-policy.json` with its
+  layer, responsibility, dependencies and reused abstractions, and a policy, checker or ownership
+  change is declared in `.github/CODEOWNERS`.
 - The documentation corpus gate passes in release: 231 of 231.
+- Numerical changes also pass the `numerical-kernel` gate: the canonical-kernel tests, the seeded
+  property campaigns, both independent Python oracles and the cross-library consistency tests.
 - Any new behaviour is reachable from the real host surface — `lovelace-run` for the engine, the
   workbench or a headless mode for the desktop — and that path was exercised.
 - The docs that describe the touched area were updated in the same change: `docs/architecture.md`

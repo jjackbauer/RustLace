@@ -670,7 +670,7 @@ make_crate_examples_tree() {
 assert_eq!(1 + 1, 2);
 ```
 MD
-    for dep in lovelace-array lovelace-int lovelace-json lovelace-lang lovelace-nat lovelace-real lovelace-symbolics lovelace-systems; do
+    for dep in lovelace-array lovelace-int lovelace-json lovelace-lang lovelace-nat lovelace-rational lovelace-real lovelace-symbolics lovelace-systems; do
         mkdir -p -- "$root/$dep" || exit 2
         printf '[package]\nname = "%s"\nversion = "0.0.0"\n' "$dep" >"$root/$dep/Cargo.toml"
     done

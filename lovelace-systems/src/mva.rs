@@ -20,9 +20,9 @@
 //! Multi-server FCFS, priorities, finite buffers, class switching and mixed workloads are refused
 //! with the failing assumption named; a closed model is never approximated by an M/M/1 network.
 
+use crate::Q;
 use crate::errors::SystemsError;
 use crate::model::{Cancel, QueueNetwork, ServiceDiscipline, SolverOptions, Workload};
-use crate::numeric::Q;
 use crate::operational_laws::{check_forced_flow, check_interactive, check_little};
 use crate::results::{
     AggregateResult, AnalysisResult, LawCheck, PopulationPoint, Provenance, SolverStatus,
@@ -243,12 +243,26 @@ pub fn analyze_closed(
             options.check_rational(&current[index])?;
         }
         network_response = sum_response;
+        // Occupancy excludes the customers outside the network in their think state:
+        // Q_network(n) = n - X(n) * Z (RNL-MIG-006).
+        let in_network = Q::from_u64(n).sub(&throughput.mul(&closed.think_time));
+        if in_network.is_negative() {
+            return Err(SystemsError::invariant(
+                "the in-network occupancy is negative",
+            ));
+        }
+        let station_sum = current.iter().fold(Q::zero(), |acc, value| acc.add(value));
+        if station_sum != in_network {
+            return Err(SystemsError::invariant(&format!(
+                "at population {n} the station occupancies sum to {station_sum}, but n - X*Z is {in_network}"
+            )));
+        }
         if collect {
             population_points.push(PopulationPoint {
                 population: n,
                 throughput: throughput.clone(),
                 response_time: network_response.clone(),
-                occupancy: Q::from_u64(n),
+                occupancy: in_network,
                 station_occupancy: current.clone(),
             });
         }
@@ -256,6 +270,12 @@ pub fn analyze_closed(
     }
 
     let occupancy: Q = previous.iter().fold(Q::zero(), |acc, value| acc.add(value));
+    let final_in_network = Q::from_u64(population).sub(&throughput.mul(&closed.think_time));
+    if occupancy != final_in_network {
+        return Err(SystemsError::invariant(&format!(
+            "the aggregate occupancy {occupancy} differs from n - X*Z ({final_in_network})"
+        )));
+    }
     let mut stations_out: Vec<StationResult> = Vec::with_capacity(count);
     let mut queue_length = Q::zero();
     let mut law_checks: Vec<LawCheck> = Vec::new();
@@ -671,5 +691,68 @@ mod tests {
             solved += 1;
         }
         assert!(solved >= 20, "the randomized sweep solved only {solved}");
+    }
+
+    /// RNL-MIG-006: a collected population point reports the in-network occupancy, not the whole
+    /// closed population. With a positive think time some customers are always thinking, so
+    /// `Q_network(n) = n - X(n) * Z`, and that value must equal the sum of station occupancies.
+    #[test]
+    fn collected_populations_exclude_customers_in_think_state() {
+        let think = Q::from_i64(1).div(&Q::from_i64(2)).unwrap();
+        let model = closed(
+            vec![
+                station(
+                    "cpu",
+                    ServiceDiscipline::FcfsSingleServer,
+                    Q::from_i64(1).div(&Q::from_i64(10)).unwrap(),
+                    Q::one(),
+                ),
+                station(
+                    "io",
+                    ServiceDiscipline::Delay,
+                    Q::from_i64(1).div(&Q::from_i64(5)).unwrap(),
+                    Q::one(),
+                ),
+            ],
+            4,
+            think.clone(),
+        );
+        let options = SolverOptions {
+            collect_populations: true,
+            ..SolverOptions::default()
+        };
+        let result = analyze_closed(&model, &options, &NeverCancel).expect("solved");
+        let points = result
+            .populations
+            .as_ref()
+            .expect("populations were requested");
+        assert_eq!(points.len(), 4);
+        for point in points {
+            let expected = Q::from_u64(point.population).sub(&point.throughput.mul(&think));
+            assert_eq!(point.occupancy, expected, "Q_network = n - X*Z");
+            let station_sum = point
+                .station_occupancy
+                .iter()
+                .fold(Q::zero(), |acc, value| acc.add(value));
+            assert_eq!(point.occupancy, station_sum, "aggregate is the station sum");
+            assert!(
+                point.occupancy < Q::from_u64(point.population),
+                "with positive think time a customer is in the think state at population {}",
+                point.population
+            );
+        }
+        // The final aggregate matches the last collected point and its station sum.
+        let last = points.last().expect("non-empty");
+        assert_eq!(result.aggregate.occupancy, last.occupancy);
+        assert_eq!(
+            result.aggregate.occupancy,
+            Q::from_u64(4).sub(&result.aggregate.throughput.mul(&think))
+        );
+        let station_sum = result
+            .stations
+            .iter()
+            .fold(Q::zero(), |acc, value| acc.add(&value.occupancy));
+        assert_eq!(result.aggregate.occupancy, station_sum);
+        assert!(result.laws_hold());
     }
 }

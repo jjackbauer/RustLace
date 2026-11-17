@@ -14,7 +14,10 @@ use super::*;
 const TOLERANCE: f64 = 1e-20;
 
 fn rational(num: i64, den: u64) -> Expr {
-    Expr::Num(Rat::new(Int::from_i64(num), Nat::from_u64(den)))
+    Expr::Num(
+        Rat::from_parts(Int::from_i64(num), Nat::from_u64(den))
+            .expect("a rational denominator is non-zero"),
+    )
 }
 
 fn half() -> Expr {

@@ -20,6 +20,9 @@ cargo test --workspace
 cargo run --release -p lovelace-corpus      # 231 records; run it in release (see below)
 cargo test -p lovelace-desktop
 cargo run -p lovelace-desktop -- --gui-selftest
+python tools/check-architecture.py          # ownership and dependency policy
+python tools/test-architecture-gates.py     # mutation self-test for the checker
+cargo test -p lovelace-lang --test cross_library
 ```
 
 Toolchain: Rust 1.85+, edition 2024, MSVC linker on Windows. The engine builds offline; the desktop
@@ -37,6 +40,17 @@ gate overflows its main-thread stack at `lang/061` on some hosts; the release bu
    targets add eframe's `glow` backend. The desktop is not Windows-only.
 2. **No floating point in a value path.** Reals are `int * 10^exp` plus exact period metadata.
    `1/3` is `0.(3)`, never a rounding.
+3. **One numerical foundation.** `lovelace-rational` owns the only general-purpose rational
+   implementation. `lovelace-symbolics::Rat` is a re-export and `lovelace-systems::Q` is a
+   type-identical alias; neither crate may define numerator/denominator storage, GCD normalization or
+   scalar arithmetic traits of its own. The canonical owners and permitted dependency edges are in
+   `tools/architecture-policy.json`, explained by `docs/architecture-ownership.md`, and enforced by
+   `python tools/check-architecture.py`. Improve the owner; do not start a second kernel. A new crate
+   must declare its layer, responsibility, dependencies and reused abstractions in that policy.
+4. **Exactness is four claims, not one.** Keep computation exactness, input fidelity, representation
+   exactness and render precision separate. A `Real` is a projection; an exact systems value crosses
+   the language and wire boundary through the `exact_values` numerator/denominator record. Never
+   promote a precision-limited `Real` to an exact rational.
 3. **No `unsafe` outside `lovelace-desktop/src/win32`.** The four `#![forbid(unsafe_code)]` crates
    enforce it for themselves.
 4. **Rendering is the contract.** The rendered text, the error sentences and the kind names are pinned
@@ -63,6 +77,8 @@ gate overflows its main-thread stack at `lang/061` on some hosts; the release bu
 | the builtin catalogue (names, arity, categories, docs) | `lovelace-lang/src/registry.rs` |
 | builtin implementations | `lovelace-lang/src/builtins.rs` (`pub fn call`) |
 | the systems library | `lovelace-systems/src/lib.rs`, `lovelace-lang/src/systems_family.rs` |
+| the canonical rational kernel | `lovelace-rational/src/lib.rs`, `docs/crates/lovelace-rational.md` |
+| architecture ownership | `docs/architecture-ownership.md`, `tools/architecture-policy.json` |
 | cancellation | `lovelace-lang/src/cancellable.rs`, `lovelace-symbolics/src/cancel.rs` |
 | the wire envelope | `lovelace-run/src/main.rs` |
 | the parity gate | `lovelace-corpus/src/main.rs`, `parity/corpus/` |
@@ -78,6 +94,9 @@ The long-form documentation starts at [`docs/README.md`](../docs/README.md); the
 ## When changing code
 
 - Test at the layer you touched, then run `cargo test --workspace` and the release corpus gate.
+- Before adding a primitive or type, search the workspace for the canonical owner and record your
+  reuse decision. Run `python tools/check-architecture.py` and the cross-library tests; a local test
+  pass is not completion evidence (RNL-AGT-005).
 - Format with `cargo fmt --all`; CI checks it. Clippy runs without `-D warnings` because the tree has
   pre-existing warnings — do not add new ones silently.
 - Update the docs that describe the touched area in the same change (architecture, crate page,

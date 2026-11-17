@@ -1,0 +1,25 @@
+# Code-owner routing for the architecture policy and its normative documents.
+#
+# The repository currently has one collaborator, who is also the author of the RNL-001 PR.
+# GitHub's "require review from code owners" cannot be enabled without a second reviewer
+# (self-approval is not allowed), so this file declares ownership and routes review without
+# making the author's own PR unmergeable. The required status checks on `main` are enforced
+# independently (see tools/architecture-policy.json and docs/architecture-ownership.md).
+
+# Architecture policy, checker and mutation fixtures.
+/tools/architecture-policy.json            @jjackbauer
+/tools/check-architecture.py               @jjackbauer
+/tools/test-architecture-gates.py          @jjackbauer
+/tools/architecture-fixtures/              @jjackbauer
+
+# Normative ownership and the consolidation decision.
+/docs/architecture-ownership.md            @jjackbauer
+/docs/adr/011-shared-rational-kernel.md    @jjackbauer
+
+# The canonical rational kernel and its conversion/oracle surface.
+/lovelace-rational/                        @jjackbauer
+/parity/rational/                          @jjackbauer
+/parity/systems/                           @jjackbauer
+
+# CI gates that enforce the policy.
+/.github/workflows/ci.yml                  @jjackbauer

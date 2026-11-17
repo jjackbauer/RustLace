@@ -4,8 +4,9 @@
 
 The systems family is the analytical queueing and operations-research surface: ten builtins backed
 by the [`lovelace-systems`](../../lovelace-systems/src/lib.rs) crate. Every number is an exact
-rational (`lovelace-systems::Q`); no value crosses as a binary float, and the display precision only
-chooses how a rational is rendered as a `Real`.
+rational (`lovelace-systems::Q`, a type-identical alias of the canonical `lovelace_rational::Rat`);
+no value crosses as a binary float, and the display precision only chooses how a rational is
+rendered as a `Real` projection.
 
 It contributes **10** of the engine's 134 builtins, all in the `Systems` category, and is declared
 by ten `module: "Systems"` descriptors in
@@ -40,9 +41,19 @@ builtins.
 
 `sys_mm1`, `sys_mmc` and `sys_delay` return a `StationAnalysis` record; `sys_analyze` and `sys_mva`
 return an `Analysis` record with `stations` (one `StationMetrics` record per station, declaration
-order), network metrics, `laws` and provenance. `sys_bottlenecks` returns a `Bottlenecks` record and
+order), network metrics, `laws` and provenance. Every record's numeric fields are `Real`
+projections, and each carries an additive `exact_values` record whose fields are `ExactRational`
+records (`numerator` Integer, `denominator` Natural); see Precision behaviour. `sys_bottlenecks` returns a `Bottlenecks` record and
 `sys_sweep` returns a `Sweep` record whose `points` each carry their own `Analysis`. Every record is
 read by field name; no consumer parses a display string.
+
+The model-construction records are values too, and they carry the sidecar. `sys_station` returns a
+`Station` with `exact_values.service_time`, `exact_values.visits` and
+`exact_values.service_demand`; `sys_open` and `sys_closed` return a `QueueNetwork` with
+`exact_values.arrival_rate` (open workload) or `exact_values.think_time` (closed workload). The
+adapter's `parse_station` and `parse_network` consume the sidecar before the decimal field and fall
+back only when the whole sidecar is absent, so a `1/97` service time or think time reaches
+`sys_analyze` or `sys_mva` without passing through the decimal projection.
 
 ## Precision behaviour
 
@@ -59,6 +70,19 @@ A systems result states three independent things in its provenance record:
 Exactness is not world-truth: the model's assumptions are a claim about the system being modeled,
 and the crate does not test them. A closed-model cycle time excludes think time and is reported
 separately.
+
+**Exact values through the language and wire.** A decimal field is a projection; the exact value is
+beside it. `sys_mm1(8, 10).exact_values.utilization` is
+`ExactRational(numerator: 4, denominator: 5)`, while `sys_mm1(8, 10).utilization` is `0.8`. The
+same additive record appears on `Analysis`, `StationMetrics`, `LawCheck`, `PopulationPoint`,
+`Bottlenecks`, `BottleneckStation` and `SweepPoint`, and on the model-construction records
+`Station` and `QueueNetwork` (service time, visits and service demand; or arrival rate and think
+time). The parser treats `exact_values` as authoritative and uses the decimal field only when the
+whole sidecar is absent; a present but malformed sidecar is refused rather than falling back. The
+wire envelope keeps `protocolVersion` 2:
+the new record fields are additive and existing consumers read fields by name. A
+precision-limited `Real` is refused as a `sys_*` input (`InvalidArgument`/`TypeMismatch`) instead of
+being promoted to an exact rational.
 
 ## Errors
 
@@ -80,8 +104,10 @@ Every refusal is a structured `LangError`; the systems crate's code and category
   silently.
 - The MVA result is exact for the supported product-form network; it does not predict tail latency,
   and no systems builtin claims a p95/p99 without an appropriate distributional model.
-- The crate carries its own unit and golden tests (`cargo test -p lovelace-systems`), the language
-  family pins the `sys_*` records and refusals (`cargo test -p lovelace-lang systems_family`), and
+- The crate carries its own unit and golden tests (`cargo test -p lovelace-systems`) plus the
+  independent Python oracle (`cargo test -p lovelace-systems --test oracle`), the language family
+  pins the `sys_*` records and refusals (`cargo test -p lovelace-lang systems_family`), including
+  the `1/97` open and closed construction-to-analysis paths, and
   `parity/corpus/systems.json` runs the documented examples through the corpus gate.
 
 ## Examples

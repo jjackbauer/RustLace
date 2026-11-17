@@ -5,9 +5,9 @@
 //! `UnstableStation` and publishes no finite metric. `lambda = 0` is a defined, empty arrival
 //! stream and answers zero throughput/occupancy with the station's service time intact.
 
+use crate::Q;
 use crate::errors::SystemsError;
 use crate::model::{Cancel, ServiceDiscipline, SolverOptions};
-use crate::numeric::Q;
 use crate::results::{AggregateResult, AnalysisResult, LawCheck, Provenance, StationResult};
 
 /// The stable solver version published with every result.
@@ -135,6 +135,30 @@ pub fn solve_station(
 
     let demand = visits.mul(service_time);
     let servers = discipline.servers();
+
+    // With no arrivals every stationary metric is zero, whatever the discipline. Handling this
+    // explicitly keeps an unused multi-server station (zero visits, zero service time) a defined
+    // model instead of turning a 1/0 invariant into a fabricated zero.
+    if arrival.is_zero() {
+        let probability_waiting =
+            matches!(discipline, ServiceDiscipline::MultiServer { .. }).then(Q::zero);
+        return Ok(StationResult {
+            id: id.to_string(),
+            discipline: discipline.as_str(),
+            servers,
+            visits: visits.clone(),
+            service_time: service_time.clone(),
+            service_demand: demand,
+            throughput: Q::zero(),
+            utilization: Q::zero(),
+            busy_servers: Q::zero(),
+            response_time: service_time.clone(),
+            waiting_time: Q::zero(),
+            occupancy: Q::zero(),
+            queue_length: Q::zero(),
+            probability_waiting,
+        });
+    }
     let (
         utilization,
         busy_servers,
@@ -192,9 +216,10 @@ pub fn solve_station(
                 return Err(SystemsError::unstable_station(id, &rho.to_string()));
             }
             let probability = erlang_c(&traffic, servers, options)?;
-            let spare = Q::from_u64(servers as u64)
-                .mul(&Q::one().div(service_time).unwrap_or_else(Q::zero))
-                .sub(arrival);
+            let service_rate = Q::one()
+                .checked_div(service_time)
+                .map_err(|_| SystemsError::invalid_service_time(id, &service_time.to_string()))?;
+            let spare = Q::from_u64(servers as u64).mul(&service_rate).sub(arrival);
             let wait = probability.div(&spare).ok_or_else(|| {
                 SystemsError::degenerate_model("the multi-server station has no spare capacity")
             })?;
@@ -319,7 +344,7 @@ fn analyze_one(
     let utilization_rhs = match station.servers {
         Some(servers) => offered
             .div(&Q::from_u64(servers as u64))
-            .unwrap_or_else(Q::zero),
+            .ok_or_else(|| SystemsError::internal("the station server count divided by zero"))?,
         None => offered,
     };
     let utilization = LawCheck::exact("utilization", station.utilization.clone(), utilization_rhs);
