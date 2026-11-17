@@ -121,7 +121,8 @@ pub struct StationResult {
     /// Utilization (dimensionless; a delay center reports its mean busy-server count here and in
     /// `busy_servers`).
     pub utilization: Q,
-    /// Mean busy servers (may exceed 1 only for a delay center).
+    /// Mean busy servers, `a = c * rho`; it can exceed 1 at a multi-server station or a delay
+    /// center, where `utilization` is `a / c` or `a`.
     pub busy_servers: Q,
     /// Mean residence time in the station (service + wait), in seconds per visit.
     pub response_time: Q,

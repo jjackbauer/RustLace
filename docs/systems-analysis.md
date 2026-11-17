@@ -161,7 +161,7 @@ per visit; the network aggregate is per transaction.
 |---|---|
 | `throughput` | jobs per second through the station |
 | `utilization` | `rho`; for a delay center, the mean number in service |
-| `busy_servers` | mean busy servers (may exceed 1 only for a delay center) |
+| `busy_servers` | mean busy servers, `a = c * rho`; it can exceed 1 at a multi-server or delay center, which is why it is reported apart from `utilization` (`a / c` for M/M/c, `a` for a delay center) |
 | `response_time` | residence time per visit (service + wait), seconds |
 | `waiting_time` | wait before service per visit, seconds |
 | `occupancy` | mean number in the station (in service + waiting) |
@@ -171,6 +171,26 @@ per visit; the network aggregate is per transaction.
 A finite-capacity station at or above utilization 1 has no stationary distribution and is refused
 with `UnstableStation` / `DomainError`, naming the station and its offered utilization. A
 multi-server station does not need `c` in the metric names: `utilization` is already `a / c`.
+
+`busy_servers` is the count `a = c * rho`, not the normalized `utilization`: an M/M/c station can
+have more than one busy server on average while `utilization` stays below 1. For `sys_mmc(8, 5, 2)`
+the mean busy-server count is `8/5 = 1.6` and the per-server utilization is `4/5`:
+
+```lovelace
+sys_mmc(8, 5, 2).busy_servers
+```
+
+```text
+= 1.6 (Real)
+```
+
+```lovelace
+sys_mmc(8, 5, 2).utilization
+```
+
+```text
+= 0.8 (Real)
+```
 
 A zero arrival rate is a defined, empty arrival stream: throughput, utilization, occupancy and
 queue length are 0, `response_time` is the station's service time, `probability_waiting` is 0 for
@@ -460,7 +480,11 @@ Error [SweepEndpointNotOnGrid/DomainError]: The sweep endpoint 4 is not reachabl
 
 ## Results and provenance
 
-Every solver returns `Result<AnalysisResult, SystemsError>`. An `AnalysisResult` carries:
+The network-analysis and standalone queueing solvers (`mm1`, `mmc`, `mm_infinity`, `analyze`,
+`analyze_open`, `analyze_closed`) return `Result<AnalysisResult, SystemsError>`. `solve_station`
+returns a single `StationResult`, the sweeps return a `SweepResult`, and `bottlenecks` returns a
+`BottleneckAnalysis` directly (the full table is under The Rust surface). An `AnalysisResult`
+carries:
 
 | Field | Contents |
 |---|---|
