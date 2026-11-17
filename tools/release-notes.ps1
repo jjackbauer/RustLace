@@ -36,6 +36,12 @@
 
 .PARAMETER SizeBytes
     Size of the released executable in bytes.
+
+.PARAMETER RustcVersion
+    The exact `rustc --version` of the release job, recorded in the provenance section.
+
+.PARAMETER Targets
+    The build targets, recorded in the provenance section.
 #>
 [CmdletBinding()]
 param(
@@ -47,7 +53,9 @@ param(
     [string] $CiUrl,
     [string] $CiSha,
     [string] $Sha256,
-    [string] $SizeBytes
+    [string] $SizeBytes,
+    [string] $RustcVersion,
+    [string] $Targets = 'x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu'
 )
 
 Set-StrictMode -Version Latest
@@ -261,6 +269,16 @@ if ($Sha256) {
 [void] $out.Add('')
 [void] $out.Add('The builds are unsigned: Windows SmartScreen shows "Unknown publisher" until the')
 [void] $out.Add('hash earns reputation. The hash identifies the exact file, not a signer.')
+
+[void] $out.Add('')
+[void] $out.Add('## Provenance')
+[void] $out.Add('')
+[void] $out.Add("- Version: ``v$Version``")
+if ($CiSha) { [void] $out.Add("- Commit: ``$CiSha``") }
+if ($CiUrl) { [void] $out.Add("- CI run: $CiUrl") }
+if ($RustcVersion) { [void] $out.Add("- Toolchain: ``$RustcVersion``") }
+[void] $out.Add("- Build targets: ``$Targets``")
+[void] $out.Add('- Checksums: `SHA256SUMS.windows` and `SHA256SUMS.linux` (attached)')
 
 if ($tag -and $Repository) {
     [void] $out.Add('')

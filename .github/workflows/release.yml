@@ -327,6 +327,7 @@ jobs:
           $previousTag = $null
           $described = & git describe --tags --abbrev=0 --match 'v[0-9]*' "$($env:TAG)^" 2>$null
           if ($LASTEXITCODE -eq 0 -and $described) { $previousTag = ([string] $described).Trim() }
+          $rustcVersion = (& rustc --version).Trim()
           $arguments = @{
             Version     = $env:NEXT
             OutputPath  = 'RELEASE_NOTES.md'
@@ -335,6 +336,7 @@ jobs:
             CiSha       = $env:CI_SHA
             Sha256      = $env:SHA256
             SizeBytes   = $env:SIZE
+            RustcVersion = $rustcVersion
           }
           if ($previousTag) { $arguments['PreviousTag'] = $previousTag }
           & ./tools/release-notes.ps1 @arguments
