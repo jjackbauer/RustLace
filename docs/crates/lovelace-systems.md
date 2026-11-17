@@ -171,6 +171,8 @@ assert_eq!(mva.aggregate.throughput.to_string(), "2000/101");
 The same models are reachable from the Lovelace language as the ten `sys_*` builtins, documented
 with their records and refusals in [the systems extension page](../extensions/systems.md); that
 page also covers [running them in the desktop IDE](../extensions/systems.md#in-the-desktop-ide).
+[The systems analysis guide](../systems-analysis.md) is the complete account of the model
+vocabulary, both solvers, capacity, sweeps and the Rust surface.
 
 ### Tests
 

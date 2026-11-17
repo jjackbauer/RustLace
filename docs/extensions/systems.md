@@ -8,6 +8,9 @@ rational (`lovelace-systems::Q`, a type-identical alias of the canonical `lovela
 no value crosses as a binary float, and the display precision only chooses how a rational is
 rendered as a `Real` projection.
 
+[The systems analysis guide](../systems-analysis.md) is the long-form companion: the full model
+vocabulary, both network solvers, capacity, sweeps and the Rust surface.
+
 It contributes **10** of the engine's 134 builtins, all in the `Systems` category, and is declared
 by ten `module: "Systems"` descriptors in
 [`lovelace-lang/src/registry.rs`](../../lovelace-lang/src/registry.rs). The adapter that parses
