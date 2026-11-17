@@ -38,9 +38,12 @@ a numeric field is reproduced byte-for-byte instead of round-tripping through bi
 (`lovelace-json/src/lib.rs`).
 
 **Invariant.** No floating point appears in any value path. `#![forbid(unsafe_code)]` guards
-`lovelace-array`, `lovelace-int` and `lovelace-know`; `lovelace-desktop` carries
-`#![cfg_attr(not(windows), forbid(unsafe_code))]`, so the whole crate forbids unsafe code on
-non-Windows targets.
+`lovelace-array`, `lovelace-int`, `lovelace-know`, `lovelace-json`, `lovelace-nat`, `lovelace-real`,
+`lovelace-symbolics`, `lovelace-lang`, `lovelace-corpus` and `lovelace-bench`; `lovelace-desktop`
+carries `#![cfg_attr(not(windows), forbid(unsafe_code))]`, so the whole crate forbids unsafe code on
+non-Windows targets. `lovelace-run` carries `#![deny(unsafe_code)]`; its sole allowed lane is the
+Windows terminal module in `src/repl.rs` (three kernel32 console calls, documented with SAFETY
+comments and validated handles).
 
 ## 2. Numeric kernels (`lovelace-real`, `lovelace-array`, `lovelace-symbolics`)
 

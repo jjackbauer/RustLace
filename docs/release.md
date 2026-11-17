@@ -75,8 +75,8 @@ job definitions and produces four job results; all four must be green before any
 
 | Job | Runner | What it proves before a tag |
 |---|---|---|
-| `Windows (full workspace)` | `windows-latest` | `cargo fmt --all -- --check`, clippy, `cargo test --workspace`, and the release desktop build (uploaded as `lovelace-desktop-windows-x86_64`) |
-| `Linux (engine crates + GUI desktop under Xvfb)` | `ubuntu-24.04`, pinned rather than `ubuntu-latest` | the engine crates, the GUI desktop built and self-tested under Xvfb, the glibc guard, and the Linux GUI binary (uploaded as `lovelace-desktop-linux-gui-x86_64`) |
+| `Windows (full workspace)` | `windows-latest` | `cargo fmt --all -- --check`, clippy, `cargo test --workspace`, the blocking release corpus gate (`cargo run --release -p lovelace-corpus`), and the release desktop build (uploaded as `lovelace-desktop-windows-x86_64`) |
+| `Linux (engine crates + GUI desktop under Xvfb)` | `ubuntu-24.04`, pinned rather than `ubuntu-latest` | the engine crates, the blocking release corpus gate (`cargo run --release -p lovelace-corpus`), the GUI desktop built and self-tested under Xvfb, the glibc guard, and the Linux GUI binary (uploaded as `lovelace-desktop-linux-gui-x86_64`) |
 | `Documentation examples (ubuntu-latest)` | `ubuntu-latest` | both example runners, **Compile and run the crate-page examples** (`bash tools/check-crate-examples.sh`), **Run the tutorials** (`bash tools/run-tutorials.sh`), all three `check-docs.sh` modes (links and symbols, claims, README), `check-reference-pages.sh`, and the mutation self-test in `test-docs-gates.sh` |
 | `Documentation examples (windows-latest)` | `windows-latest` | the same documentation gate on Windows |
 

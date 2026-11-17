@@ -212,13 +212,15 @@ retired_term_allowed() {
   esac
 }
 
-# A directory path that the citing line itself declares absent is not a stale
-# claim that the directory exists: docs/editorial.md names `docs/how-to/` as a
-# planned page shape and says in the same line that no how-to pages exist yet.
-# The markers are deliberately narrow and are measured on the citing line.
-directory_ref_documented_absent() {
+# A path that the citing line itself declares absent is not a stale claim that
+# the path exists: docs/editorial.md names `docs/how-to/` as a planned page
+# shape and says in the same line that no how-to pages exist yet, and a change
+# record may name a file it deleted. The markers are deliberately narrow and
+# are measured on the citing line.
+ref_documented_absent() {
   case "$1" in
     *"exist yet"*|*"does not exist"*|*"do not exist"*|*"not part of this repository"*|*"no longer"*|*"not yet"*) return 0 ;;
+    *"deleted"*|*"deletes"*|*"deleting"*|*"deletion"*|*"removed"*|*"removes"*|*"removing"*|*"removal"*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -509,7 +511,7 @@ while IFS= read -r -d '' file; do
             */*) ;;
             *) continue ;;
           esac
-          if directory_ref_documented_absent "${text,,}"; then
+          if ref_documented_absent "${text,,}"; then
             continue
           fi
           refs_checked=$((refs_checked + 1))
@@ -525,6 +527,13 @@ while IFS= read -r -d '' file; do
         */*.rs|*/*.toml|*/*.yml|*/*.yaml|*/*.json|*/*.md) ;;
         *) continue ;;
       esac
+
+      # A file the citing line declares deleted/removed is a removal record, not
+      # a claim that the file still exists. The negative case (an undeclared
+      # missing path) still fails below.
+      if ref_documented_absent "${text,,}"; then
+        continue
+      fi
 
       refs_checked=$((refs_checked + 1))
       if ! resolve_ref "$ref" "$doc_dir"; then

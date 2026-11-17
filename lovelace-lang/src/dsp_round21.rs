@@ -406,44 +406,23 @@ fn has_word(line: &str, word: &str) -> bool {
     false
 }
 
-fn scan_sources(
-    dir: &std::path::Path,
-    mut violation: impl FnMut(&str, usize, &str) -> bool,
+fn scan_rust_file(
+    path: &std::path::Path,
+    mut violation: impl FnMut(usize, &str) -> bool,
 ) -> Vec<String> {
-    fn walk(
-        dir: &std::path::Path,
-        violation: &mut impl FnMut(&str, usize, &str) -> bool,
-        out: &mut Vec<String>,
-    ) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name == "obj" || name == "bin" || name.starts_with('.') {
-                    continue;
-                }
-                walk(&path, violation, out);
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("cs") {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            for (index, line) in text.lines().enumerate() {
-                if violation(&path.display().to_string(), index + 1, line) {
-                    out.push(format!("{}:{}: {}", path.display(), index + 1, line.trim()));
-                }
-            }
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("missing Rust source {}: {error}", path.display()));
+    assert!(
+        !text.trim().is_empty(),
+        "empty Rust source {}",
+        path.display()
+    );
+    let mut out = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if violation(index + 1, line) {
+            out.push(format!("{}:{}: {}", path.display(), index + 1, line.trim()));
         }
     }
-    let mut out = Vec::new();
-    walk(dir, &mut violation, &mut out);
     out
 }
 
@@ -451,37 +430,65 @@ fn repo_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-/// NoFloatingPointTests.cs:15 Dsp and Complex sources contain no double/float/System.Numerics.Complex.
+fn rust_sources(
+    root: &std::path::Path,
+    crate_name: &str,
+    files: &[&str],
+) -> Vec<std::path::PathBuf> {
+    files
+        .iter()
+        .map(|name| root.join(crate_name).join("src").join(name))
+        .collect()
+}
+
+/// NoFloatingPointTests.cs:15 — Rust replacement.
+///
+/// The original test scanned the C# `Lovelace.Dsp`/`Lovelace.Complex` trees. Those trees are not
+/// part of this repository, so the scan silently passed. This version scans the Rust product files
+/// that replaced them; a missing or empty file is a panic, and every binary-float token is a
+/// violation.
 #[test]
 fn dsp_and_complex_sources_contain_no_floating_point() {
     let root = repo_root();
+    let files = rust_sources(
+        &root,
+        "lovelace-lang",
+        &["fixed_dsp.rs", "complex.rs", "complex_math.rs"],
+    );
     let mut violations = Vec::new();
-    for dir in ["Lovelace.Dsp", "Lovelace.Complex"] {
-        violations.extend(scan_sources(&root.join(dir), |_, _, line| {
-            has_word(line, "double")
-                || has_word(line, "float")
-                || line.contains("System.Numerics.Complex")
+    for path in &files {
+        violations.extend(scan_rust_file(path, |_, line| {
+            has_word(line, "f32") || has_word(line, "f64")
         }));
     }
     assert!(violations.is_empty(), "{violations:?}");
 }
 
-/// NoFloatingPointTests.cs:28 Real source contains no System.Numerics.Complex, Math.Cos/Sin/Exp/Tan
-/// or Random.NextDouble.
+/// NoFloatingPointTests.cs:28 — Rust replacement.
+///
+/// Scans the shipped `lovelace-real` value-path modules, not the absent C# source tree. The
+/// interchange helper in `round39_api.rs` and the native benchmark in `round36_precbench.rs` are
+/// deliberately outside this list: they exist to compare against binary floats, not to compute.
 #[test]
 fn real_source_contains_no_ieee_transcendentals_or_complex() {
     let root = repo_root();
-    let needles = [
-        "System.Numerics.Complex",
-        "Math.Cos",
-        "Math.Sin",
-        "Math.Exp",
-        "Math.Tan",
-        "Random.NextDouble",
-    ];
-    let violations = scan_sources(&root.join("Lovelace.Real"), |_, _, line| {
-        needles.iter().any(|needle| line.contains(needle))
-    });
+    let files = rust_sources(
+        &root,
+        "lovelace-real",
+        &[
+            "lib.rs",
+            "round29_real_batch.rs",
+            "round30_real_batch.rs",
+            "round34_inexact_division.rs",
+            "round95_singletons.rs",
+        ],
+    );
+    let mut violations = Vec::new();
+    for path in &files {
+        violations.extend(scan_rust_file(path, |_, line| {
+            has_word(line, "f32") || has_word(line, "f64") || line.contains("std::f64::consts")
+        }));
+    }
     assert!(violations.is_empty(), "{violations:?}");
 }
 

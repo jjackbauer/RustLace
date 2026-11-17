@@ -27,12 +27,13 @@ tests):
 - `parity/corpus/{lang,symbolics}.json` — the corpus `lovelace-corpus` runs; the
   binary is the parity gate and fails loudly when the corpus is missing.
 
-## Known residual: two C# oracle scans have no inputs
+## Replaced: the two C# source scans
 
-`lovelace-lang/src/dsp_round21.rs` ports three C# tests that scan the
-`Lovelace.Dsp`, `Lovelace.Complex` and `Lovelace.Real` C# sources for forbidden
-constructs. Those C# sources are not part of this repository, so the scans walk
-no files and the assertions pass vacuously. They are kept because deleting them
-would change the test surface; the original C# sources and their history remain
-in the LovelaceSharp repository. The scan root is resolved against this
-repository's root so the test never reads outside the clone.
+`lovelace-lang/src/dsp_round21.rs` originally ported two C# tests that scanned the
+`Lovelace.Dsp`, `Lovelace.Complex` and `Lovelace.Real` C# sources. Those sources are not part of
+this repository, so the scans walked no files and passed vacuously. They are now **replaced** by
+scans of the Rust product files that carry the same contract: a missing or empty file panics, and
+every `f32`/`f64` token in the selected DSP/complex/real value-path modules is a violation. The
+interchange helper (`from_f64`) and the native-float benchmark are deliberately outside the scanned
+list because they exist to compare against binary floats, not to compute. The original C# sources
+and their history remain in the LovelaceSharp repository.

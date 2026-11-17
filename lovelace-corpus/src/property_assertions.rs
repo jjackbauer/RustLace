@@ -14,8 +14,9 @@
 //! * solve uses lovelace_symbolics::solve_polynomial (the polynomial arm of Solvers.Solve).
 //! * MathIR uses Context::lower and IrEvaluator, the Rust Lowering.Lower / IrEvaluator pair.
 //!
-//! Numeric evaluation is lovelace_lang::numeric::evaluate at 50 fractional digits, the
-//! reference's Rl.WithPrecision(50, 20) working precision.
+//! Numeric evaluation is lovelace_lang::numeric::evaluate_bound at 50 fractional digits, the
+//! reference's Rl.WithPrecision(50, 20) working precision. The point is bound rather than
+//! substituted so the direct arm evaluates the same tree MathIR lowers.
 
 use std::collections::HashMap;
 
@@ -42,21 +43,19 @@ fn rat(numerator: i64, denominator: i64) -> Rat {
         .expect("nonzero denominator")
 }
 
-fn expr_at(value: &Num) -> Expr {
-    match value {
-        Num::Exact(value) => Expr::Num(value.clone()),
-        Num::Real(value) => Expr::Real(value.to_string()),
-        Num::Complex(_) => panic!("the generated corpora evaluate on the real line"),
-    }
-}
-
 /// Evaluate a one-variable expression at a Num point, mirroring Evaluation.EvaluateToNum.
+///
+/// The point is supplied as a binding, not substituted into the tree. Substitution runs
+/// `Expr::add`, which folds exact constants before evaluation; that changes the association
+/// MathIR lowers and produced a 1-ulp disagreement at the 50th place for corpus item 28
+/// (COR-005 regression). Binding keeps both arms on the same tree.
 fn evaluate_at_num(expression: &Expr, value: &Num) -> Num {
-    let substituted = substitute(expression, "x", &expr_at(value));
-    numeric::evaluate(&substituted, PLACES).unwrap_or_else(|error| {
+    let mut bindings = HashMap::new();
+    bindings.insert("x".to_string(), value.clone());
+    numeric::evaluate_bound(expression, &bindings, PLACES).unwrap_or_else(|error| {
         panic!(
             "numeric evaluation failed for {}: {error}",
-            substituted.canonical()
+            expression.canonical()
         )
     })
 }
@@ -299,11 +298,12 @@ fn optimize_preserves_values() {
 
 /// MathIR_EvaluatesLikeSymbolic.
 ///
-/// BLOCKED: at x=1/3 on the second generated expression, numeric::evaluate and IrEvaluator
-/// differ by one unit in the 50th decimal place (…898 vs …897); the reference asserts exact
-/// NumOps.Compare equality. This is a production numeric/IR parity gap outside this crate.
+/// Both arms now evaluate the same tree: the direct value comes from `numeric::evaluate_bound`
+/// with `x` bound, not from substitution. The old substitution arm folded exact constants before
+/// evaluation, so corpus item 28 at x=1/3 compared `7/3 + B` against `(5/3 + B) + 2/3` and
+/// differed by 1 ulp at 50 places. The folded-constant case is pinned by
+/// `mathir_matches_direct_for_folded_constant_regression`.
 #[test]
-#[ignore = "blocked: numeric::evaluate and IrEvaluator differ by 1 ulp at 50 places (lovelace-lang)"]
 fn mathir_evaluates_like_symbolic() {
     let context = Context::new();
     let points = [rat(-3, 4), rat(1, 3), rat(7, 5)];
@@ -327,6 +327,43 @@ fn mathir_evaluates_like_symbolic() {
             );
         }
     }
+}
+
+/// COR-005 regression: the exact case where substitution changed the association.
+///
+/// Corpus item 28 at x=1/3. Before the fix the direct arm folded `5/3 + 2/3` into `7/3` and
+/// reported `...898`, while MathIR evaluated the original three-term Add and reported `...897`.
+/// Both arms now bind `x` and must report the same 50-place value.
+#[test]
+fn mathir_matches_direct_for_folded_constant_regression() {
+    let context = Context::new();
+    let text = "(add (rat 5 3) (mul (rat -1 1) (add (fn sin (sym x)) (mul (rat -1 1) (fn exp (sym x))))) (mul (rat 2 1) (sym x)))";
+    let expression = context
+        .canonical_parse(text)
+        .expect("the regression expression parses");
+    assert_eq!(expression.canonical(), text);
+
+    let point = rat(1, 3);
+    // Exercise the same helper the property test uses, so reverting it to substitution
+    // fails this regression test as well as the property test.
+    let direct = evaluate_at(&expression, &point);
+    let mut bindings = HashMap::new();
+    bindings.insert("x".to_string(), Num::Exact(point));
+    let program = context
+        .lower(&expression, &["x".to_string()])
+        .expect("lowering");
+    let lowered = IrEvaluator::evaluate_at(&program, &bindings, PLACES).expect("IR evaluation");
+
+    assert!(
+        num_equal(&direct, &lowered),
+        "COR-005 regression: direct={:?}, lowered={:?}",
+        direct.to_real(PLACES),
+        lowered.to_real(PLACES)
+    );
+    assert_eq!(
+        direct.to_real(PLACES).expect("real conversion").to_string(),
+        "3.40175106162327061778811456766829956486693844163897"
+    );
 }
 
 /// The Diff row's production arm, pinned to the oracle's own numbers.

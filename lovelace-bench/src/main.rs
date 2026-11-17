@@ -7,6 +7,8 @@
 //! Output: "RESULT <op> <digits> <mean_ms> <median_ms>" plus a DIGEST line so two runs can be
 //! compared byte for byte (used to prove that changing the thread budget changes nothing).
 
+#![forbid(unsafe_code)]
+
 use std::time::Instant;
 
 use lovelace_lang::{Engine, Value};

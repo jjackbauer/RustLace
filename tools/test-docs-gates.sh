@@ -51,6 +51,10 @@
 #   tools/check-crate-examples.sh
 #    31. a POSIX path recorded in the generated Cargo.toml (Windows)
 #
+# The check-docs cases also carry a positive control for the declared-absent
+# exemption: a missing file named on a line that says it was deleted must pass,
+# while an undeclared missing path (mutation 2) must still fail.
+#
 # The script also asserts that .github/workflows/ci.yml still invokes every
 # mandatory gate as a step of the docs job, so the self-test cannot stay green
 # after a mode or a runner is quietly dropped from CI. The assertion is a
@@ -538,7 +542,7 @@ make_extensions_tree() {
     mkdir -p -- "$root/docs/extensions/examples" || exit 2
     copy_checker "$repo_root/docs/extensions/examples/run-examples.sh" \
         "$root/docs/extensions/examples/run-examples.sh"
-    for page in README.md dsp.md mathir.md symbolics.md; do
+    for page in README.md dsp.md mathir.md symbolics.md systems.md; do
         printf '# %s\n\nScratch page for the documentation-gate self-test.\n' "$page" \
             >"$root/docs/extensions/$page"
     done
@@ -666,7 +670,7 @@ make_crate_examples_tree() {
 assert_eq!(1 + 1, 2);
 ```
 MD
-    for dep in lovelace-array lovelace-int lovelace-json lovelace-lang lovelace-nat lovelace-real lovelace-symbolics; do
+    for dep in lovelace-array lovelace-int lovelace-json lovelace-lang lovelace-nat lovelace-real lovelace-symbolics lovelace-systems; do
         mkdir -p -- "$root/$dep" || exit 2
         printf '[package]\nname = "%s"\nversion = "0.0.0"\n' "$dep" >"$root/$dep/Cargo.toml"
     done
@@ -734,6 +738,15 @@ printf 'SETUP scratch: %s\n' "$work"
     expect_failure "check-docs: path-shaped code reference to a nonexistent file" \
         "docs/index.md" "does not name an existing file" \
         "$work/check-docs-missing-ref/mutated.log" bash "$root/tools/check-docs.sh"
+}
+
+{
+    root=$work/check-docs-deleted-ref/repo
+    make_check_docs_tree "$root"
+    printf '\nThe old kernel lived in `lovelace-lang/src/absent.rs`; it was deleted in this change.\n' \
+        >>"$root/docs/index.md"
+    expect_success "check-docs: a declared-deleted file reference is not a stale existence claim" \
+        "$work/check-docs-deleted-ref/baseline.log" bash "$root/tools/check-docs.sh"
 }
 
 {
@@ -1211,9 +1224,9 @@ MD
     printf '# dsp.md\n\nScratch page for the documentation-gate self-test.\n' \
         >"$root/docs/extensions/dsp.md"
     # Tree-level defect: no single page is at fault, so the diagnostic names the
-    # page set (4 page(s)) rather than one file.
+    # page set (5 page(s)) rather than one file.
     expect_failure "extensions runner: zero example pairs" \
-        "4 page(s)" "No examples were found in 4 page(s); nothing was verified." \
+        "5 page(s)" "No examples were found in 5 page(s); nothing was verified." \
         "$work/extensions-zero-examples/mutated.log" \
         env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/docs/extensions/examples/run-examples.sh"
 }

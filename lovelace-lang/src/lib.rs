@@ -9,6 +9,7 @@
 // risk the frozen wire contract.
 #![allow(clippy::result_large_err)]
 #![allow(clippy::needless_range_loop)]
+#![forbid(unsafe_code)]
 
 pub mod argument_contract;
 pub mod builtins;

@@ -7,6 +7,8 @@
 //! Positions published in the envelope are UTF-16 code-unit offsets into the caller's text,
 //! which is what the C# runner publishes and what a consumer slices with.
 
+#![deny(unsafe_code)]
+
 use std::io::{Read, Write};
 
 use lovelace_json::Json;

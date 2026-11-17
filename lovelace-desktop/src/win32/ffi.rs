@@ -1629,3 +1629,33 @@ pub fn send_key(hwnd: HWND, virtual_key: u16, scan: u16, extended: bool, down: b
     let message = if down { WM_KEYDOWN } else { WM_KEYUP };
     send(hwnd, message, virtual_key as WPARAM, lparam);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `COR-015b`: the safe wrapper around `GetClientRect` refuses an invalid handle instead of
+    /// dereferencing it; the FFI call returns 0 and the wrapper maps that to `(0, 0)`.
+    #[test]
+    fn client_size_of_an_invalid_handle_is_zero() {
+        assert_eq!(client_size(0), (0, 0));
+    }
+
+    /// A null handle short-circuits before the text APIs, so the wrapper is total.
+    #[test]
+    fn window_text_of_an_invalid_handle_is_empty() {
+        assert_eq!(window_text(0), "");
+    }
+
+    /// `GetWindowRect` on a null handle returns 0; the wrapper maps that to `(0, 0)`.
+    #[test]
+    fn window_size_of_an_invalid_handle_is_zero() {
+        assert_eq!(window_size(0), (0, 0));
+    }
+
+    /// `set_text` rejects a null handle before the FFI call.
+    #[test]
+    fn set_text_on_an_invalid_handle_is_a_no_op() {
+        set_text(0, "ignored");
+    }
+}

@@ -740,6 +740,14 @@ fn read_character<R: BufRead>(input: &mut R, first: u8) -> io::Result<char> {
 // stty. Both are dependency-free and restore the terminal when the editor leaves.
 // ---------------------------------------------------------------------------------------------
 
+/// The Windows console raw-mode lane.
+///
+/// `lovelace-run` carries `#![deny(unsafe_code)]`; this module is the sole `#[allow(unsafe_code)]`
+/// and the only place in the crate that crosses the FFI boundary. Every call is one of the three
+/// documented kernel32 console entry points. `GetStdHandle` returns a process pseudo-handle or
+/// null; `GetConsoleMode` rejects null/invalid handles; a `RawMode` is constructed only after both
+/// modes were read and both new modes were set successfully. The stored handles are used only to
+/// restore the original modes on drop.
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod terminal {
@@ -753,11 +761,22 @@ mod terminal {
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
     const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
 
+    // SAFETY: the declarations match the kernel32 console signatures; the calls are confined to
+    // this module and every call site validates the API result before using its output.
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GetStdHandle(which: u32) -> *mut c_void;
         fn GetConsoleMode(handle: *mut c_void, mode: *mut u32) -> i32;
         fn SetConsoleMode(handle: *mut c_void, mode: u32) -> i32;
+    }
+
+    fn raw_input_mode(mode: u32) -> u32 {
+        (mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+            | ENABLE_VIRTUAL_TERMINAL_INPUT
+    }
+
+    fn raw_output_mode(mode: u32) -> u32 {
+        mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING
     }
 
     pub struct RawMode {
@@ -769,23 +788,31 @@ mod terminal {
 
     impl RawMode {
         pub fn enable() -> Option<RawMode> {
+            // SAFETY: no arguments; the result may be null or a process pseudo-handle, and the
+            // following GetConsoleMode call is what validates it.
             let input = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
             let output = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
             let mut input_mode = 0u32;
             let mut output_mode = 0u32;
+            // SAFETY: both pointers are live stack values for the duration of the call; a null or
+            // non-console handle makes GetConsoleMode return 0 rather than dereference the pointer.
             if unsafe { GetConsoleMode(input, &mut input_mode) } == 0
                 || unsafe { GetConsoleMode(output, &mut output_mode) } == 0
             {
                 return None;
             }
-            let raw_input = (input_mode
-                & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
-                | ENABLE_VIRTUAL_TERMINAL_INPUT;
-            let raw_output = output_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            let raw_input = raw_input_mode(input_mode);
+            let raw_output = raw_output_mode(output_mode);
+            // SAFETY: input is the handle GetConsoleMode just accepted, and raw_input is a bitmask
+            // derived from the mode it returned.
             if unsafe { SetConsoleMode(input, raw_input) } == 0 {
                 return None;
             }
+            // SAFETY: same as above for output; if this fails, the input restore below uses the
+            // handle and mode that already succeeded.
             if unsafe { SetConsoleMode(output, raw_output) } == 0 {
+                // SAFETY: input was validated above and input_mode is the mode originally read
+                // from that same handle, so restoring it is a valid SetConsoleMode call.
                 unsafe { SetConsoleMode(input, input_mode) };
                 return None;
             }
@@ -800,10 +827,49 @@ mod terminal {
 
     impl Drop for RawMode {
         fn drop(&mut self) {
+            // SAFETY: a RawMode exists only after both handles were validated and both new modes
+            // were set; input_mode/output_mode are the original modes read from those handles.
             unsafe {
                 SetConsoleMode(self.input, self.input_mode);
                 SetConsoleMode(self.output, self.output_mode);
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{
+            ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, raw_input_mode,
+            raw_output_mode,
+        };
+
+        #[test]
+        fn raw_input_mode_clears_line_editing_and_sets_virtual_terminal_input() {
+            let original = ENABLE_LINE_INPUT
+                | ENABLE_ECHO_INPUT
+                | ENABLE_PROCESSED_INPUT
+                | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+            let raw = raw_input_mode(original);
+            assert_eq!(
+                raw & (ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT),
+                0
+            );
+            assert_eq!(
+                raw & ENABLE_VIRTUAL_TERMINAL_INPUT,
+                ENABLE_VIRTUAL_TERMINAL_INPUT
+            );
+        }
+
+        #[test]
+        fn raw_output_mode_adds_virtual_terminal_processing_without_clearing_bits() {
+            let original = ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
+            let raw = raw_output_mode(original);
+            assert_eq!(raw & original, original);
+            assert_eq!(
+                raw & ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+                ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            );
         }
     }
 }

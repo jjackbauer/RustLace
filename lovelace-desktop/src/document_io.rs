@@ -919,4 +919,48 @@ mod tests {
         );
         let _ = std::fs::remove_file(&path);
     }
+
+    /// COR-004: a deterministic byte-level campaign over the document decoder.
+    #[test]
+    fn decode_fuzz_campaign_never_panics() {
+        fn next(state: &mut u64) -> u64 {
+            let mut x = *state;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *state = x;
+            x
+        }
+        const CHARS: &[char] = &['a', '\n', '\r', 'é', '😀', '\0', '3', '.'];
+        let mut state = 0x0d15_ea5e_2026_1119u64;
+        let mut accepted = 0usize;
+        let mut rejected = 0usize;
+        for step in 0..10_000 {
+            let mut bytes = Vec::new();
+            let len = (next(&mut state) % 32) as usize;
+            if step % 2 == 0 {
+                for _ in 0..len {
+                    let mut buffer = [0u8; 4];
+                    let character = CHARS[(next(&mut state) as usize) % CHARS.len()];
+                    bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+                }
+            } else {
+                for _ in 0..len {
+                    bytes.push((next(&mut state) % 256) as u8);
+                }
+            }
+            match decode(&bytes) {
+                Ok(_) => accepted += 1,
+                Err(_) => rejected += 1,
+            }
+        }
+        assert!(
+            accepted > 500,
+            "only {accepted} byte streams decoded; campaign is not exercising the decoder"
+        );
+        assert!(
+            rejected > 500,
+            "only {rejected} byte streams were rejected; campaign has no rejection signal"
+        );
+    }
 }

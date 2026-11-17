@@ -1034,4 +1034,45 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&directory);
     }
+
+    /// COR-004: a deterministic campaign over mutated/truncated recovery records.
+    #[test]
+    fn recovery_parse_fuzz_campaign_never_panics() {
+        fn next(state: &mut u64) -> u64 {
+            let mut x = *state;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *state = x;
+            x
+        }
+        let baseline = record().to_bytes();
+        let mut state = 0x0d15_ea5e_2026_1120u64;
+        let mut accepted = 0usize;
+        let mut rejected = 0usize;
+        for step in 0..10_000 {
+            let mut bytes = baseline.clone();
+            let mutations = (next(&mut state) % 16) as usize;
+            for _ in 0..mutations {
+                let position = (next(&mut state) as usize) % bytes.len();
+                bytes[position] = (next(&mut state) % 256) as u8;
+            }
+            if step % 2 == 0 {
+                let cut = (next(&mut state) as usize) % (bytes.len() + 1);
+                bytes.truncate(cut);
+            }
+            match RecoveryRecord::parse(&bytes) {
+                Ok(_) => accepted += 1,
+                Err(_) => rejected += 1,
+            }
+        }
+        assert!(
+            accepted > 100,
+            "only {accepted} records parsed; campaign is not exercising the parser"
+        );
+        assert!(
+            rejected > 100,
+            "only {rejected} records were rejected; campaign has no rejection signal"
+        );
+    }
 }

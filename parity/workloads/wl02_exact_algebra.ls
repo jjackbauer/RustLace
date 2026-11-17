@@ -1,0 +1,8 @@
+x = symbol("x")
+print(simplify(x + x))
+print(simplify(sin(x)^2 + cos(x)^2))
+print(diff(x^3, x))
+print((1/7) + (1/11))
+print((1/3) + (1/6))
+k = optimize(x^3 + 2*x, [x])
+print(evalir(lower(k, [x]), [2], 40))

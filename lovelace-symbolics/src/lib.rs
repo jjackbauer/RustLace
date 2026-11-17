@@ -4,6 +4,8 @@
 //! a canonical sum of terms, like terms are collected, and the printer reproduces the documented
 //! forms exactly (`y + 2*x`, `x^2 - 2*x + 1`, `-1/2/(x + 1)`).
 
+#![forbid(unsafe_code)]
+
 use std::cmp::Ordering;
 
 use lovelace_int::Int;

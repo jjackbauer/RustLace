@@ -124,7 +124,7 @@ pub enum InFlightCancellation {
     /// The in-flight statement returned a value and that value is committed.
     Completed,
     /// The in-flight statement stopped early through the engine's live cancellation flag. Its
-    /// early-exit state is committed and it produced no new value.
+    /// partial state is **discarded**: only the previously committed prefix is published.
     Interrupted,
 }
 
@@ -1064,10 +1064,11 @@ impl RunWorker {
     /// Ends the run as cancelled: publishes the committed snapshot, hands the cache back, retires
     /// the document and emits exactly one terminal `Cancelled` event.
     ///
-    /// RUN-007: the in-flight statement has already been committed by the caller before this is
-    /// reached — either with its returned value (`Completed`) or with the state it left at its
-    /// early exit (`Interrupted`). `None` means cancellation was observed before the next
-    /// statement started. Nothing after the in-flight statement runs on any of the three paths.
+    /// RUN-007: a statement that completed before the cancellation was observed is committed by
+    /// the caller (`Completed`). An in-flight statement stopped by the live flag (`Interrupted`) is
+    /// **not** committed: its partial state is discarded and only the committed prefix is
+    /// published, which is the transactional contract for `COR-016`. `None` means cancellation was
+    /// observed before the next statement started.
     ///
     /// The cache goes back before the event (see [`RunWorker::return_cache`]): the event is the
     /// signal a client acts on, so everything the run leaves behind must be settled by then.
@@ -1276,7 +1277,9 @@ impl RunWorker {
                         None => self.cancel_requested(),
                     };
                     if self.cancel_requested() && stopped_by_cancellation {
-                        self.commit_interrupted(&mut engine, progress, index);
+                        // COR-016: the interrupted statement's partial engine state is discarded.
+                        // The engine is dropped with the run and only the committed prefix is
+                        // published; no partial workspace, output or stack entry is committed.
                         self.finish_cancelled(progress, cache, InFlightCancellation::Interrupted);
                         return;
                     }
@@ -1316,30 +1319,6 @@ impl RunWorker {
             snapshot,
         });
         progress.ended = true;
-    }
-
-    /// Commits the in-flight statement's early-exit result (RUN-007/RUN-008).
-    ///
-    /// The engine stopped the statement because it observed the live cancellation flag. It
-    /// publishes no value for it, but the state it left behind is real: a loop's completed
-    /// iterations, a kernel's partial writes, its print lines (already drained by the caller).
-    /// The statement is committed exactly like the web Studio's in-flight statement: the run
-    /// does not roll it back and the panes capture the state the engine has. `result` keeps the
-    /// last value the engine published, because the early exit produced none; the engine's own
-    /// `_` binding is untouched for the same reason, so result and `_` stay consistent.
-    fn commit_interrupted(
-        &self,
-        engine: &mut Box<dyn Evaluator>,
-        progress: &mut Progress,
-        index: usize,
-    ) {
-        progress.precision = self.engine_precision(engine);
-        self.capture_symbols(engine, progress);
-        if let Ok(Some(plot)) = panic::catch_unwind(AssertUnwindSafe(|| engine.last_plot())) {
-            progress.plot = Some(plot);
-        }
-        progress.committed += 1;
-        self.commit_step(progress, index, false);
     }
 
     /// Captures the engine's variables, functions and kind-aware state at a commit point.
@@ -2243,13 +2222,11 @@ mod tests {
             } => {
                 assert_eq!(*stopped, document);
                 assert_eq!(*run, handle.run());
-                // RUN-007: the statement that was in flight when Cancel was pressed is part of
-                // the committed prefix. The kernel observed the live flag and stopped early, so
-                // its early-exit state (no variables, no value) is committed and the run stops
-                // before any next statement. It is not dropped as if it had never started.
+                // COR-016: the statement that was in flight when Cancel was pressed is discarded,
+                // not committed. Only the previously committed prefix is published.
                 assert_eq!(
-                    *committed_steps, 1,
-                    "the one kernel statement must be part of the committed prefix"
+                    *committed_steps, 0,
+                    "an interrupted in-flight statement must not be committed"
                 );
                 assert_eq!(
                     *in_flight,
@@ -2263,7 +2240,7 @@ mod tests {
                     event_snapshot, &published,
                     "the Cancelled event must carry the snapshot the run published"
                 );
-                assert_eq!(event_snapshot.committed_steps, 1);
+                assert_eq!(event_snapshot.committed_steps, 0);
                 assert_eq!(event_snapshot.result, "Void");
                 assert_eq!(event_snapshot.revision, SourceRevision(1));
             }

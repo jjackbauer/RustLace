@@ -65,9 +65,9 @@ called `substitute` before evaluation. Substitution folded `5/3 + 2/3` into `7/3
 compared `7/3 + B` against MathIR's original `(5/3 + B) + 2/3`; the separate 50-place truncations
 differ by 1 ulp. Both arms now bind `x` and call `evaluate_bound`, and
 `mathir_matches_direct_for_folded_constant_regression` pins item 28 at x=1/3. The current
-`lovelace-corpus` suite has **zero ignored tests** and reports **20 passed** (the 19 previous tests
-plus the regression); the 6,147 passed / 1 ignored figures remain an exact observation of `fa87ecc`,
-not a current count.
+`lovelace-corpus` suite has **zero ignored tests** and reports **21 passed** (the 19 original lib
+tests, the folded-constant regression, and the debug corpus-worker recursion test); the 6,147
+passed / 1 ignored figures remain an exact observation of `fa87ecc`, not a current count.
 
 ### The reconciled historical table: 6,067 + 68 = 6,135
 
@@ -191,11 +191,13 @@ reason.
   corpus: 231 passed, 0 failed, 231 total
   ```
 
-  Run the gate **in release**: on this host the debug binary overflows its main-thread stack at
-  `lang/061` (`func fact(n) ... fact(5)`), while the release build of the same sources passes all 231.
-  A missing corpus file is exit code 2, never a pass. Both CI jobs run this command as a **blocking
-  step** before building the release desktop, so a mismatch, panic, missing file or non-zero exit
-  fails the workflow.
+  Run the gate **in release** in CI. The corpus runs its scripts on a 256 MiB worker: the debug
+  build used to overflow its main-thread stack at `lang/061` (`func fact(n) ... fact(5)`), and the
+  worker removes that crash while keeping the same evaluation semantics.
+  `lang_061_finishes_on_the_corpus_worker_stack` pins the recursive case in both profiles. A missing
+  corpus file is exit code 2, never a pass. Both CI jobs run this command as a **blocking step**
+  before building the release desktop, so a mismatch, panic, missing file or non-zero exit fails the
+  workflow.
 - **Golden wire envelopes** — `docs/csharp-oracle/Lovelace.Run.Tests/fixtures/*` compared by
   `lovelace-run`'s `golden_batch`. `LOVELACE_RECORD_GOLDENS=1` rewrites them; the switch is inert
   otherwise.
