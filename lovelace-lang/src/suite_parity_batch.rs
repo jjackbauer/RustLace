@@ -5670,21 +5670,23 @@ fn r15_descriptor_examples_that_now_execute() {
     }
 }
 
-/// C# DescriptorExampleTests.cs:85 — Corpus_ReachesCoreMetadataAndEveryPlugin.
+/// C# DescriptorExampleTests.cs:85 — Corpus_ReachesCoreMetadataAndEveryFamily.
 #[test]
-fn r15_descriptor_corpus_covers_core_and_every_plugin() {
+fn r15_descriptor_corpus_covers_core_and_every_family() {
     let builtins = crate::registry::BUILTINS;
     assert!(!builtins.is_empty(), "the descriptor catalogue is empty");
     assert!(
-        builtins.iter().any(|b| b.plugin.is_none()),
+        builtins
+            .iter()
+            .any(|b| b.module == "Core" && !b.examples.is_empty()),
         "no core metadata examples were discovered"
     );
-    for plugin in ["Lovelace.Dsp", "Lovelace.Symbolics", "Lovelace.MathIR"] {
+    for module in ["DSP", "Symbolics", "MathIR"] {
         assert!(
             builtins
                 .iter()
-                .any(|b| b.plugin == Some(plugin) && !b.examples.is_empty()),
-            "no examples discovered from {plugin}"
+                .any(|b| b.module == module && !b.examples.is_empty()),
+            "no examples discovered from {module}"
         );
     }
 }
@@ -6056,6 +6058,78 @@ fn r15_periodic_quotient_times_its_divisor_is_the_dividend() {
             assert_eq!(e.format(&value), expected, "{script} at {prec}");
         }
     }
+}
+
+/// COR-006: exact rational/periodic sums are independent of parenthesization.
+#[test]
+fn exact_rational_grouping_is_independent_of_parenthesization() {
+    let pairs = [
+        ("(1/3 + 2/3) + 1/7", "1/3 + (2/3 + 1/7)"),
+        ("(1/17 + 1/19) + 1/23", "1/17 + (1/19 + 1/23)"),
+        ("(1/3 - 1/6) + 1/9", "1/3 - (1/6 - 1/9)"),
+        ("(1/7 * 7) / 3", "1/7 * (7 / 3)"),
+    ];
+    for precision in [18usize, 37] {
+        for (left, right) in pairs {
+            let mut engine = engine();
+            engine.set_precision(precision);
+            let left_value = engine
+                .eval(left)
+                .unwrap_or_else(|error| panic!("{left}: {}", error.message));
+            let right_value = engine
+                .eval(right)
+                .unwrap_or_else(|error| panic!("{right}: {}", error.message));
+            assert_eq!(
+                engine.format(&left_value),
+                engine.format(&right_value),
+                "{left} vs {right} at {precision} places"
+            );
+        }
+    }
+}
+
+/// COR-004: a deterministic syntax/lexer campaign with accepted and rejected censuses.
+#[test]
+fn lovelace_syntax_fuzz_campaign_never_panics() {
+    fn next(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+    const FRAGMENTS: &[&str] = &[
+        "{", "}", "(", ")", "[", "]", "1", "0", "x", "+", "-", "*", "/", "^", "=", ",", ":", ";",
+        "if", "else", "while", "func", "return", "\"s\"", "'c'", "--", "1/3", "0.(3)", "é", "😀",
+        "\n", " ", "==", "!=", "<", ">", "..", "true", "false", "null",
+    ];
+    let mut state = 0x0d15_ea5e_2026_1117u64;
+    let mut accepted = 0usize;
+    let mut rejected = 0usize;
+    for _ in 0..20_000 {
+        let mut source = String::new();
+        let pieces = (next(&mut state) % 40) as usize;
+        for _ in 0..pieces {
+            source.push_str(FRAGMENTS[(next(&mut state) as usize) % FRAGMENTS.len()]);
+        }
+        let parsed = crate::syntax::tokenize(&source)
+            .and_then(|tokens| crate::syntax::Parser::new(tokens).program())
+            .is_ok();
+        if parsed {
+            accepted += 1;
+        } else {
+            rejected += 1;
+        }
+    }
+    assert!(
+        accepted > 100,
+        "only {accepted} generated sources parsed; campaign is not exercising the parser"
+    );
+    assert!(
+        rejected > 100,
+        "only {rejected} generated sources were rejected; campaign has no rejection signal"
+    );
 }
 
 // ===========================================================================

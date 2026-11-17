@@ -1,0 +1,144 @@
+{
+    "version":  1,
+    "sources":  [
+                    "docs/extensions/systems.md"
+                ],
+    "examples":  [
+                     {
+                         "id":  "systems/001",
+                         "script":  "sys_mm1(8, 10).utilization",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Single station",
+                         "kind":  "value",
+                         "text":  "0.8 (Real)"
+                     },
+                     {
+                         "id":  "systems/002",
+                         "script":  "sys_mm1(8, 10).response_time",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Single station",
+                         "kind":  "value",
+                         "text":  "0.5 (Real)"
+                     },
+                     {
+                         "id":  "systems/003",
+                         "script":  "sys_mmc(8, 5, 2).probability_waiting",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Single station",
+                         "kind":  "value",
+                         "text":  "0.7(1) (Real)"
+                     },
+                     {
+                         "id":  "systems/004",
+                         "script":  "sys_mva(sys_closed(2, 9/100, [sys_station(\"cpu\", 1/100, 1)])).throughput",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Closed MVA",
+                         "kind":  "value",
+                         "text":  "19.(8019) (Real)"
+                     },
+                     {
+                         "id":  "systems/005",
+                         "script":  "sys_mva(sys_closed(2, 9/100, [sys_station(\"cpu\", 1/100, 1)])).stations[0].occupancy",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Closed MVA",
+                         "kind":  "value",
+                         "text":  "0.(2178) (Real)"
+                     },
+                     {
+                         "id":  "systems/006",
+                         "script":  "sys_analyze(sys_open(8, [sys_station(\"api\", 1/20, 1), sys_station(\"db\", 1/50, 2)])).response_time",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Open network",
+                         "kind":  "value",
+                         "text":  "0.14(2156862745098039) (Real)"
+                     },
+                     {
+                         "id":  "systems/007",
+                         "script":  "sys_bottlenecks(sys_open(8, [sys_station(\"api\", 1/20, 1), sys_station(\"db\", 1/50, 3)])).throughput_bound",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Bottleneck",
+                         "kind":  "value",
+                         "text":  "16.(6) (Real)"
+                     },
+                     {
+                         "id":  "systems/008",
+                         "script":  "sys_sweep(sys_closed(1, 0, [sys_station(\"cpu\", 1/10, 1)]), 1, 3, 1).points[2].parameter",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Sweep",
+                         "kind":  "value",
+                         "text":  "3 (Real)"
+                     },
+                     {
+                         "id":  "systems/009",
+                         "script":  "sys_mm1(8, 10).exact",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Exactness",
+                         "kind":  "value",
+                         "text":  "True (Boolean)"
+                     },
+                     {
+                         "id":  "systems/010",
+                         "script":  "sys_mmc(40, 6, 8).utilization",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Worker pool",
+                         "kind":  "value",
+                         "text":  "0.8(3) (Real)"
+                     },
+                     {
+                         "id":  "systems/011",
+                         "script":  "api = sys_station(\"api\", 1/50, 1); db = sys_station(\"db\", 1/100, 2); cache = sys_station(\"cache\", 1/500, 5); sys_analyze(sys_open(20, [api, db, cache])).response_time",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Web request sample",
+                         "kind":  "value",
+                         "text":  "0.0791(6) (Real)"
+                     },
+                     {
+                         "id":  "systems/012",
+                         "script":  "sys_station(\"pool\", 1/10, 1, 4).servers",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Station constructor",
+                         "kind":  "value",
+                         "text":  "4 (Natural)"
+                     },
+                     {
+                         "id":  "systems/013",
+                         "script":  "sys_delay(8, 10).waiting_time",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Delay center",
+                         "kind":  "value",
+                         "text":  "0 (Real)"
+                     },
+                     {
+                         "id":  "systems/014",
+                         "script":  "sys_analyze(sys_closed(0, 0, [sys_station(\"cpu\", 1/10, 1)])).status",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Zero population",
+                         "kind":  "value",
+                         "text":  "degenerate"
+                     },
+                     {
+                         "id":  "systems/015",
+                         "script":  "sys_mm1(10, 10)",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Unstable refusal",
+                         "kind":  "error",
+                         "text":  "Station \u0027station\u0027 is unstable: its offered utilization is 1, which is not below 1."
+                     },
+                     {
+                         "id":  "systems/016",
+                         "script":  "sys_mva(sys_open(1, [sys_station(\"api\", 1, 1)]))",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Unsupported model",
+                         "kind":  "error",
+                         "text":  "The model is not supported: closed MVA requires a closed workload."
+                     },
+                     {
+                         "id":  "systems/017",
+                         "script":  "sys_mm1([1, 2], 3)",
+                         "doc":  "docs/extensions/systems.md",
+                         "heading":  "Argument refusal",
+                         "kind":  "error",
+                         "text":  "sys_mm1(): argument 1 expects a number; got Vector."
+                     }
+                 ]
+}

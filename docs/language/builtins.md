@@ -1,18 +1,18 @@
 # Builtins
 
-The engine ships **124 builtins** in **11 categories**. This page is the catalogue: one table per
+The engine ships **134 builtins** in **12 categories**. This page is the catalogue: one table per
 category with each builtin's name, declared arity, and parameter names, followed by prose for the
 important families.
 
 The numbers in this page were read from the live registry of a debug `lovelace-run` built from
-commit `2152218` (the `feat/eig-sym` merge on `main`):
+the current tree:
 
 ```console
 target/debug/lovelace-run.exe --functions --function-limit 500
 ```
 
-The observed envelope reports `"total": 124`, `"returned": 124`, `"truncated": false`. The
-category counts below sum to 124.
+The observed envelope reports `"total": 134`, `"returned": 134`, `"truncated": false`. The
+category counts below sum to 134.
 
 ## Purpose
 
@@ -30,8 +30,9 @@ category counts below sum to 124.
 | DSP | 16 | transforms, convolution, filters, signal constructors |
 | Introspection | 5 | `type`, `inspect`, `latex`, `print`, `capabilities` |
 | Language | 1 | `plot` |
+| Systems | 10 | queueing, operational laws, open networks, exact MVA, bottlenecks, sweeps |
 | Optimization | 2 | expression optimization and its structured form |
-| **Total** | **124** | |
+| **Total** | **134** | |
 
 ## Inputs
 
@@ -64,9 +65,9 @@ the kind that arrived (usually `InvalidArgument` / `TypeMismatch` for an argumen
 or `InvalidOperation` / `DomainError` for a value that is outside the operation's domain).
 
 Builtins are names, not values. `sqrt` without a call is an undefined variable, and a user
-function with the same name shadows the builtin because user functions are resolved first. The
-runner's engine loads every plugin, so all 124 names are available. A bare engine created through
-`Engine::new_bare()` exposes only core builtins until a plugin is loaded.
+function with the same name shadows the builtin because user functions are resolved first. The one
+static registry exposes all 134 names in every engine: `Engine::new()` is the only constructor and
+there is no reduced or bare engine.
 
 ### Full catalogue
 
@@ -225,6 +226,25 @@ runner's engine loads every plugin, so all 124 names are available. A bare engin
 | `re` | 1 | x |
 | `scale` | 2 | x, c |
 | `step` | 1 | n |
+
+#### Systems (10 builtins)
+
+Queueing and operations-research models backed by `lovelace-systems` (exact rational arithmetic;
+no floating point). Arguments are canonical seconds and jobs per second; every result is a
+structured record with its solver provenance.
+
+| Name | Arity | Parameters |
+|---|---|---|
+| `sys_analyze` | 1-2 | network, precision |
+| `sys_bottlenecks` | 1 | network |
+| `sys_closed` | 3 | population, think_time, stations |
+| `sys_delay` | 2 | lambda, mu |
+| `sys_mm1` | 2 | lambda, mu |
+| `sys_mmc` | 3 | lambda, mu, servers |
+| `sys_mva` | 1-2 | network, precision |
+| `sys_open` | 2 | arrival_rate, stations |
+| `sys_station` | 3-4 | name, service_time, visits, servers_or_delay |
+| `sys_sweep` | 4 | network, from, to, step |
 
 #### Introspection (5 builtins)
 
@@ -458,7 +478,7 @@ categories in `lovelace-lang/src/diagnostic.rs` are frozen: `ParseError`, `Domai
 | A `pi`/`e` request above the engine computation precision | `InvalidArgument` / `TypeMismatch`, naming the cap |
 | `eig_sym` of a non-square, asymmetric or 0x0 matrix, or a matrix with a complex entry | `InvalidArgument` / `TypeMismatch`, naming the offending shape or entry |
 | A builtin used as a value (`sqrt` without a call) | `InvalidOperation` / `DomainError`, the undefined-variable failure |
-| A name from an unloaded plugin family | `UnknownFunction` / `UnsupportedOperation`, with suggestions, hints and the registry size on the error |
+| A name outside the registry | `UnknownFunction` / `UnsupportedOperation`, with suggestions, hints and the registry size on the error |
 
 Three outcomes that look like errors are documented results:
 
@@ -484,8 +504,8 @@ non-error results are demonstrated in the Examples section.
   back with `re`, `im`, `conj` and `abs`.
 - **Builtins are names, not values.** `sqrt` cannot be passed as an argument or stored; a user
   function with the same name shadows the builtin because user functions resolve first.
-- **A bare engine is core-only.** `Engine::new_bare()` exposes only core builtins until a plugin is
-  loaded; the runner's `Engine::new()` loads every family and exposes all 124 names.
+- **One static registry.** `Engine::new()` exposes all 134 builtins; the descriptor's `module`
+  label groups a function for discovery and never gates it.
 - **Two caps bound the numeric surface.** `evalf` stops at 1000 decimal places, and `pi`/`e` stop at
   the engine computation precision; requesting more is a refusal, never a silently clamped answer.
 - **Array arithmetic is not a builtin.** `+ - * / % ^` are language operators with right-aligned

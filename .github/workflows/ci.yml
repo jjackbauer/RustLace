@@ -56,6 +56,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # The parity gate is a blocking step, not a side effect of cargo test:
+      # cargo test --workspace does not execute the release corpus binary. The
+      # release build is mandatory because the debug binary overflows its
+      # main-thread stack at lang/061; a mismatch, panic, unexpected skip or
+      # non-zero exit must fail the workflow.
+      - name: Run the release corpus gate
+        run: cargo run --release -p lovelace-corpus
+
       - name: Build release desktop
         run: cargo build --release -p lovelace-desktop
 
@@ -108,10 +116,17 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy engine crates
-        run: cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets
+        run: cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics -p lovelace-systems --all-targets
 
       - name: Test engine crates
-        run: cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics
+        run: cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics -p lovelace-systems
+
+      # Same blocking parity gate as the Windows job: the release corpus run is
+      # not covered by the engine test suites. Linux is a second independent
+      # execution surface for the corpus, so a platform-specific mismatch fails
+      # here rather than only on Windows.
+      - name: Run the release corpus gate
+        run: cargo run --release -p lovelace-corpus
 
       # The desktop builds as the product on Linux: the same workbench, editor, panes, plot
       # rasteriser and journeys the Windows binary carries, rendered through glow.

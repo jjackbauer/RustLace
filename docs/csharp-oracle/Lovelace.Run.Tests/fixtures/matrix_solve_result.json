@@ -1,16 +1,16 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "MatrixSolveResult(status: NoSolutions, complete: True, completeness: Complete, solutions: [], conditions: [], diagnostics: [Diagnostic(code: matrix.singular, category: NoSolution, message: matrix is singular, recoverable: True, location: , details: [])])",
-    "typed": "MatrixSolveResult(status: NoSolutions, complete: True, completeness: Complete, solutions: [], conditions: [], diagnostics: [Diagnostic(code: matrix.singular, category: NoSolution, message: matrix is singular, recoverable: True, location: , details: [])]) (MatrixSolveResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "MatrixSolveResult",
       "fields": [
         {
           "name": "status",
@@ -38,37 +38,30 @@
         {
           "name": "solutions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "conditions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "diagnostics",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              1
-            ],
             "elements": [
               {
-                "kind": "Record",
-                "type": "Diagnostic",
                 "fields": [
                   {
                     "name": "code",
@@ -108,31 +101,41 @@
                   {
                     "name": "details",
                     "value": {
+                      "elements": [],
                       "kind": "Array",
-                      "type": "Vector",
                       "shape": [
                         0
                       ],
-                      "elements": []
+                      "type": "Vector"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "Diagnostic"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              1
+            ],
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "MatrixSolveResult"
+    },
+    "typed": "MatrixSolveResult(status: NoSolutions, complete: True, completeness: Complete, solutions: [], conditions: [], diagnostics: [Diagnostic(code: matrix.singular, category: NoSolution, message: matrix is singular, recoverable: True, location: , details: [])]) (MatrixSolveResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "MatrixSolveResult(status: NoSolutions, complete: True, completeness: Complete, solutions: [], conditions: [], diagnostics: [Diagnostic(code: matrix.singular, category: NoSolution, message: matrix is singular, recoverable: True, location: , details: [])])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "MatrixSolveResult",
         "fields": [
           {
             "name": "status",
@@ -160,37 +163,30 @@
           {
             "name": "solutions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "conditions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "diagnostics",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                1
-              ],
               "elements": [
                 {
-                  "kind": "Record",
-                  "type": "Diagnostic",
                   "fields": [
                     {
                       "name": "code",
@@ -230,42 +226,46 @@
                     {
                       "name": "details",
                       "value": {
+                        "elements": [],
                         "kind": "Array",
-                        "type": "Vector",
                         "shape": [
                           0
                         ],
-                        "elements": []
+                        "type": "Vector"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "Diagnostic"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                1
+              ],
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "MatrixSolveResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

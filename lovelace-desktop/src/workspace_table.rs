@@ -458,10 +458,11 @@ pub struct FunctionRow {
     pub name: String,
     /// The declared parameter names, in declaration order.
     pub parameters: Vec<String>,
-    /// `builtin`, `plugin` or `user`, from the engine's builtin flag and plugin name.
+    /// `builtin` or `user`, from the engine's builtin flag.
     pub origin: FunctionOrigin,
-    /// The registering plugin, when one did.
-    pub plugin: Option<String>,
+    /// The static family label for a builtin (`Core`, `DSP`, `Symbolics`, `MathIR`, `Systems`),
+    /// or `User` for a script definition.
+    pub module: String,
     /// The registry summary, when the engine publishes one.
     pub summary: Option<String>,
     /// The position in the committed capture; every sort breaks ties by this value.
@@ -492,7 +493,7 @@ pub enum FunctionColumn {
     Name,
     /// Comma-joined parameter names.
     Parameters,
-    /// `builtin` / `plugin` / `user`.
+    /// `builtin` / `user`.
     Origin,
 }
 
@@ -563,7 +564,7 @@ fn function_row(ordinal: usize, function: &EngineFunction) -> FunctionRow {
         name: function.name.clone(),
         parameters: function.parameters.clone(),
         origin: function.origin(),
-        plugin: function.plugin.clone(),
+        module: function.module.clone(),
         summary: function.summary.clone(),
         ordinal,
     }
@@ -717,14 +718,14 @@ mod tests {
         name: &str,
         parameters: &[&str],
         is_builtin: bool,
-        plugin: Option<&str>,
+        module: &str,
         summary: Option<&str>,
     ) -> EngineFunction {
         EngineFunction {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin,
-            plugin: plugin.map(str::to_string),
+            module: module.to_string(),
             summary: summary.map(str::to_string),
         }
     }
@@ -884,20 +885,21 @@ mod tests {
         );
     }
 
-    /// WKS-002: the functions table reads origin from the engine's builtin flag and plugin
-    /// name, joins the parameters with a comma, and carries the registry summary when present.
+    /// WKS-002: the functions table reads origin from the engine's builtin flag and the static
+    /// module label, joins the parameters with a comma, and carries the registry summary when
+    /// present.
     #[test]
     fn functions_show_parameters_origin_and_summary() {
         let state = EngineState {
             variables: Vec::new(),
             functions: vec![
-                function("aaa", &["x"], false, None, None),
-                function("abs", &["x"], true, None, Some("Absolute value.")),
+                function("aaa", &["x"], false, "User", None),
+                function("abs", &["x"], true, "Core", Some("Absolute value.")),
                 function(
                     "acos",
                     &["x"],
                     true,
-                    Some("Lovelace.Symbolics"),
+                    "Symbolics",
                     Some("The principal arccosine."),
                 ),
             ],
@@ -916,17 +918,16 @@ mod tests {
         assert_eq!(builtin.origin_label(), "builtin");
         assert_eq!(builtin.summary_cell().as_deref(), Some("Absolute value."));
 
-        let plugin = table.rows.iter().find(|row| row.name == "acos").unwrap();
-        assert_eq!(plugin.origin, FunctionOrigin::Plugin);
-        assert_eq!(plugin.origin_label(), "plugin");
-        assert_eq!(plugin.plugin.as_deref(), Some("Lovelace.Symbolics"));
+        let symbolic = table.rows.iter().find(|row| row.name == "acos").unwrap();
+        assert_eq!(symbolic.origin, FunctionOrigin::Builtin);
+        assert_eq!(symbolic.origin_label(), "builtin");
+        assert_eq!(symbolic.module, "Symbolics");
         assert_eq!(
-            plugin.summary_cell().as_deref(),
+            symbolic.summary_cell().as_deref(),
             Some("The principal arccosine.")
         );
         assert_eq!(table.count_by_origin(FunctionOrigin::User), 1);
-        assert_eq!(table.count_by_origin(FunctionOrigin::Builtin), 1);
-        assert_eq!(table.count_by_origin(FunctionOrigin::Plugin), 1);
+        assert_eq!(table.count_by_origin(FunctionOrigin::Builtin), 2);
     }
 
     /// WKS-002 count agreement: the table is built from the snapshot's registry capture, so the
@@ -937,9 +938,9 @@ mod tests {
         let state = EngineState {
             variables: Vec::new(),
             functions: vec![
-                function("aaa", &["x"], false, None, None),
-                function("abs", &["x"], true, None, Some("Absolute value.")),
-                function("acos", &["x"], true, Some("Lovelace.Symbolics"), None),
+                function("aaa", &["x"], false, "User", None),
+                function("abs", &["x"], true, "Core", Some("Absolute value.")),
+                function("acos", &["x"], true, "Symbolics", None),
             ],
         };
         let legacy_functions = vec![("aaa".to_string(), vec!["x".to_string()])];

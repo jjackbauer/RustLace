@@ -48,6 +48,15 @@
 //! | `steps[0].final.response.result.display` | `WorkspaceSnapshot::result` |
 //! | `steps[0].final.response.precision` | `WorkspaceSnapshot::precision` |
 //! | `steps[0].final.response.diagnostics` | `WorkspaceSnapshot::diagnostic` (`None`) |
+//!
+//! ## Interrupted statements are a different case
+//!
+//! The capture above is a **statement-boundary** cancellation: the web Studio's statement had
+//! already completed when the cancel was observed, so it is committed (`Completed`). The desktop's
+//! live-flag path (`RUN-008`) can stop an in-flight statement early; `COR-016` requires that
+//! partial state to be **discarded**, so only the committed prefix is published. The RUN-008 test
+//! below asserts that transactional behavior; it does not claim the web capture's in-flight
+//! statement was rolled back.
 
 #[cfg(test)]
 mod tests {
@@ -515,15 +524,16 @@ mod tests {
         );
     }
 
-    /// RUN-007/RUN-008: a cancellation-aware in-flight statement stops through the live flag and
-    /// its early-exit result is committed, then the run stops before the next statement.
+    /// RUN-007/RUN-008: a cancellation-aware in-flight statement stops through the live flag, and
+    /// `COR-016` discards its partial state. Only the previously committed prefix (`a`, `c = 0`)
+    /// is published, and `d = c + 1` must never run.
     ///
     /// The statement is one `while` loop that would take minutes; the live flag makes it stop in
-    /// milliseconds (RUN-008). The loop's completed iterations are already in the engine's state
-    /// when it stops, so the interrupted statement's commit must publish exactly that state — not
-    /// roll it back, and not drop the statement from the prefix — and `d = c + 1` must never run.
+    /// milliseconds (RUN-008). The loop's completed iterations are in the engine's state when it
+    /// stops, but that state belongs to the interrupted statement and must not become workspace
+    /// state.
     #[test]
-    fn an_interrupted_in_flight_statement_is_committed_and_the_next_never_starts() {
+    fn an_interrupted_in_flight_statement_is_rolled_back_and_the_next_never_starts() {
         let host = ExecutionHost::new(Box::new(|| {
             Box::new(RealEngine::new()) as Box<dyn Evaluator>
         }));
@@ -589,13 +599,13 @@ mod tests {
             "the loop observed the live flag and stopped early"
         );
         assert_eq!(
-            committed_steps, 3,
-            "the interrupted in-flight statement is part of the committed prefix"
+            committed_steps, 2,
+            "only the committed prefix, not the interrupted statement, is published"
         );
-        assert_eq!(snapshot.committed_steps, 3);
+        assert_eq!(snapshot.committed_steps, 2);
         assert_eq!(
             snapshot.result, "0",
-            "the early exit produced no value; the last published result stands"
+            "the interrupted statement produced no committed value"
         );
         assert_eq!(snapshot.diagnostic, None);
         let variable = |name: &str| {
@@ -607,25 +617,23 @@ mod tests {
                 .map(|variable| (variable.kind.as_str(), variable.display.as_str()))
         };
         assert_eq!(variable("a"), Some(("Natural", "2")));
-        let (kind, display) =
-            variable("c").expect("the interrupted statement's partial state is committed");
+        let (kind, display) = variable("c").expect("the committed prefix's c is published");
         assert_eq!(kind, "Natural");
-        let partial: usize = display.parse().expect("c is a Natural count");
-        assert!(
-            partial > 0,
-            "the loop ran before it observed the flag, so its partial c must be committed: {display:?}"
+        assert_eq!(
+            display, "0",
+            "the interrupted loop's partial c must not be committed"
         );
         assert_eq!(
             variable("d"),
             None,
             "the statement after the interrupted one must never execute"
         );
-        // The interrupted statement's own commit event is part of the stream.
+        // The interrupted statement must not produce a commit event.
         assert!(
-            events
+            !events
                 .iter()
                 .any(|event| matches!(event.event, DesktopEvent::StepCommitted { index: 2, .. })),
-            "the interrupted statement must be committed, not skipped"
+            "the interrupted statement must not be committed"
         );
         assert!(
             !events
@@ -635,7 +643,7 @@ mod tests {
         );
 
         println!(
-            "interrupted in-flight commit: cancel-to-terminal={:.2} ms committed=3/4 c={} d=absent result=0",
+            "interrupted in-flight rollback: cancel-to-terminal={:.2} ms committed=2/4 c={} d=absent result=0",
             elapsed.as_secs_f64() * 1000.0,
             display
         );

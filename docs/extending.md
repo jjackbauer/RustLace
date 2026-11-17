@@ -2,13 +2,15 @@
 
 Five walkthroughs, each naming the files to touch and the command that proves the change. The rule
 for all of them: the engine is the single source of behaviour, and a host that re-implements it is a
-bug.
+bug. There is one static registry and one dispatch table; a capability is added by compiling it in,
+never by registering it at run time.
 
 ## 1. Add a builtin
 
 1. **Declare the descriptor** in `lovelace-lang/src/registry.rs`. Add a `BuiltinInfo` entry to
    `BUILTINS` in name order: `name`, `parameters`, `min_arity`, `parameter_count`, `variadic`,
-   `plugin` (`None` for a core builtin), `category`, `summary`, `return_kind`, `related`, `examples`.
+   `module` (`Core`, `DSP`, `Symbolics`, `MathIR` or `Systems` — a browsing label, never a gate),
+   `category`, `summary`, `return_kind`, `related`, `examples`.
    This one table feeds the wire's `functions` array, `--functions`, `--function`, the help dialog
    and completion, so a builtin that is missing here is invisible to every host
    (`BUILTINS`).
@@ -17,8 +19,9 @@ bug.
    helper, check argument kinds explicitly, and return `Value`. Refusals are structured:
    `LangError::coded(message, pos, "InvalidArgument", "TypeMismatch")` or the category that actually
    applies (`lovelace-lang/src/diagnostic.rs`).
-3. **If it belongs to a plugin**, set `plugin: Some("Lovelace.Symbolics")` (or `Dsp`, `MathIR`) and
-   make the plugin's `register` install it, so a bare engine only gains it when that plugin loads.
+3. **Keep it available.** Every descriptor is exposed by `Engine::new()`; the `module` label groups
+   it for `help`/discovery and must never be consulted by the dispatcher. DSP, Symbolics and MathIR
+   functions are compiled in exactly like core functions.
 4. **Test it** in a `#[test]` in the relevant `roundNN_*.rs` or `suite_*_batch.rs`, and add a corpus
    record if the behaviour is documented (walkthrough 5).
 5. **Prove it end to end**:
@@ -28,20 +31,25 @@ bug.
    $ cargo run -p lovelace-run -- --eval "<a call>" --text
    ```
 
-## 2. Add a Modus plugin
+## 2. Add a statically integrated library family
 
-1. **Implement the trait** `lovelace_lang::modus::ModusPlugin`: `name()` and
-   `register(&mut self, host: &mut ModusHost)`. Call `host.register_builtin(name, parameters, impl)`
-   and, for elementwise work, `host.register_kernel::<T>(kernel)` with a `FieldKernel<T>`.
-2. **Model it on a shipped plugin**. `lovelace-lang/src/round67_modus.rs` contains the smallest
-   complete examples: `StatisticsPlugin` (2 builtins), `ScalarResultPlugin`, `DspPlugin`,
-   `ShadowingPlugin`, `ArityPlugin`, `RecordPlugin`, `SymbolicsContextPlugin`.
-3. **Load it** with `Engine::new_bare()` followed by `Engine::load_plugin(&mut plugin)`.
-   A bare engine advertises only core builtins plus the plugins it has loaded; the
-   full engine already has all of them.
-4. **Assert the advertisement**: `registry::builtin_count_for_plugins(&["Lovelace.X"])` must equal the
-   core count plus that plugin's descriptors, and the loaded plugin must appear in the envelope's
-   `functions[].plugin`.
+A family is a workspace crate plus a thin language adapter. `lovelace-systems` is the reference
+example.
+
+1. **Build the crate** as a workspace member depending only on the numeric crates
+   (`lovelace-nat`, `lovelace-int`, `lovelace-real`), never on `lovelace-lang` or the desktop
+   (ADR-001). Typed models, validation, exact arithmetic and errors live there; the crate is usable
+   from ordinary Rust without the interpreter.
+2. **Write the adapter** in `lovelace-lang/src/<family>.rs`: convert `Value` records, vectors and
+   scalars into the crate's types, call the crate, and build structured `Value::Record`/`Value::Vector`
+   results. The adapter maps `SystemsError` to `LangError::coded` and passes the evaluation's
+   cancellation check through. It re-implements no formula.
+3. **Register the names** as ordinary `BuiltinInfo` descriptors with `module: "<Family>"` and one
+   `match name` arm that delegates to the adapter. There is no loader, no trait object, no
+   `Box<dyn Fn>` table and no run-time registration anywhere in this path.
+4. **Pin the surface** with language golden tests (`--eval` plus the structured JSON projection), a
+   corpus record and a `docs/crates/<family>.md` page. Prove the CLI, engine and desktop observe the
+   same result because they all call `Engine`.
 
 ## 3. Add a UI pane
 
@@ -92,8 +100,8 @@ signature help below.
   `cargo run -p lovelace-corpus -- <id>`.
 - **Golden wire envelope** – add `<name>.ls` and `<name>.json` under
   `docs/csharp-oracle/Lovelace.Run.Tests/fixtures/`. Regenerate with
-  `LOVELACE_RECORD_GOLDENS=1 cargo test -p lovelace-run` (the switch is inert otherwise,
-  `record_all`), then re-run without it to compare.
+  `LOVELACE_RECORD_GOLDENS=1 cargo test -p lovelace-run record_goldens_on_demand -- --nocapture`
+  (the switch is inert otherwise, `record_all`), then re-run without it to compare.
 - **Desktop journey** – add the expected observable to `docs/goal-desktop-v4/journeys.md`, capture
   the reference under `docs/goal-desktop-v4/reference/REF-*.json`, then
   `cargo run -p lovelace-desktop -- --journey J-NN`.

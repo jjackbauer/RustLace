@@ -112,7 +112,7 @@ fn empty_plot_directory_is_an_error_envelope_with_exit_one() {
     ]);
     assert_eq!(r.exit, 1, "{}", r.env);
     assert!(!r.stdout.is_empty(), "stdout must never be empty");
-    assert_eq!(number(get(&r.env, "protocolVersion")), 1);
+    assert_eq!(number(get(&r.env, "protocolVersion")), 2);
     assert!(!boolean(get(&r.env, "ok")));
     assert_eq!(text(get(&r.env, "code")), "PlotDirectoryError");
     assert_eq!(text(get(&r.env, "category")), "TypeMismatch");

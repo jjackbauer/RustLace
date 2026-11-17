@@ -957,7 +957,7 @@ impl Settings {
         }
     }
 
-    /// Writes the settings file, creating parent directories as needed.
+    /// Writes the settings file atomically, creating parent directories as needed.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -966,7 +966,9 @@ impl Settings {
         }
         let mut text = self.to_json();
         text.push('\n');
-        std::fs::write(path, text)
+        crate::document_io::write(path, text.as_bytes())
+            .map(|_| ())
+            .map_err(std::io::Error::other)
     }
 
     /// Records a recently used path, newest first, without duplicates.

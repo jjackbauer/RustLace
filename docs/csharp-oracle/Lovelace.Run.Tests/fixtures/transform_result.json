@@ -1,16 +1,16 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "TransformResult(status: Satisfied, original: cos(x)^2 + sin(x)^2, expression: 1, changed: True, conditions: [], steps: [RewriteStep(rule_id: trig.pythagorean-sin2-cos2, classification: Universal, before: cos(x)^2 + sin(x)^2, after: 1, required_conditions: [], applicability: Applicable)], attempts: [], budget_exceeded: False, budget_kind: , diagnostics: [])",
-    "typed": "TransformResult(status: Satisfied, original: cos(x)^2 + sin(x)^2, expression: 1, changed: True, conditions: [], steps: [RewriteStep(rule_id: trig.pythagorean-sin2-cos2, classification: Universal, before: cos(x)^2 + sin(x)^2, after: 1, required_conditions: [], applicability: Applicable)], attempts: [], budget_exceeded: False, budget_kind: , diagnostics: []) (TransformResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "TransformResult",
       "fields": [
         {
           "name": "status",
@@ -23,27 +23,27 @@
         {
           "name": "original",
           "value": {
-            "kind": "Symbolic",
-            "pretty": "cos(x)^2 + sin(x)^2",
             "canonical": "(add (pow (fn cos (sym x)) (rat 2 1)) (pow (fn sin (sym x)) (rat 2 1)))",
             "domain": "complex",
             "exact": true,
-            "nodeCount": 9,
             "freeSymbols": [
               "x"
-            ]
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 9,
+            "pretty": "cos(x)^2 + sin(x)^2"
           }
         },
         {
           "name": "expression",
           "value": {
-            "kind": "Symbolic",
-            "pretty": "1",
             "canonical": "(rat 1 1)",
             "domain": "rational",
             "exact": true,
+            "freeSymbols": [],
+            "kind": "Symbolic",
             "nodeCount": 1,
-            "freeSymbols": []
+            "pretty": "1"
           }
         },
         {
@@ -56,26 +56,19 @@
         {
           "name": "conditions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "steps",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              1
-            ],
             "elements": [
               {
-                "kind": "Record",
-                "type": "RewriteStep",
                 "fields": [
                   {
                     "name": "rule_id",
@@ -95,38 +88,38 @@
                   {
                     "name": "before",
                     "value": {
-                      "kind": "Symbolic",
-                      "pretty": "cos(x)^2 + sin(x)^2",
                       "canonical": "(add (pow (fn cos (sym x)) (rat 2 1)) (pow (fn sin (sym x)) (rat 2 1)))",
                       "domain": "complex",
                       "exact": true,
-                      "nodeCount": 9,
                       "freeSymbols": [
                         "x"
-                      ]
+                      ],
+                      "kind": "Symbolic",
+                      "nodeCount": 9,
+                      "pretty": "cos(x)^2 + sin(x)^2"
                     }
                   },
                   {
                     "name": "after",
                     "value": {
-                      "kind": "Symbolic",
-                      "pretty": "1",
                       "canonical": "(rat 1 1)",
                       "domain": "rational",
                       "exact": true,
+                      "freeSymbols": [],
+                      "kind": "Symbolic",
                       "nodeCount": 1,
-                      "freeSymbols": []
+                      "pretty": "1"
                     }
                   },
                   {
                     "name": "required_conditions",
                     "value": {
+                      "elements": [],
                       "kind": "Array",
-                      "type": "Vector",
                       "shape": [
                         0
                       ],
-                      "elements": []
+                      "type": "Vector"
                     }
                   },
                   {
@@ -137,20 +130,27 @@
                       "value": "Applicable"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "RewriteStep"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              1
+            ],
+            "type": "Vector"
           }
         },
         {
           "name": "attempts",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
@@ -170,26 +170,29 @@
         {
           "name": "diagnostics",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "TransformResult"
+    },
+    "typed": "TransformResult(status: Satisfied, original: cos(x)^2 + sin(x)^2, expression: 1, changed: True, conditions: [], steps: [RewriteStep(rule_id: trig.pythagorean-sin2-cos2, classification: Universal, before: cos(x)^2 + sin(x)^2, after: 1, required_conditions: [], applicability: Applicable)], attempts: [], budget_exceeded: False, budget_kind: , diagnostics: []) (TransformResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "TransformResult(status: Satisfied, original: cos(x)^2 + sin(x)^2, expression: 1, changed: True, conditions: [], steps: [RewriteStep(rule_id: trig.pythagorean-sin2-cos2, classification: Universal, before: cos(x)^2 + sin(x)^2, after: 1, required_conditions: [], applicability: Applicable)], attempts: [], budget_exceeded: False, budget_kind: , diagnostics: [])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "TransformResult",
         "fields": [
           {
             "name": "status",
@@ -202,27 +205,27 @@
           {
             "name": "original",
             "value": {
-              "kind": "Symbolic",
-              "pretty": "cos(x)^2 + sin(x)^2",
               "canonical": "(add (pow (fn cos (sym x)) (rat 2 1)) (pow (fn sin (sym x)) (rat 2 1)))",
               "domain": "complex",
               "exact": true,
-              "nodeCount": 9,
               "freeSymbols": [
                 "x"
-              ]
+              ],
+              "kind": "Symbolic",
+              "nodeCount": 9,
+              "pretty": "cos(x)^2 + sin(x)^2"
             }
           },
           {
             "name": "expression",
             "value": {
-              "kind": "Symbolic",
-              "pretty": "1",
               "canonical": "(rat 1 1)",
               "domain": "rational",
               "exact": true,
+              "freeSymbols": [],
+              "kind": "Symbolic",
               "nodeCount": 1,
-              "freeSymbols": []
+              "pretty": "1"
             }
           },
           {
@@ -235,26 +238,19 @@
           {
             "name": "conditions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "steps",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                1
-              ],
               "elements": [
                 {
-                  "kind": "Record",
-                  "type": "RewriteStep",
                   "fields": [
                     {
                       "name": "rule_id",
@@ -274,38 +270,38 @@
                     {
                       "name": "before",
                       "value": {
-                        "kind": "Symbolic",
-                        "pretty": "cos(x)^2 + sin(x)^2",
                         "canonical": "(add (pow (fn cos (sym x)) (rat 2 1)) (pow (fn sin (sym x)) (rat 2 1)))",
                         "domain": "complex",
                         "exact": true,
-                        "nodeCount": 9,
                         "freeSymbols": [
                           "x"
-                        ]
+                        ],
+                        "kind": "Symbolic",
+                        "nodeCount": 9,
+                        "pretty": "cos(x)^2 + sin(x)^2"
                       }
                     },
                     {
                       "name": "after",
                       "value": {
-                        "kind": "Symbolic",
-                        "pretty": "1",
                         "canonical": "(rat 1 1)",
                         "domain": "rational",
                         "exact": true,
+                        "freeSymbols": [],
+                        "kind": "Symbolic",
                         "nodeCount": 1,
-                        "freeSymbols": []
+                        "pretty": "1"
                       }
                     },
                     {
                       "name": "required_conditions",
                       "value": {
+                        "elements": [],
                         "kind": "Array",
-                        "type": "Vector",
                         "shape": [
                           0
                         ],
-                        "elements": []
+                        "type": "Vector"
                       }
                     },
                     {
@@ -316,20 +312,27 @@
                         "value": "Applicable"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "RewriteStep"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                1
+              ],
+              "type": "Vector"
             }
           },
           {
             "name": "attempts",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
@@ -349,37 +352,34 @@
           {
             "name": "diagnostics",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "TransformResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

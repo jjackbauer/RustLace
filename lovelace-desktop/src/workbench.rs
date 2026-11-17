@@ -3048,7 +3048,7 @@ impl Workbench {
                             committed_steps, elapsed
                         ),
                         InFlightCancellation::Interrupted => format!(
-                            "Run cancelled after {} statements in {} ms; the in-flight statement stopped at the cancellation flag and its early-exit state is committed.",
+                            "Run cancelled after {} statements in {} ms; the in-flight statement was discarded at the cancellation flag and only the committed prefix was kept.",
                             committed_steps, elapsed
                         ),
                     }
@@ -3687,7 +3687,7 @@ mod tests {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin: true,
-            plugin: None,
+            module: "Core".to_string(),
             summary: None,
         }
     }
@@ -3782,9 +3782,9 @@ mod tests {
 
     /// WKS-001/WKS-002 with the shipped engine: after a run that defines a user `func` and a
     /// variable, the committed snapshot publishes `_` with its kind and display, the function
-    /// table is built from the registry capture (builtins + plugin builtins + the user
-    /// definition), and the table's count agrees with the snapshot and with a fresh engine's
-    /// registry plus that one user definition.
+    /// table is built from the registry capture (every builtin plus the user definition), and the
+    /// table's count agrees with the snapshot and with a fresh engine's registry plus that one
+    /// user definition.
     #[test]
     #[cfg(feature = "real-engine")]
     fn the_real_snapshot_publishes_underscore_and_the_registry_count_for_the_tables() {
@@ -3843,8 +3843,9 @@ mod tests {
         assert_eq!(user.parameters_text(), "x");
         let builtin = table.rows.iter().find(|row| row.name == "abs").unwrap();
         assert_eq!(builtin.origin, crate::engine::FunctionOrigin::Builtin);
-        let plugin = table.rows.iter().find(|row| row.name == "acos").unwrap();
-        assert_eq!(plugin.origin, crate::engine::FunctionOrigin::Plugin);
+        let symbolic = table.rows.iter().find(|row| row.name == "acos").unwrap();
+        assert_eq!(symbolic.origin, crate::engine::FunctionOrigin::Builtin);
+        assert_eq!(symbolic.module, "Symbolics");
     }
 
     /// RES-001 end to end with the shipped engine: one run publishes the structured projection
@@ -4705,10 +4706,10 @@ mod tests {
             vec!["one".to_string(), "two".to_string(), "three".to_string()],
             "the cancelled snapshot must carry the same once-only output"
         );
-        // RUN-007: the kernel statement that was in flight when Cancel was pressed is part of
-        // the committed prefix; it stopped at the flag and left no new value, so the output and
-        // variables are exactly the ones above.
-        assert_eq!(snapshot.committed_steps, 4);
+        // COR-016: the `spin()` statement that was in flight when Cancel was pressed is not
+        // committed; the three print statements are the committed prefix, so their output is
+        // retained exactly once and no partial `spin()` state is published.
+        assert_eq!(snapshot.committed_steps, 3);
         assert!(
             document
                 .logs
@@ -4721,7 +4722,7 @@ mod tests {
             document
                 .logs
                 .iter()
-                .any(|line| line.text.contains("stopped at the cancellation flag")),
+                .any(|line| line.text.contains("discarded at the cancellation flag")),
             "the terminal line must report the interrupted in-flight statement: {:?}",
             document.logs
         );
@@ -6020,11 +6021,10 @@ mod tests {
         }
     }
 
-    /// RUN-003/RUN-007: cancelling after statement 2 must keep exactly the committed prefix in
+    /// RUN-003/COR-016: cancelling after statement 2 must keep exactly the committed prefix in
     /// every field of the assembled view. The statement the cancellation was observed inside is
-    /// part of that prefix (the web Studio commits its in-flight statement), so the count is 3;
-    /// the engine stopped it before it wrote `c`, so the workspace holds exactly `a` and `b` and
-    /// no value is invented for it.
+    /// **not** part of that prefix (transactional cancellation), so the count is 2; the engine
+    /// stopped it before it wrote `c`, and its partial state is discarded.
     #[test]
     fn cancelling_after_statement_two_keeps_the_same_coherent_prefix() {
         let entered = Arc::new(AtomicBool::new(false));
@@ -6061,8 +6061,8 @@ mod tests {
         let view = workbench.active_view();
         assert_eq!(view.run_state, RunState::Cancelled);
         assert_eq!(view.revision, revision);
-        assert_eq!(view.committed_steps, 3);
-        assert_eq!(view.committed_statement(), Some(3));
+        assert_eq!(view.committed_steps, 2);
+        assert_eq!(view.committed_statement(), Some(2));
         assert_eq!(view.total, 4);
         assert_eq!(
             view.variables,
@@ -6076,8 +6076,8 @@ mod tests {
         assert_eq!(view.result, "2", "the early exit produced no new value");
         assert_eq!(
             view.last_committed_log_statement(),
-            Some(3),
-            "the interrupted statement is inside the committed prefix; logs: {:?}",
+            Some(2),
+            "the interrupted statement is not in the committed prefix; logs: {:?}",
             view.logs
         );
         assert_eq!(
@@ -6087,12 +6087,12 @@ mod tests {
         );
         assert_eq!(view.diagnostic, None, "a cancellation is not a diagnostic");
         assert!(view.logs.iter().any(|line| {
-            line.kind == LogKind::Timing && line.text.contains("Run cancelled after 3 statements")
+            line.kind == LogKind::Timing && line.text.contains("Run cancelled after 2 statements")
         }));
         assert!(
             view.logs
                 .iter()
-                .any(|line| line.text.contains("stopped at the cancellation flag")),
+                .any(|line| line.text.contains("discarded at the cancellation flag")),
             "the log must say the in-flight statement was interrupted: {:?}",
             view.logs
         );

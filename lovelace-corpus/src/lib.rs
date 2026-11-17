@@ -9,6 +9,8 @@
 //! * [`property_corpus`] builds the seven generated corpora with the same draw order as
 //!   the C# tests, and records the draw transcript and the canonical expression text.
 
+#![forbid(unsafe_code)]
+
 pub mod dotnet_random;
 #[cfg(test)]
 mod property_assertions;

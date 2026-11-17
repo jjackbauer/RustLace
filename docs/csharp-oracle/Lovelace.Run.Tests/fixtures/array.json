@@ -1,165 +1,165 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Array",
     "display": "[[x, y], [y, x]]",
-    "typed": "[[x, y], [y, x]] (Array)",
+    "kind": "Array",
     "structured": {
+      "elements": [
+        {
+          "canonical": "(sym x)",
+          "domain": "complex",
+          "exact": true,
+          "freeSymbols": [
+            "x"
+          ],
+          "kind": "Symbolic",
+          "nodeCount": 1,
+          "pretty": "x"
+        },
+        {
+          "canonical": "(sym y)",
+          "domain": "complex",
+          "exact": true,
+          "freeSymbols": [
+            "y"
+          ],
+          "kind": "Symbolic",
+          "nodeCount": 1,
+          "pretty": "y"
+        },
+        {
+          "canonical": "(sym y)",
+          "domain": "complex",
+          "exact": true,
+          "freeSymbols": [
+            "y"
+          ],
+          "kind": "Symbolic",
+          "nodeCount": 1,
+          "pretty": "y"
+        },
+        {
+          "canonical": "(sym x)",
+          "domain": "complex",
+          "exact": true,
+          "freeSymbols": [
+            "x"
+          ],
+          "kind": "Symbolic",
+          "nodeCount": 1,
+          "pretty": "x"
+        }
+      ],
       "kind": "Array",
-      "type": "Array",
       "shape": [
         2,
         2
       ],
-      "elements": [
-        {
-          "kind": "Symbolic",
-          "pretty": "x",
-          "canonical": "(sym x)",
-          "domain": "complex",
-          "exact": true,
-          "nodeCount": 1,
-          "freeSymbols": [
-            "x"
-          ]
-        },
-        {
-          "kind": "Symbolic",
-          "pretty": "y",
-          "canonical": "(sym y)",
-          "domain": "complex",
-          "exact": true,
-          "nodeCount": 1,
-          "freeSymbols": [
-            "y"
-          ]
-        },
-        {
-          "kind": "Symbolic",
-          "pretty": "y",
-          "canonical": "(sym y)",
-          "domain": "complex",
-          "exact": true,
-          "nodeCount": 1,
-          "freeSymbols": [
-            "y"
-          ]
-        },
-        {
-          "kind": "Symbolic",
-          "pretty": "x",
-          "canonical": "(sym x)",
-          "domain": "complex",
-          "exact": true,
-          "nodeCount": 1,
-          "freeSymbols": [
-            "x"
-          ]
-        }
-      ]
-    }
+      "type": "Array"
+    },
+    "typed": "[[x, y], [y, x]] (Array)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Array",
       "display": "[[x, y], [y, x]]",
+      "kind": "Array",
+      "name": "_",
       "structured": {
+        "elements": [
+          {
+            "canonical": "(sym x)",
+            "domain": "complex",
+            "exact": true,
+            "freeSymbols": [
+              "x"
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
+          },
+          {
+            "canonical": "(sym y)",
+            "domain": "complex",
+            "exact": true,
+            "freeSymbols": [
+              "y"
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "y"
+          },
+          {
+            "canonical": "(sym y)",
+            "domain": "complex",
+            "exact": true,
+            "freeSymbols": [
+              "y"
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "y"
+          },
+          {
+            "canonical": "(sym x)",
+            "domain": "complex",
+            "exact": true,
+            "freeSymbols": [
+              "x"
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
+          }
+        ],
         "kind": "Array",
-        "type": "Array",
         "shape": [
           2,
           2
         ],
-        "elements": [
-          {
-            "kind": "Symbolic",
-            "pretty": "x",
-            "canonical": "(sym x)",
-            "domain": "complex",
-            "exact": true,
-            "nodeCount": 1,
-            "freeSymbols": [
-              "x"
-            ]
-          },
-          {
-            "kind": "Symbolic",
-            "pretty": "y",
-            "canonical": "(sym y)",
-            "domain": "complex",
-            "exact": true,
-            "nodeCount": 1,
-            "freeSymbols": [
-              "y"
-            ]
-          },
-          {
-            "kind": "Symbolic",
-            "pretty": "y",
-            "canonical": "(sym y)",
-            "domain": "complex",
-            "exact": true,
-            "nodeCount": 1,
-            "freeSymbols": [
-              "y"
-            ]
-          },
-          {
-            "kind": "Symbolic",
-            "pretty": "x",
-            "canonical": "(sym x)",
-            "domain": "complex",
-            "exact": true,
-            "nodeCount": 1,
-            "freeSymbols": [
-              "x"
-            ]
-          }
-        ]
+        "type": "Array"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     },
     {
-      "name": "y",
-      "kind": "Symbolic",
       "display": "y",
+      "kind": "Symbolic",
+      "name": "y",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "y",
         "canonical": "(sym y)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "y"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "y"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

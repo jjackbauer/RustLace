@@ -1,4 +1,4 @@
-//! The plugin-aware help/introspection surface: the Rust mirror of the reference
+//! The help/introspection surface: the Rust mirror of the reference
 //! `Lovelace.Suite.HelpService`.
 //!
 //! The reference derives every help rendering from the live function registry plus the builtin
@@ -21,6 +21,7 @@ pub const CATEGORY_ORDER: &[&str] = &[
     "Compilation",
     "DSP",
     "Introspection",
+    "Systems",
     "Core",
 ];
 
@@ -50,6 +51,9 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("numbers", "Numerics"),
     ("types", "Introspection"),
     ("introspection", "Introspection"),
+    ("systems", "Systems"),
+    ("queueing", "Systems"),
+    ("performance", "Systems"),
     ("language", "Language"),
     ("core", "Core"),
 ];
@@ -115,7 +119,7 @@ pub fn signature(info: &BuiltinInfo) -> String {
     text
 }
 
-/// Full help for one builtin: signature, summary, examples, return kind, see-also and plugin.
+/// Full help for one builtin: signature, summary, examples, return kind, see-also and module.
 /// `None` when the name is not a builtin (the reference returns null there).
 pub fn function(name: &str) -> Option<String> {
     let info = registry::find(name)?;
@@ -139,9 +143,9 @@ pub fn function(name: &str) -> Option<String> {
         text.push_str("\nSee also: ");
         text.push_str(&info.related.join(", "));
     }
-    if let Some(plugin) = info.plugin {
-        text.push_str("\nPlugin: ");
-        text.push_str(plugin);
+    if !info.module.is_empty() {
+        text.push_str("\nModule: ");
+        text.push_str(info.module);
     }
     Some(text)
 }

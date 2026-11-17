@@ -1,16 +1,16 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [SolutionFamily(template: k*pi, parameter: k, period: pi, parameter_domain: integer, conditions: [], exactness: ParametricExact)], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: [])",
-    "typed": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [SolutionFamily(template: k*pi, parameter: k, period: pi, parameter_domain: integer, conditions: [], exactness: ParametricExact)], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: []) (SolveResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "SolveResult",
       "fields": [
         {
           "name": "status",
@@ -23,22 +23,22 @@
         {
           "name": "variable",
           "value": {
-            "kind": "Symbolic",
-            "pretty": "x",
             "canonical": "(sym x)",
             "domain": "complex",
             "exact": true,
-            "nodeCount": 1,
             "freeSymbols": [
               "x"
-            ]
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
           }
         },
         {
           "name": "domain",
           "value": {
-            "kind": "Domain",
-            "domain": "complex"
+            "domain": "complex",
+            "kind": "Domain"
           }
         },
         {
@@ -59,83 +59,76 @@
         {
           "name": "solutions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "families",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              1
-            ],
             "elements": [
               {
-                "kind": "Record",
-                "type": "SolutionFamily",
                 "fields": [
                   {
                     "name": "template",
                     "value": {
-                      "kind": "Symbolic",
-                      "pretty": "k*pi",
                       "canonical": "(mul (sym k) (pi))",
                       "domain": "complex",
                       "exact": false,
-                      "nodeCount": 3,
                       "freeSymbols": [
                         "k"
-                      ]
+                      ],
+                      "kind": "Symbolic",
+                      "nodeCount": 3,
+                      "pretty": "k*pi"
                     }
                   },
                   {
                     "name": "parameter",
                     "value": {
-                      "kind": "Symbolic",
-                      "pretty": "k",
                       "canonical": "(sym k)",
                       "domain": "complex",
                       "exact": true,
-                      "nodeCount": 1,
                       "freeSymbols": [
                         "k"
-                      ]
+                      ],
+                      "kind": "Symbolic",
+                      "nodeCount": 1,
+                      "pretty": "k"
                     }
                   },
                   {
                     "name": "period",
                     "value": {
-                      "kind": "Symbolic",
-                      "pretty": "pi",
                       "canonical": "(pi)",
                       "domain": "real",
                       "exact": false,
+                      "freeSymbols": [],
+                      "kind": "Symbolic",
                       "nodeCount": 1,
-                      "freeSymbols": []
+                      "pretty": "pi"
                     }
                   },
                   {
                     "name": "parameter_domain",
                     "value": {
-                      "kind": "Domain",
-                      "domain": "integer"
+                      "domain": "integer",
+                      "kind": "Domain"
                     }
                   },
                   {
                     "name": "conditions",
                     "value": {
+                      "elements": [],
                       "kind": "Array",
-                      "type": "Vector",
                       "shape": [
                         0
                       ],
-                      "elements": []
+                      "type": "Vector"
                     }
                   },
                   {
@@ -146,36 +139,43 @@
                       "value": "ParametricExact"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "SolutionFamily"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              1
+            ],
+            "type": "Vector"
           }
         },
         {
           "name": "common_conditions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "represented_count",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "0",
-            "exact": true
+            "value": "0"
           }
         },
         {
           "name": "unrepresented_count",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "0",
-            "exact": true
+            "value": "0"
           }
         },
         {
@@ -188,26 +188,29 @@
         {
           "name": "diagnostics",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "SolveResult"
+    },
+    "typed": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [SolutionFamily(template: k*pi, parameter: k, period: pi, parameter_domain: integer, conditions: [], exactness: ParametricExact)], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: []) (SolveResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [SolutionFamily(template: k*pi, parameter: k, period: pi, parameter_domain: integer, conditions: [], exactness: ParametricExact)], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: [])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "SolveResult",
         "fields": [
           {
             "name": "status",
@@ -220,22 +223,22 @@
           {
             "name": "variable",
             "value": {
-              "kind": "Symbolic",
-              "pretty": "x",
               "canonical": "(sym x)",
               "domain": "complex",
               "exact": true,
-              "nodeCount": 1,
               "freeSymbols": [
                 "x"
-              ]
+              ],
+              "kind": "Symbolic",
+              "nodeCount": 1,
+              "pretty": "x"
             }
           },
           {
             "name": "domain",
             "value": {
-              "kind": "Domain",
-              "domain": "complex"
+              "domain": "complex",
+              "kind": "Domain"
             }
           },
           {
@@ -256,83 +259,76 @@
           {
             "name": "solutions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "families",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                1
-              ],
               "elements": [
                 {
-                  "kind": "Record",
-                  "type": "SolutionFamily",
                   "fields": [
                     {
                       "name": "template",
                       "value": {
-                        "kind": "Symbolic",
-                        "pretty": "k*pi",
                         "canonical": "(mul (sym k) (pi))",
                         "domain": "complex",
                         "exact": false,
-                        "nodeCount": 3,
                         "freeSymbols": [
                           "k"
-                        ]
+                        ],
+                        "kind": "Symbolic",
+                        "nodeCount": 3,
+                        "pretty": "k*pi"
                       }
                     },
                     {
                       "name": "parameter",
                       "value": {
-                        "kind": "Symbolic",
-                        "pretty": "k",
                         "canonical": "(sym k)",
                         "domain": "complex",
                         "exact": true,
-                        "nodeCount": 1,
                         "freeSymbols": [
                           "k"
-                        ]
+                        ],
+                        "kind": "Symbolic",
+                        "nodeCount": 1,
+                        "pretty": "k"
                       }
                     },
                     {
                       "name": "period",
                       "value": {
-                        "kind": "Symbolic",
-                        "pretty": "pi",
                         "canonical": "(pi)",
                         "domain": "real",
                         "exact": false,
+                        "freeSymbols": [],
+                        "kind": "Symbolic",
                         "nodeCount": 1,
-                        "freeSymbols": []
+                        "pretty": "pi"
                       }
                     },
                     {
                       "name": "parameter_domain",
                       "value": {
-                        "kind": "Domain",
-                        "domain": "integer"
+                        "domain": "integer",
+                        "kind": "Domain"
                       }
                     },
                     {
                       "name": "conditions",
                       "value": {
+                        "elements": [],
                         "kind": "Array",
-                        "type": "Vector",
                         "shape": [
                           0
                         ],
-                        "elements": []
+                        "type": "Vector"
                       }
                     },
                     {
@@ -343,36 +339,43 @@
                         "value": "ParametricExact"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "SolutionFamily"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                1
+              ],
+              "type": "Vector"
             }
           },
           {
             "name": "common_conditions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "represented_count",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "0",
-              "exact": true
+              "value": "0"
             }
           },
           {
             "name": "unrepresented_count",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "0",
-              "exact": true
+              "value": "0"
             }
           },
           {
@@ -385,37 +388,34 @@
           {
             "name": "diagnostics",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "SolveResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

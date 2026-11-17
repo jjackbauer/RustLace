@@ -17,7 +17,7 @@ This file does.
 ```console
 cargo build --workspace
 cargo test --workspace
-cargo run --release -p lovelace-corpus      # 214 records; run it in release (see below)
+cargo run --release -p lovelace-corpus      # 231 records; run it in release (see below)
 cargo test -p lovelace-desktop
 cargo run -p lovelace-desktop -- --gui-selftest
 ```
@@ -62,7 +62,7 @@ gate overflows its main-thread stack at `lang/061` on some hosts; the release bu
 | the engine API | `lovelace-lang/src/lib.rs` (`Engine`) |
 | the builtin catalogue (names, arity, categories, docs) | `lovelace-lang/src/registry.rs` |
 | builtin implementations | `lovelace-lang/src/builtins.rs` (`pub fn call`) |
-| the plugin seam | `lovelace-lang/src/modus.rs` |
+| the systems library | `lovelace-systems/src/lib.rs`, `lovelace-lang/src/systems_family.rs` |
 | cancellation | `lovelace-lang/src/cancellable.rs`, `lovelace-symbolics/src/cancel.rs` |
 | the wire envelope | `lovelace-run/src/main.rs` |
 | the parity gate | `lovelace-corpus/src/main.rs`, `parity/corpus/` |

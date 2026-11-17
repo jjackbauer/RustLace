@@ -157,8 +157,8 @@ impl Evaluator for RealEngine {
 
     /// Copies the engine's own `capture_state` snapshot.
     ///
-    /// The engine's capture is the registry: every enabled builtin with its declared parameter
-    /// names and plugin, every host registration, and the script's user `func` definitions with
+    /// The engine's capture is the registry: every published builtin with its declared parameter
+    /// names and static module label, and the script's user `func` definitions with
     /// `is_builtin == false`. The desktop maps it field for field and never invents an entry, so
     /// a builtin added to (or removed from) the engine appears in (or disappears from)
     /// completion without a desktop change.
@@ -196,10 +196,11 @@ impl Evaluator for RealEngine {
                 .functions
                 .into_values()
                 .map(|function| {
-                    // `StateFunction` carries the plugin but not the registry's one-line summary.
-                    // The registry entry is the engine's own published data for the same
-                    // function, so the summary is read from there instead of being invented or
-                    // transcribed into the desktop: an unregistered user definition has none.
+                    // `StateFunction` carries the static module label but not the registry's
+                    // one-line summary. The registry entry is the engine's own published data for
+                    // the same function, so the summary is read from there instead of being
+                    // invented or transcribed into the desktop: an unregistered user definition
+                    // has none.
                     let summary = if function.is_builtin {
                         lovelace_lang::registry::find(&function.name)
                             .and_then(|info| info.summary)
@@ -211,7 +212,7 @@ impl Evaluator for RealEngine {
                         name: function.name,
                         parameters: function.parameters,
                         is_builtin: function.is_builtin,
-                        plugin: function.plugin,
+                        module: function.module,
                         summary,
                     }
                 })

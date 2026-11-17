@@ -9,6 +9,8 @@
 //! `sqrt`/`pi` fast. Arithmetic involving a repeating value converts to an exact rational first,
 //! so `1/3 + 1/3` is `0.(6)` and not `0.6`.
 
+#![forbid(unsafe_code)]
+
 use std::cell::Cell;
 use std::cmp::Ordering;
 

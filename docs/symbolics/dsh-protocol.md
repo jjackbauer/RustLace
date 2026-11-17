@@ -1,4 +1,4 @@
-# DSH structured protocol (v1)
+# DSH structured protocol (v2)
 
 The noninteractive runner (`Lovelace.Run`) is the agent-facing surface. Its contract is a
 **versioned JSON envelope on stdout**, designed so that an agent never has to parse a display
@@ -14,6 +14,9 @@ string to recover mathematical meaning.
    and `Completeness.Partial` can never be confused for one another.
 3. **An absent field is `{"kind":"Null"}`**, distinct from an empty string.
 4. **Versioned.** `protocolVersion`, `symbolicFormatVersion` and `mathIrVersion` are always present.
+   `protocolVersion` is `2`. **v2 migration:** the per-function `plugin` field is removed and
+   `module` is added (a static family label: `Core`, `DSP`, `Symbolics`, `MathIR`, `Systems`); every
+   other field and key is unchanged. No field enables or disables a builtin.
    `--print-budget <nodes>` bounds structured renderings: beyond it, `pretty`/`canonical` carry a
    ` …`-terminated prefix of the real rendering (never a re-ordered one) and the value reports
    `truncated: true`, `truncationReason` (`node-budget`/`depth-limit`) and `budget`. Without the
@@ -138,7 +141,7 @@ answer and a record for another. Abridged below only in the nested symbolic rend
 
 ```json
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "symbolicFormatVersion": "#!lovelace-sym 1",
   "mathIrVersion": 2,
   "ok": true,
@@ -267,7 +270,7 @@ report the same line and column.
 ## Error envelope
 
 ```json
-{ "protocolVersion": 1, "symbolicFormatVersion": "#!lovelace-sym 1", "mathIrVersion": 2,
+{ "protocolVersion": 2, "symbolicFormatVersion": "#!lovelace-sym 1", "mathIrVersion": 2,
   "ok": false, "code": "InvalidOperation", "category": "DomainError",
   "message": "solve(): currently supports domains real and complex; got integer.",
   "recoverable": true,
@@ -312,7 +315,7 @@ has `det` is told so in the envelope it already receives:
 ```json
 { "ok": false, "code": "UnknownFunction", "category": "UnsupportedOperation", "recoverable": true,
   "message": "Unknown function 'determinant'. Did you mean 'det'?",
-  "suggestions": ["det"], "registrySize": 124,
+  "suggestions": ["det"], "registrySize": 134,
   "diagnostics": [ { "message": "Unknown function 'determinant'. Did you mean 'det'?",
                      "position": 38, "line": 2, "column": 1 } ] }
 ```
@@ -330,7 +333,7 @@ has `det` is told so in the envelope it already receives:
   earlier release printed** when there is nothing to offer (`Unknown function 'x'.`), so no
   recorded message contract changes; `--text` prints that same sentence on stderr.
 
-The three fields are optional and additive — `protocolVersion` stays 1, and every other failure
+The three fields are optional and additive — `protocolVersion` stays 2, and every other failure
 omits them. The `diagnostics` entry repeats the top-level message, so a consumer that reads only
 that array still gets the answer.
 
@@ -361,14 +364,14 @@ else: a page that ships documentation is a page an agent cannot afford. It repor
 ordinal by name, so two queries over one registry cannot disagree.
 
 ```json
-{ "protocolVersion": 1, "symbolicFormatVersion": "#!lovelace-sym 1", "mathIrVersion": 2, "ok": true,
+{ "protocolVersion": 2, "symbolicFormatVersion": "#!lovelace-sym 1", "mathIrVersion": 2, "ok": true,
   "pattern": "det", "total": 1, "returned": 1, "truncated": false,
   "functions": [ { "name": "det", "parameters": ["m"], "minArity": 1, "parameterCount": 1,
                    "variadic": false, "category": "Linear Algebra" } ] }
 ```
 
 `--function <name>` answers the same `functions[]` entry a script envelope carries, in a `function` key
-instead of the array — one entry, with the descriptor metadata. An unknown **name** is not an empty
+instead of the array — one entry, with the descriptor metadata (including `module`). An unknown **name** is not an empty
 success: it is the documented `UnknownFunction` refusal, with the registry's `suggestions` and its
 `registrySize`, exactly as a call to that name would produce. An unknown **pattern** is an empty listing
 with `total: 0`: a search that found nothing is a result, not a refusal.

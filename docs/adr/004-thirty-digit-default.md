@@ -141,3 +141,14 @@ performance choice that costs no correctness.
 of `precision_default.rs` (the constant and the default paths, and the digit-budget timing). The
 representation witness cited in "Decision" above is historical and no longer describes the product.
 
+## Independence from the deleted extension host (2026-11-17)
+
+ADR-009 deletes the Modus plugin host. The engine's `dsp_precision()` helper — 30 places until
+`setprecision` is called, then the engine knob — is unchanged by that deletion and still drives
+every DSP builtin (`lovelace-lang/src/builtins.rs`). The desktop's own 30-digit default and this
+engine-level DSP default are separate decisions that happen to share a value; neither depends on a
+loaded family. The runner's `dsp_plugin_untouched_knob_computes_at_fast_budget_and_promotes` test
+pins the engine behaviour, and `movingavg_matches_exact_division_at_every_precision` pins that the
+digit budget is a performance choice that costs no correctness.
+
+

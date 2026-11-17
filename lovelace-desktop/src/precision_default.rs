@@ -16,8 +16,8 @@
 //!    default paths) plus observation 3 (the digit-budget timing).
 //! 3. [`sqrt_two_at_30_is_materially_faster_than_at_1000_and_correct`] measures the whole
 //!    `sqrt(2)` evaluation at 30 and at 1000 and verifies the 30-digit answer. This is a
-//!    *digit-budget* measurement: in the Rust engine `sqrt(2)` is a Real, and unlike the C#
-//!    `NumericOps`/`DspPlugin` gates the Rust real `sqrt` has no fixed-width representation
+//!    *digit-budget* measurement: in the Rust engine `sqrt(2)` is a Real, and unlike the legacy
+//!    C# `NumericOps`/`DspPlugin` gates the Rust real `sqrt` has no fixed-width representation
 //!    switch, so the speedup here comes from doing 33x less big-integer work. The representation
 //!    switch is proven by observation 2, never by this timing.
 #![cfg(all(test, feature = "real-engine"))]

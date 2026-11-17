@@ -57,9 +57,17 @@ Rows that compose more than one target:
   lovelace-run` first (the test helper prints that instruction when the binary is missing);
   `cargo test --workspace` builds it as part of `lovelace-run`'s own test targets.
 
-The single ignored test is `property_assertions::mathir_evaluates_like_symbolic`, annotated in
-place: "blocked: numeric::evaluate and IrEvaluator differ by 1 ulp at 50 places
-(lovelace-lang)". It is part of the `lovelace-corpus` row (18 passed + 1 ignored).
+The historical measurement above counts one ignored test,
+`property_assertions::mathir_evaluates_like_symbolic`, annotated at the time as "blocked:
+numeric::evaluate and IrEvaluator differ by 1 ulp at 50 places (lovelace-lang)". The M0.2 work
+re-enabled it: the divergence was an **evaluation-order** difference in the test's direct arm, which
+called `substitute` before evaluation. Substitution folded `5/3 + 2/3` into `7/3`, so the test
+compared `7/3 + B` against MathIR's original `(5/3 + B) + 2/3`; the separate 50-place truncations
+differ by 1 ulp. Both arms now bind `x` and call `evaluate_bound`, and
+`mathir_matches_direct_for_folded_constant_regression` pins item 28 at x=1/3. The current
+`lovelace-corpus` suite has **zero ignored tests** and reports **21 passed** (the 19 original lib
+tests, the folded-constant regression, and the debug corpus-worker recursion test); the 6,147
+passed / 1 ignored figures remain an exact observation of `fa87ecc`, not a current count.
 
 ### The reconciled historical table: 6,067 + 68 = 6,135
 
@@ -175,17 +183,21 @@ reason.
 
 ## 2. Oracle and golden tests
 
-- **Documentation corpus** — `parity/corpus/{lang,symbolics}.json` (214 records) extracted from the
+- **Documentation corpus** — `parity/corpus/{lang,symbolics,systems}.json` (231 records) extracted from the
   C# language reference. `lovelace-corpus` runs every script and compares the rendered text:
 
   ```console
   $ cargo run --release -p lovelace-corpus
-  corpus: 214 passed, 0 failed, 214 total
+  corpus: 231 passed, 0 failed, 231 total
   ```
 
-  Run the gate **in release**: on this host the debug binary overflows its main-thread stack at
-  `lang/061` (`func fact(n) ... fact(5)`), while the release build of the same sources passes all 214.
-  A missing corpus file is exit code 2, never a pass.
+  Run the gate **in release** in CI. The corpus runs its scripts on a 256 MiB worker: the debug
+  build used to overflow its main-thread stack at `lang/061` (`func fact(n) ... fact(5)`), and the
+  worker removes that crash while keeping the same evaluation semantics.
+  `lang_061_finishes_on_the_corpus_worker_stack` pins the recursive case in both profiles. A missing
+  corpus file is exit code 2, never a pass. Both CI jobs run this command as a **blocking step**
+  before building the release desktop, so a mismatch, panic, missing file or non-zero exit fails the
+  workflow.
 - **Golden wire envelopes** — `docs/csharp-oracle/Lovelace.Run.Tests/fixtures/*` compared by
   `lovelace-run`'s `golden_batch`. `LOVELACE_RECORD_GOLDENS=1` rewrites them; the switch is inert
   otherwise.

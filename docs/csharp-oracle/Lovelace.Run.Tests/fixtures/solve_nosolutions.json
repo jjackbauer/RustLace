@@ -1,16 +1,16 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "SolveResult(status: NoSolutions, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: [Diagnostic(code: solve.no-solutions, category: NoSolution, message: every root violates the denominator condition., recoverable: True, location: , details: [])])",
-    "typed": "SolveResult(status: NoSolutions, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: [Diagnostic(code: solve.no-solutions, category: NoSolution, message: every root violates the denominator condition., recoverable: True, location: , details: [])]) (SolveResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "SolveResult",
       "fields": [
         {
           "name": "status",
@@ -23,22 +23,22 @@
         {
           "name": "variable",
           "value": {
-            "kind": "Symbolic",
-            "pretty": "x",
             "canonical": "(sym x)",
             "domain": "complex",
             "exact": true,
-            "nodeCount": 1,
             "freeSymbols": [
               "x"
-            ]
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
           }
         },
         {
           "name": "domain",
           "value": {
-            "kind": "Domain",
-            "domain": "complex"
+            "domain": "complex",
+            "kind": "Domain"
           }
         },
         {
@@ -59,50 +59,50 @@
         {
           "name": "solutions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "families",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "common_conditions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "represented_count",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "0",
-            "exact": true
+            "value": "0"
           }
         },
         {
           "name": "unrepresented_count",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "0",
-            "exact": true
+            "value": "0"
           }
         },
         {
@@ -115,15 +115,8 @@
         {
           "name": "diagnostics",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              1
-            ],
             "elements": [
               {
-                "kind": "Record",
-                "type": "Diagnostic",
                 "fields": [
                   {
                     "name": "code",
@@ -163,31 +156,41 @@
                   {
                     "name": "details",
                     "value": {
+                      "elements": [],
                       "kind": "Array",
-                      "type": "Vector",
                       "shape": [
                         0
                       ],
-                      "elements": []
+                      "type": "Vector"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "Diagnostic"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              1
+            ],
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "SolveResult"
+    },
+    "typed": "SolveResult(status: NoSolutions, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: [Diagnostic(code: solve.no-solutions, category: NoSolution, message: every root violates the denominator condition., recoverable: True, location: , details: [])]) (SolveResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "SolveResult(status: NoSolutions, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [], families: [], common_conditions: [], represented_count: 0, unrepresented_count: 0, unrepresented_reason: , diagnostics: [Diagnostic(code: solve.no-solutions, category: NoSolution, message: every root violates the denominator condition., recoverable: True, location: , details: [])])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "SolveResult",
         "fields": [
           {
             "name": "status",
@@ -200,22 +203,22 @@
           {
             "name": "variable",
             "value": {
-              "kind": "Symbolic",
-              "pretty": "x",
               "canonical": "(sym x)",
               "domain": "complex",
               "exact": true,
-              "nodeCount": 1,
               "freeSymbols": [
                 "x"
-              ]
+              ],
+              "kind": "Symbolic",
+              "nodeCount": 1,
+              "pretty": "x"
             }
           },
           {
             "name": "domain",
             "value": {
-              "kind": "Domain",
-              "domain": "complex"
+              "domain": "complex",
+              "kind": "Domain"
             }
           },
           {
@@ -236,50 +239,50 @@
           {
             "name": "solutions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "families",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "common_conditions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "represented_count",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "0",
-              "exact": true
+              "value": "0"
             }
           },
           {
             "name": "unrepresented_count",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "0",
-              "exact": true
+              "value": "0"
             }
           },
           {
@@ -292,15 +295,8 @@
           {
             "name": "diagnostics",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                1
-              ],
               "elements": [
                 {
-                  "kind": "Record",
-                  "type": "Diagnostic",
                   "fields": [
                     {
                       "name": "code",
@@ -340,42 +336,46 @@
                     {
                       "name": "details",
                       "value": {
+                        "elements": [],
                         "kind": "Array",
-                        "type": "Vector",
                         "shape": [
                           0
                         ],
-                        "elements": []
+                        "type": "Vector"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "Diagnostic"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                1
+              ],
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "SolveResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

@@ -158,6 +158,25 @@ fn every_fixture_matches_its_golden_envelope() {
     }
 }
 
+/// The documented recorder entry point: running this one test with
+/// `LOVELACE_RECORD_GOLDENS=1` rewrites every golden through the SAME `normalise` the comparison
+/// reads, then the ordinary run proves the re-record is byte-stable.
+#[test]
+fn record_goldens_on_demand() {
+    if !recording_enabled() {
+        return;
+    }
+    let written = record_all();
+    assert_eq!(
+        written.len(),
+        CORPUS.len(),
+        "every corpus fixture was rewritten"
+    );
+    for name in &written {
+        println!("rewrote {name}.json");
+    }
+}
+
 #[test]
 fn solve_record_carries_the_structural_solve_contract() {
     let r = run_fixture("record");

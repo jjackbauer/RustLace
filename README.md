@@ -102,7 +102,7 @@ $ cargo run -p lovelace-run -- --eval "1/3"
 {"artifacts":[],"elapsed":"407.1 µs",...,"result":{"display":"0.(3)","kind":"Real",...,"typed":"0.(3) (Real)"},...}
 
 $ cargo run --release -p lovelace-corpus
-corpus: 214 passed, 0 failed, 214 total
+corpus: 231 passed, 0 failed, 231 total
 
 $ cargo test -p lovelace-desktop
 test result: ok. <passed> passed; 0 failed; <ignored> ignored; <measured> measured; <filtered> filtered out; finished in <time>
@@ -146,7 +146,8 @@ workspace.
 | `lovelace-real` | reals with exact periodic decimals, `sqrt`, `pi` | [docs/crates/lovelace-real.md](docs/crates/lovelace-real.md) |
 | `lovelace-array` | generic `NdArray<T>`, shape algebra, reductions | [docs/crates/lovelace-array.md](docs/crates/lovelace-array.md) |
 | `lovelace-symbolics` | canonical expressions, differentiation, series, Gröbner bases, cancellation token | [docs/crates/lovelace-symbolics.md](docs/crates/lovelace-symbolics.md) |
-| `lovelace-lang` | values, lexer, parser, interpreter, builtins, Modus, MathIR, SVG plots | [docs/crates/lovelace-lang.md](docs/crates/lovelace-lang.md) |
+| `lovelace-lang` | values, lexer, parser, interpreter, builtins, static library families, MathIR, SVG plots | [docs/crates/lovelace-lang.md](docs/crates/lovelace-lang.md) |
+| `lovelace-systems` | exact queueing/operations research: M/M/1, M/M/c, M/M/∞, laws, networks, MVA, capacity, sweeps | [docs/crates/lovelace-systems.md](docs/crates/lovelace-systems.md) |
 | `lovelace-run` | the non-interactive runner and the JSON wire envelope | [docs/crates/lovelace-run.md](docs/crates/lovelace-run.md) |
 | `lovelace-know` | the observation-driven behavioural graph | [docs/crates/lovelace-know.md](docs/crates/lovelace-know.md) |
 | `lovelace-corpus` | the documentation-corpus parity gate | [docs/crates/lovelace-corpus.md](docs/crates/lovelace-corpus.md) |
@@ -168,7 +169,7 @@ Five layers, each with its own command — the detail is in [docs/testing.md](do
 $ cargo test --workspace
 test result: ok. <passed> passed; 0 failed; <ignored> ignored; ...   # one such line per test target
 
-$ cargo run --release -p lovelace-corpus   # the 214-record documentation corpus
+$ cargo run --release -p lovelace-corpus   # the 231-record documentation corpus
 $ cargo run -p lovelace-desktop -- --gui-selftest   # 20 workbench checks, Windows and Linux
 $ cargo run -p lovelace-desktop -- --journey J-02   # recorded user journeys
 ```
@@ -199,12 +200,12 @@ overflows its main-thread stack at `lang/061`, while the release build of the sa
 | [docs/architecture.md](docs/architecture.md) | the five layers, threading, cancellation, the cache, the data flow of a run |
 | [docs/build-and-run.md](docs/build-and-run.md) | prerequisites, profiles, the CLI and the GUI, environment variables, troubleshooting |
 | [docs/testing.md](docs/testing.md) | the test layers, exact commands and counts, subsets, what cannot run in CI |
-| [docs/extending.md](docs/extending.md) | add a builtin, a Modus plugin, a UI pane, a diagnostic, a fixture |
+| [docs/extending.md](docs/extending.md) | add a builtin, a statically integrated library family, a UI pane, a diagnostic, a fixture |
 | [docs/parity-with-studio.md](docs/parity-with-studio.md) | what the port preserves, where it differs, the fixtures that pin it |
 | [docs/release.md](docs/release.md) | versioning, the release build, the signing caveat, the checklist |
 | [docs/contributing.md](docs/contributing.md) | workflow, commit style, review expectations, definition of done |
-| [docs/glossary.md](docs/glossary.md) | Real, LReal64/128, Modus, MathIR, statement boundary, precision |
-| [docs/adr/](docs/adr/) | eight architecture decision records |
+| [docs/glossary.md](docs/glossary.md) | Real, LReal64/128, library family, MathIR, statement boundary, precision |
+| [docs/adr/](docs/adr/) | nine architecture decision records |
 | [docs/crates/](docs/crates/) | one page per crate |
 | [docs/images/README.md](docs/images/README.md) | the screenshots and how they were captured |
 | [CONTRACT.md](CONTRACT.md) | the workspace contract: crates, fixed APIs, rendering rules, corpus |

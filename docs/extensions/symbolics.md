@@ -18,26 +18,25 @@ Every value it produces is a `Value::Symbolic` holding a canonical expression fr
 `x*2 + 3*x` is `5*x`, and `x + 0` is `x`. There is no floating point anywhere in the path; the
 numeric bridge `evalf` produces exact `Real` decimal expansions, not doubles.
 
-It contributes **59** of the engine's 124 builtins. It is declared by the `plugin` field in
-[`lovelace-lang/src/registry.rs`](../../lovelace-lang/src/registry.rs): 59
-`plugin: Some("Lovelace.Symbolics")` tags, the first at line 69 and the last at line 1678.
+It contributes **59** of the engine's 134 builtins. It is declared by the `module` field in
+[`lovelace-lang/src/registry.rs`](../../lovelace-lang/src/registry.rs): 59 `module: "Symbolics"`
+descriptors.
 
 One trap when counting: the family is **not** the `Symbolics` category. Its 59 builtins are spread
 over six categories — 40 `Symbolics`, 10 `Calculus`, 4 `Solving`, 2 `Optimization`, 2
 `Introspection` (`capabilities`, `latex`) and 1 `Numerics` (`evalf`). `diff` and `integrate` are
-Calculus, `optimize` is Optimization, yet all are this family. The `plugin` field is the family key;
+Calculus, `optimize` is Optimization, yet all are this family. The `module` field is the family key;
 `category` is a browsing label. The `--functions` listing prints only `category`, so it cannot be
-used to reconstruct family membership — the execution envelope and the registry source carry
-`plugin`.
+used to reconstruct family membership — `--function <name>`, the execution envelope and the
+registry source carry `module`.
 
 ### Where the code lives
 
 | Path | What is there |
 | --- | --- |
-| `lovelace-lang/src/registry.rs` | the 59 descriptors; plugin tags at lines 69-1678 |
+| `lovelace-lang/src/registry.rs` | the 59 descriptors, `module: "Symbolics"` |
 | `lovelace-lang/src/builtins.rs` | dispatch arms and the symbolic builtin implementations |
-| `lovelace-lang/src/lib.rs` | `Engine` assumption state, the plugin gate (990), `load_plugin` (883) |
-| `lovelace-lang/src/modus.rs` | the typed payload channel a host plugin registers through |
+| `lovelace-lang/src/context.rs` | the caller-supplied assumption `Context` (a typed core API) |
 | `lovelace-symbolics/src/lib.rs` | canonical `Expr`, the algebra |
 | `lovelace-symbolics/src/assumptions.rs` | the tri-state assumption kernel |
 | `lovelace-symbolics/src/{polynomials,groebner,rational_functions,series_kink,symbolic_matrix}.rs` | the algorithms behind `factor`/`solve_system`/`apart`/`series`/`linsolve` |
@@ -55,7 +54,6 @@ Tests that cover it (`cargo test -p lovelace-lang`, modules that drive the symbo
 | `round97_tail` | 12 |
 | `symbolics_round23` | 8 |
 | `round92_symbolic_families` | 6 |
-| `round67_modus` | 22 |
 
 The `lovelace-symbolics` crate carries its own batch modules (`round67_polynomial_algebra`,
 `round90_symbolic_families`, `round92_symbolic_families`, `tail_round34`, `assumptions`,
@@ -63,50 +61,15 @@ The `lovelace-symbolics` crate carries its own batch modules (`round67_polynomia
 
 ## Inputs
 
-### How it is enabled
+### How it is available
 
-`lovelace-run` always builds `Engine::new()`, so all 59 names are live in every CLI run; there is no
-CLI flag that disables a family. On the library side, `Engine::new()` leaves `enabled_plugins` as
-`None`, which makes `Engine::plugin_enabled` answer `true` for every registered name
-([`lovelace-lang/src/lib.rs`](../../lovelace-lang/src/lib.rs), lines 990-998).
+`Engine::new()` exposes every registered builtin, so all 59 names are live in every engine,
+`lovelace-run` invocation and desktop session; there is no flag that removes a family and no
+enabled-family set.
 
-`Engine::new_bare()` (`lovelace-lang/src/lib.rs`) sets `enabled_plugins = Some(empty)`, so the family disappears
-and the call fails the way an unknown name fails. Observed from
-[`bare_engine.rs`](../../lovelace-lang/examples/bare_engine.rs) (run it with `cargo run -p lovelace-lang --example bare_engine`):
-
-```text
-bare       symbol("x")              => [UnknownFunction] Unknown function 'symbol'.
-bare+sym   symbol("x")              => x
-bare+sym   diff(x^2, x)             => [InvalidOperation] Undefined variable 'x'.
-```
-
-That is `code = UnknownFunction`, `category = UnsupportedOperation` (`unknown_function_among`), raised at
-the gate (`Engine::call`). It is the same failure an unknown name gives; there is no separate
-"plugin not loaded" error. The third line is the important one: loading the family makes the
-*builtins* callable, it does not bind any symbol — `x` is still undefined until the script assigns
-it.
-
-Re-enabling on a bare engine means loading a plugin whose `name()` is exactly `"Lovelace.Symbolics"`:
-
-```rust
-use lovelace_lang::modus::{ModusHost, ModusPlugin};
-use lovelace_lang::{Engine, LangError};
-
-struct EnableSymbolics;
-impl ModusPlugin for EnableSymbolics {
-    fn name(&self) -> &str { "Lovelace.Symbolics" }
-    fn register(&mut self, _host: &mut ModusHost) -> Result<(), LangError> { Ok(()) }
-}
-
-let mut engine = Engine::new_bare();
-assert!(engine.eval("symbol(\"x\")").is_err());
-engine.load_plugin(&mut EnableSymbolics).unwrap();
-assert_eq!(engine.eval("symbol(\"x\")").unwrap().display(), "x");
-```
-
-Because nothing in the engine "installs" the family, a **script** always needs the symbol bound
-before use. `diff(x^2, x)` without a binding is not a symbolic operation, it is an undefined
-variable:
+The family's builtins being available does **not** bind any symbol: `diff(x^2, x)` without a
+binding is not a symbolic operation, it is an undefined variable. The binding is
+`x = symbol("x")`, and it must come first in the same session:
 
 ```lovelace
 diff(x^2, x)
@@ -116,7 +79,6 @@ diff(x^2, x)
 Error [InvalidOperation/DomainError]: Undefined variable 'x'.
 ```
 
-The binding is `x = symbol("x")`, and it must come first in the same session.
 
 ## Outputs
 
@@ -133,7 +95,7 @@ metadata; every row was executed and its typed result is in the [verified-call a
 | `apart` | 2 | `f`, `x` | Symbolic | Partial fraction decomposition of a rational function in x. |
 | `asin` | 1 | `x` | Symbolic | The principal arcsine. |
 | `asinh` | 1 | `x` | Symbolic | The inverse hyperbolic sine, principal branch. |
-| `assume` | 1 | `relation` | Symbolic | Assumes a relation (or conjunction of relations) with a constant bound for the session (the engine this plugin was loaded into), e.g. x > 5. |
+| `assume` | 1 | `relation` | Symbolic | Assumes a relation (or conjunction of relations) with a constant bound for the session (the engine this call runs on), e.g. x > 5. |
 | `assume_clear` | 0 | - | Text | Clears every active assumption. |
 | `assume_integer` | 1 | `x` | Symbolic | Assumes x is an integer for the rest of the session. |
 | `assume_negative` | 1 | `x` | Symbolic | Assumes x < 0 for the rest of the session. |
@@ -242,8 +204,8 @@ The worked examples below show each of these in the observed output.
 ### What is NOT in this extension
 
 - **No linear algebra.** `det`, `eig_sym`, `inv`, `inv_full`, `linsolve`, `linsolve_full`,
-  `matrix_rank`, `trace` and `matmul` are all **core** (`plugin: None`), even though `linsolve` is
-  the symbolic Bareiss solver. They are callable on a bare engine and are not part of the 59.
+  `matrix_rank`, `trace` and `matmul` are all **Core** (`module: "Core"`), even though `linsolve` is
+  the symbolic Bareiss solver. They are available on every engine and are not part of the 59.
 - **No general eigen-decomposition.** `eig_sym` is the core, real-symmetric-only eigensolver; there
   is no `eigen`, `eigenvalue`, `eigenvector` or general decomposition builtin anywhere in the
   registry — and the C# Studio it descends from had none either. Do not expect SVD/QR/LU/cholesky

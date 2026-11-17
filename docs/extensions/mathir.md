@@ -20,9 +20,9 @@ elementary functions `Exp`/`Log`/`Sin`/`Cos`/`Tan`/`Asin`/`Acos`/`Atan`/`Sinh`/`
 scalar `Abs`/`Sign`/`Floor`/`Ceil`, `Min`/`Max`, the six comparisons and `Select`
 ([`lovelace-lang/src/mathir.rs`](../../lovelace-lang/src/mathir.rs), enum at lines 39-110).
 
-It contributes **5** of the engine's 124 builtins, all with category `Compilation`, and is declared
-by 5 `plugin: Some("Lovelace.MathIR")` tags in
-[`lovelace-lang/src/registry.rs`](../../lovelace-lang/src/registry.rs) at lines 352-1055. Here
+It contributes **5** of the engine's 134 builtins, all with category `Compilation`, and is declared
+by 5 `module: "MathIR"` descriptors in
+[`lovelace-lang/src/registry.rs`](../../lovelace-lang/src/registry.rs). Here
 `category` and family happen to coincide — that is a coincidence, not the rule: the Symbolics family
 spans six categories.
 
@@ -34,10 +34,9 @@ rewriting and no optimization: `compile` lowers what it is given, and the record
 
 | Path | What is there |
 | --- | --- |
-| `lovelace-lang/src/registry.rs` | the 5 descriptors; plugin tags at lines 352-1055 |
+| `lovelace-lang/src/registry.rs` | the 5 descriptors, `module: "MathIR"` |
 | `lovelace-lang/src/mathir.rs` | `IrOpKind` (39-110), `IrProgram`, serialization (335), the version gate (375), validation |
 | `lovelace-lang/src/builtins.rs` | the `compile`/`compile_full`/`lower`/`evalir`/`evalir_batch` dispatch arms |
-| `lovelace-lang/src/lib.rs` | the gate (990), `load_plugin` (883) |
 | `lovelace-lang/src/numeric.rs` | the exact numeric backend the evaluator calls |
 
 Tests that cover it:
@@ -45,57 +44,23 @@ Tests that cover it:
 | Test module | Tests |
 | --- | --- |
 | `mathir_round54` | 13 |
-| `round97_tail` | 12 (incl. the Symbolics + MathIR = 108 builtin count) |
+| `round97_tail` | 12 (incl. the 134-builtin registry count) |
 | `mathir_typing_round55` | 7 |
 | `round84_evalir_multi` | part of the `lovelace-lang` batches |
 
-`round97_tail` is where the published count is pinned: a `SuiteEngine` with Symbolics + MathIR
-publishes 108 builtins, which is `44 core + 59 Symbolics + 5 MathIR`.
+`round97_tail` is where the published count is pinned: one static registry publishes 134 builtins,
+which is `44 core + 59 Symbolics + 5 MathIR + 16 DSP`.
 
 ## Inputs
 
-### How it is enabled
+### How it is available
 
-`lovelace-run` always builds `Engine::new()`, so all five names are live in every CLI run; no CLI
-flag disables a family. In the library, `Engine::new()` leaves `enabled_plugins` as `None`, which
-makes the gate answer `true` for every registered name
-([`lovelace-lang/src/lib.rs`](../../lovelace-lang/src/lib.rs), lines 990-998).
+`Engine::new()` exposes every registered builtin, so all five names are live in every engine,
+`lovelace-run` invocation and desktop session; there is no flag that removes a family and no
+enabled-family set.
 
-`Engine::new_bare()` (`lovelace-lang/src/lib.rs`) sets `enabled_plugins = Some(empty)`. Observed from
-[`bare_engine.rs`](../../lovelace-lang/examples/bare_engine.rs) (run it with `cargo run -p lovelace-lang --example bare_engine`), the relevant lines are:
-
-```text
-bare       lower(1, [])             => [UnknownFunction] Unknown function 'lower'.
-bare+ir    lower(1, [])             => #!mathir 2
-const (rat 1 1)
-Constant 0 0
-```
-
-The bare failure is code `UnknownFunction`, category `UnsupportedOperation` (`unknown_function_among`),
-raised at the gate (`Engine::call`) — the same shape as any unknown name, with no
-plugin-specific error.
-
-Re-enabling is a name-keyed load. A `ModusPlugin` whose `name()` is `"Lovelace.MathIR"` flips the
-gate for these five descriptors, even if it registers nothing of its own:
-
-```rust
-use lovelace_lang::modus::{ModusHost, ModusPlugin};
-use lovelace_lang::{Engine, LangError};
-
-struct EnableMathIr;
-impl ModusPlugin for EnableMathIr {
-    fn name(&self) -> &str { "Lovelace.MathIR" }
-    fn register(&mut self, _host: &mut ModusHost) -> Result<(), LangError> { Ok(()) }
-}
-
-let mut engine = Engine::new_bare();
-assert!(engine.eval("lower(1, [])").is_err());
-engine.load_plugin(&mut EnableMathIr).unwrap();
-assert!(engine.eval("lower(1, [])").unwrap().display().starts_with("#!mathir 2"));
-```
-
-The same session can then mix families freely — compiling a symbolic expression needs both MathIR and
-Symbolics loaded, which is exactly what `Engine::new()` gives you.
+One session mixes families freely because every family is compiled in: compiling a symbolic
+expression needs both `MathIR` and `Symbolics`, and `Engine::new()` has both.
 
 ## Outputs
 

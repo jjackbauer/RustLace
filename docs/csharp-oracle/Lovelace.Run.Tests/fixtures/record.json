@@ -1,16 +1,16 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [Solution(value: -2, conditions: [], multiplicity: 1, exactness: Exact), Solution(value: 2, conditions: [], multiplicity: 1, exactness: Exact)], families: [], common_conditions: [], represented_count: 2, unrepresented_count: 0, unrepresented_reason: , diagnostics: [])",
-    "typed": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [Solution(value: -2, conditions: [], multiplicity: 1, exactness: Exact), Solution(value: 2, conditions: [], multiplicity: 1, exactness: Exact)], families: [], common_conditions: [], represented_count: 2, unrepresented_count: 0, unrepresented_reason: , diagnostics: []) (SolveResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "SolveResult",
       "fields": [
         {
           "name": "status",
@@ -23,22 +23,22 @@
         {
           "name": "variable",
           "value": {
-            "kind": "Symbolic",
-            "pretty": "x",
             "canonical": "(sym x)",
             "domain": "complex",
             "exact": true,
-            "nodeCount": 1,
             "freeSymbols": [
               "x"
-            ]
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
           }
         },
         {
           "name": "domain",
           "value": {
-            "kind": "Domain",
-            "domain": "complex"
+            "domain": "complex",
+            "kind": "Domain"
           }
         },
         {
@@ -59,45 +59,38 @@
         {
           "name": "solutions",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              2
-            ],
             "elements": [
               {
-                "kind": "Record",
-                "type": "Solution",
                 "fields": [
                   {
                     "name": "value",
                     "value": {
-                      "kind": "Symbolic",
-                      "pretty": "-2",
                       "canonical": "(rat -2 1)",
                       "domain": "rational",
                       "exact": true,
+                      "freeSymbols": [],
+                      "kind": "Symbolic",
                       "nodeCount": 1,
-                      "freeSymbols": []
+                      "pretty": "-2"
                     }
                   },
                   {
                     "name": "conditions",
                     "value": {
+                      "elements": [],
                       "kind": "Array",
-                      "type": "Vector",
                       "shape": [
                         0
                       ],
-                      "elements": []
+                      "type": "Vector"
                     }
                   },
                   {
                     "name": "multiplicity",
                     "value": {
+                      "exact": true,
                       "kind": "Integer",
-                      "value": "1",
-                      "exact": true
+                      "value": "1"
                     }
                   },
                   {
@@ -108,41 +101,41 @@
                       "value": "Exact"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "Solution"
               },
               {
-                "kind": "Record",
-                "type": "Solution",
                 "fields": [
                   {
                     "name": "value",
                     "value": {
-                      "kind": "Symbolic",
-                      "pretty": "2",
                       "canonical": "(rat 2 1)",
                       "domain": "rational",
                       "exact": true,
+                      "freeSymbols": [],
+                      "kind": "Symbolic",
                       "nodeCount": 1,
-                      "freeSymbols": []
+                      "pretty": "2"
                     }
                   },
                   {
                     "name": "conditions",
                     "value": {
+                      "elements": [],
                       "kind": "Array",
-                      "type": "Vector",
                       "shape": [
                         0
                       ],
-                      "elements": []
+                      "type": "Vector"
                     }
                   },
                   {
                     "name": "multiplicity",
                     "value": {
+                      "exact": true,
                       "kind": "Integer",
-                      "value": "1",
-                      "exact": true
+                      "value": "1"
                     }
                   },
                   {
@@ -153,47 +146,54 @@
                       "value": "Exact"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "Solution"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              2
+            ],
+            "type": "Vector"
           }
         },
         {
           "name": "families",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "common_conditions",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         },
         {
           "name": "represented_count",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "2",
-            "exact": true
+            "value": "2"
           }
         },
         {
           "name": "unrepresented_count",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "0",
-            "exact": true
+            "value": "0"
           }
         },
         {
@@ -206,26 +206,29 @@
         {
           "name": "diagnostics",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "SolveResult"
+    },
+    "typed": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [Solution(value: -2, conditions: [], multiplicity: 1, exactness: Exact), Solution(value: 2, conditions: [], multiplicity: 1, exactness: Exact)], families: [], common_conditions: [], represented_count: 2, unrepresented_count: 0, unrepresented_reason: , diagnostics: []) (SolveResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "SolveResult(status: Solved, variable: x, domain: complex, complete: True, completeness: Complete, solutions: [Solution(value: -2, conditions: [], multiplicity: 1, exactness: Exact), Solution(value: 2, conditions: [], multiplicity: 1, exactness: Exact)], families: [], common_conditions: [], represented_count: 2, unrepresented_count: 0, unrepresented_reason: , diagnostics: [])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "SolveResult",
         "fields": [
           {
             "name": "status",
@@ -238,22 +241,22 @@
           {
             "name": "variable",
             "value": {
-              "kind": "Symbolic",
-              "pretty": "x",
               "canonical": "(sym x)",
               "domain": "complex",
               "exact": true,
-              "nodeCount": 1,
               "freeSymbols": [
                 "x"
-              ]
+              ],
+              "kind": "Symbolic",
+              "nodeCount": 1,
+              "pretty": "x"
             }
           },
           {
             "name": "domain",
             "value": {
-              "kind": "Domain",
-              "domain": "complex"
+              "domain": "complex",
+              "kind": "Domain"
             }
           },
           {
@@ -274,45 +277,38 @@
           {
             "name": "solutions",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                2
-              ],
               "elements": [
                 {
-                  "kind": "Record",
-                  "type": "Solution",
                   "fields": [
                     {
                       "name": "value",
                       "value": {
-                        "kind": "Symbolic",
-                        "pretty": "-2",
                         "canonical": "(rat -2 1)",
                         "domain": "rational",
                         "exact": true,
+                        "freeSymbols": [],
+                        "kind": "Symbolic",
                         "nodeCount": 1,
-                        "freeSymbols": []
+                        "pretty": "-2"
                       }
                     },
                     {
                       "name": "conditions",
                       "value": {
+                        "elements": [],
                         "kind": "Array",
-                        "type": "Vector",
                         "shape": [
                           0
                         ],
-                        "elements": []
+                        "type": "Vector"
                       }
                     },
                     {
                       "name": "multiplicity",
                       "value": {
+                        "exact": true,
                         "kind": "Integer",
-                        "value": "1",
-                        "exact": true
+                        "value": "1"
                       }
                     },
                     {
@@ -323,41 +319,41 @@
                         "value": "Exact"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "Solution"
                 },
                 {
-                  "kind": "Record",
-                  "type": "Solution",
                   "fields": [
                     {
                       "name": "value",
                       "value": {
-                        "kind": "Symbolic",
-                        "pretty": "2",
                         "canonical": "(rat 2 1)",
                         "domain": "rational",
                         "exact": true,
+                        "freeSymbols": [],
+                        "kind": "Symbolic",
                         "nodeCount": 1,
-                        "freeSymbols": []
+                        "pretty": "2"
                       }
                     },
                     {
                       "name": "conditions",
                       "value": {
+                        "elements": [],
                         "kind": "Array",
-                        "type": "Vector",
                         "shape": [
                           0
                         ],
-                        "elements": []
+                        "type": "Vector"
                       }
                     },
                     {
                       "name": "multiplicity",
                       "value": {
+                        "exact": true,
                         "kind": "Integer",
-                        "value": "1",
-                        "exact": true
+                        "value": "1"
                       }
                     },
                     {
@@ -368,47 +364,54 @@
                         "value": "Exact"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "Solution"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                2
+              ],
+              "type": "Vector"
             }
           },
           {
             "name": "families",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "common_conditions",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           },
           {
             "name": "represented_count",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "2",
-              "exact": true
+              "value": "2"
             }
           },
           {
             "name": "unrepresented_count",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "0",
-              "exact": true
+              "value": "0"
             }
           },
           {
@@ -421,37 +424,34 @@
           {
             "name": "diagnostics",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "SolveResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

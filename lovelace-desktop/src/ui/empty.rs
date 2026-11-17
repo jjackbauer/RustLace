@@ -146,7 +146,7 @@ pub fn functions() -> EmptyState {
     EmptyState::new(
         "functions",
         "No functions yet",
-        "Lists engine builtins, plugins and your func definitions.",
+        "Lists engine builtins, built-in families and your func definitions.",
         "The last run published no functions.",
         "Define one with func, then run.",
     )

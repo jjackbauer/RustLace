@@ -247,7 +247,7 @@ fn run_value_depth_audit_script_is_a_typed_refusal_with_a_well_formed_envelope()
     assert_eq!(code(&r), "DepthExceeded");
     assert_eq!(category(&r), "BudgetExceeded");
     assert!(boolean(get(&r.env, "recoverable")));
-    assert_eq!(number(get(&r.env, "protocolVersion")), 1);
+    assert_eq!(number(get(&r.env, "protocolVersion")), 2);
     assert!(message(&r).contains("value depth 20001"));
     assert!(message(&r).contains("maximum supported nesting depth of 1024"));
 }
@@ -349,7 +349,7 @@ fn run_recursion_depth_deep_recursion_exits_nonzero_with_a_well_formed_envelope(
     assert_eq!(code(&r), "DepthExceeded");
     assert_eq!(category(&r), "BudgetExceeded");
     assert!(boolean(get(&r.env, "recoverable")));
-    assert_eq!(number(get(&r.env, "protocolVersion")), 1);
+    assert_eq!(number(get(&r.env, "protocolVersion")), 2);
     assert!(message(&r).contains("exceeds the maximum supported evaluation depth of 512"));
     assert!(message(&r).contains("evaluation depth "));
 }

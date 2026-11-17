@@ -1,7 +1,7 @@
 # `lovelace-lang`
 
-The Lovelace scripting language: values, lexer, parser, tree-walking interpreter, builtins, the Modus
-plugin host, MathIR, complex arithmetic and SVG plotting.
+The Lovelace scripting language: values, lexer, parser, tree-walking interpreter, builtins, static
+library families, MathIR, complex arithmetic and SVG plotting.
 
 ## Purpose
 
@@ -15,18 +15,16 @@ language behaviour.
 
 ### Public surface
 
-- `Engine` and its methods: `new` (all builtins), `new_bare` (core builtins plus explicitly loaded
-  plugins), `eval`, `eval_with_output`, `eval_with_budget`, `set_precision`/`precision`,
+- `Engine` and its methods: `new` (all 134 builtins), `eval`, `eval_with_output`,
+  `eval_with_budget`, `set_precision`/`precision`,
   `set_display_precision`/`display_precision`, `set_plot_dir`, `set_cancel_after`/`set_cancel_flag`,
   `set_progress_sink`, `format`/`format_typed`, `variables`/`variable_values`, `functions`,
   `capture_state`, `take_output`, `last_plot`, `revision`, `set_variable`/`try_get_variable`.
 - `Value` with `kind_name`, `display`, `typed`, `display_unicode`, `is_numeric`.
 - `LangError { message, position, code, category, signature, suggestions, hints, registry_size }` and
   `ErrorSignature`.
-- `registry` — the data table of builtin descriptors (`registry::BUILTINS`, `registry::find`,
-  `registry::builtin_count_for_plugins`).
-- `modus` — `ModusPlugin`, `ModusHost`, `Payload`, `BuiltinDescriptor`, `FieldKernel`,
-  `KernelScalar`.
+- `registry` — the data table of builtin descriptors (`registry::BUILTINS`, `registry::find`;
+  every entry is available on `Engine::new()`, and `module` is a browsing label only).
 - `cancel` (re-export of `lovelace_symbolics::cancel`), `progress`, `plot_surface`, `mathir`,
   `complex`, `structured`, `help`, `diagnostic`.
 
@@ -80,9 +78,9 @@ published by the runner.
   access to an engine rather than sharing one across threads.
 - **Cancellation is cooperative.** `set_cancel_after`/`set_cancel_flag` stop a run only where a
   kernel polls (`cancel::poll`/`check`); a deadline cannot interrupt arbitrary code.
-- **Plugins are opt-in by name.** `Engine::new()` exposes all 124 builtins; `Engine::new_bare()`
-  exposes core builtins only until a `ModusPlugin` whose `name()` matches a registry family is
-  loaded, and that load enables the family's builtins — it does not bind any symbol.
+- **One static registry.** `Engine::new()` exposes all 134 builtins; the registry descriptor's
+  `module` label groups a function for discovery and is never consulted by the dispatcher. There is
+  no loader, no enabled-family set and no run-time registration.
 - **Builtin-level caps remain.** `evalf` stops at 1000 decimal places and `pi`/`e` stop at the engine
   computation precision; those are refusals, not silent clamps.
 - **Plots are files.** `plot` writes an SVG and returns its path, so the engine needs a writable plot
@@ -101,8 +99,8 @@ let value = engine.eval("1 / 3").expect("evaluates");
 assert_eq!(engine.format_typed(&value), "0.(3) (Real)");
 ```
 
-The same engine backs the CLI and the desktop; a host that wants the reference's opt-in plugin model
-starts from `Engine::new_bare()` and calls `load_plugin` (`lovelace-lang/src/lib.rs`).
+The same engine backs the CLI and the desktop. A host never constructs a reduced engine: every
+builtin family is compiled in, so `Engine::new()` is the one entry point.
 
 ### Tests
 

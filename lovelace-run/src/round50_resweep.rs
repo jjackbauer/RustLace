@@ -158,7 +158,7 @@ fn atanh_descriptor_is_complete_and_cross_references_tanh() {
 }
 
 /// CapabilitiesBuiltinTests.cs:652 `Capabilities_IsOneRegisteredBuiltin_WithCompleteMetadata`:
-/// exactly one builtin named capabilities, registered by the Symbolics plugin, with a complete
+/// exactly one builtin named capabilities, published by the Symbolics family, with a complete
 /// descriptor (category Introspection, no parameters, a summary, examples, related entries, and
 /// the CapabilitiesResult return kind) whose rendered help is not the placeholder.
 #[test]
@@ -178,7 +178,7 @@ fn capabilities_is_one_registered_builtin_with_complete_metadata() {
 
     let r = describe("capabilities");
     let descriptor = get(&r.env, "function");
-    assert_eq!(text(get(descriptor, "plugin")), "Lovelace.Symbolics");
+    assert_eq!(text(get(descriptor, "module")), "Symbolics");
     assert_eq!(text(get(descriptor, "category")), "Introspection");
     assert!(
         array(get(descriptor, "parameters")).is_empty(),

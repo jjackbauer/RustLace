@@ -29,6 +29,11 @@ any of it, and nothing else in the workspace names a registry package.
 - The desktop's dependency set is platform-neutral rather than Windows-only: adding a Linux or macOS
   build does not change this decision, and it must not be used as a reason to give an engine crate a
   registry dependency.
-- `#![forbid(unsafe_code)]` in `lovelace-int`, `lovelace-array` and `lovelace-know`, plus
-  `#![cfg_attr(not(windows), forbid(unsafe_code))]` in `lovelace-desktop/src/main.rs`, keeps the
-  in-tree code reviewable. The Windows `unsafe` lane is confined to `lovelace-desktop/src/win32`.
+- `#![forbid(unsafe_code)]` in `lovelace-int`, `lovelace-array`, `lovelace-know`, `lovelace-json`,
+  `lovelace-nat`, `lovelace-real`, `lovelace-symbolics`, `lovelace-lang`, `lovelace-corpus` and
+  `lovelace-bench`, plus `#![cfg_attr(not(windows), forbid(unsafe_code))]` in
+  `lovelace-desktop/src/main.rs`, keeps the in-tree code reviewable. The Windows `unsafe` lane is
+  confined to `lovelace-desktop/src/win32` and the terminal raw-mode module in
+  `lovelace-run/src/repl.rs`; the latter is three documented kernel32 console entry points, is the
+  only `#[allow(unsafe_code)]` in a crate that otherwise carries `#![deny(unsafe_code)]`, and is
+  guarded by `GetStdHandle`/`GetConsoleMode` success checks before either handle is stored.

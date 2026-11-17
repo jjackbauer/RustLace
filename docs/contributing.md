@@ -93,7 +93,7 @@ A change is done when all of the following hold:
   `cargo build --release -p lovelace-desktop`.
 - The tests for its layer pass, and `cargo test --workspace` has the same pass/fail shape as before
   (the single known-ignored test stays the only ignore).
-- The documentation corpus gate passes in release: 214 of 214.
+- The documentation corpus gate passes in release: 231 of 231.
 - Any new behaviour is reachable from the real host surface — `lovelace-run` for the engine, the
   workbench or a headless mode for the desktop — and that path was exercised.
 - The docs that describe the touched area were updated in the same change: `docs/architecture.md`

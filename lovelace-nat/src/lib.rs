@@ -4,6 +4,8 @@
 //! zero is the empty array. This mirrors the reference implementation, which stores
 //! \`ulong[]\` limbs and converts to and from decimal text only at the boundary.
 
+#![forbid(unsafe_code)]
+
 pub(crate) mod bz;
 pub mod digit_store;
 pub(crate) mod newton;

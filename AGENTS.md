@@ -12,7 +12,7 @@ re-implementing language behaviour. This file is the portable entry point; task 
 
 | Surface | What it is | Start it |
 |---|---|---|
-| Engine library | `Engine`, the values, lexer, parser, interpreter, builtins and plugins | `cargo build --workspace`; source: `lovelace-lang/src/lib.rs` |
+| Engine library | `Engine`, the values, lexer, parser, interpreter, builtins and static library families | `cargo build --workspace`; source: `lovelace-lang/src/lib.rs` |
 | `lovelace-run` CLI | non-interactive runner and the stable JSON wire envelope | `cargo run -p lovelace-run -- --eval "1/3" --text`; source: `lovelace-run/src/main.rs` |
 | `lovelace-desktop` GUI | native workbench (Windows and Linux) plus headless acceptance modes | `cargo run -p lovelace-desktop`; source: `lovelace-desktop/src/main.rs` |
 
@@ -22,7 +22,9 @@ Run from the repository root. The engine crates build anywhere; the desktop work
 runs on Windows and on Linux (X11). Linux needs the X11/GL/font packages and, on a display-less
 machine, Xvfb - see [Build on Linux](#build-on-linux).
 Requires Rust 1.85+ (`rust-version` in `Cargo.toml`; the tree was built with 1.100.0) and, on
-Windows, the MSVC build tools.
+Windows, the MSVC build tools. A per-user rustup install keeps `cargo.exe` and `rustc.exe` under
+`%USERPROFILE%\.cargo\bin`; use that full path when a shell's `PATH` predates the install (a
+long-running terminal or agent host keeps the environment it started with).
 
 ```console
 # build
@@ -32,7 +34,7 @@ cargo build --release -p lovelace-desktop
 # test: whole workspace, one crate, one test or one module
 cargo test --workspace
 cargo test -p lovelace-lang
-cargo test -p lovelace-lang round67
+cargo test -p lovelace-lang systems_family
 cargo test -p lovelace-desktop
 cargo test -p lovelace-desktop lay_011
 
@@ -78,7 +80,7 @@ Windows desktop observations separate, and records the one ignored test
 (`property_assertions::mathir_evaluates_like_symbolic`, annotated in place). Read the count from a
 run at the commit you are changing; do not quote a historical total as current.
 `--gui-selftest` gives 20 checks, 0 failed on both platforms; `--selftest` gives 15 checks on
-Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 214 passed, 0
+Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 231 passed, 0
 failed. A run that needs the application directory needs it writable:
 set `APPDATA` on Windows, or `XDG_CONFIG_HOME`/`HOME` on Linux, to a scratch directory first.
 
@@ -149,7 +151,8 @@ One line per crate, and what it owns:
 | `lovelace-real` | reals as `int * 10^exp` with exact periodic decimal metadata; `sqrt`, `pi`, display-precision scoping |
 | `lovelace-array` | generic row-major `NdArray<T>`, shape algebra, indexing, slicing, reductions |
 | `lovelace-symbolics` | canonical expressions, differentiation, series, polynomial algebra, Groebner bases, the cooperative cancellation token |
-| `lovelace-lang` | values, the active lexer/parser (`src/syntax.rs`), interpreter and builtins (`src/lib.rs`, `src/builtins.rs`), registry, Modus plugin host, MathIR, plots |
+| `lovelace-lang` | values, the active lexer/parser (`src/syntax.rs`), interpreter and builtins (`src/lib.rs`, `src/builtins.rs`), registry, MathIR, plots, the `sys_*` systems adapter |
+| `lovelace-systems` | exact queueing/operations-research models: rational arithmetic, M/M/1, M/M/c, M/M/∞, operational laws, open Jackson networks, exact single-class MVA, bottleneck/capacity, sweeps; no dependency on the interpreter |
 | `lovelace-run` | the CLI, the JSON wire envelope, registry discovery and golden envelopes |
 | `lovelace-know` | the observation-driven behavioural graph, JSON persistence and convergence tests |
 | `lovelace-corpus` | the documentation-corpus parity gate over `parity/corpus/*.json` |
@@ -166,7 +169,7 @@ and the decision records under `docs/adr/`. The screenshots and their capture me
 
 Fixtures live where the consuming test resolves them:
 
-- `parity/corpus/lang.json` and `parity/corpus/symbolics.json` - the 214-record documentation
+- `parity/corpus/lang.json`, `parity/corpus/symbolics.json` and `parity/corpus/systems.json` - the 231-record documentation
   corpus read by `lovelace-corpus`; `knowledge-graph-demo.json` at the root is the frozen knowledge
   graph (seed 20240617) read by `lovelace-know`.
 - `docs/goal-desktop-v4/journeys.md`, `platform-matrix.md`, `reference/REF-*.json` and
@@ -216,7 +219,7 @@ placeholder rather than a path from one machine.
 | You are adding | Put it here |
 |---|---|
 | a builtin | descriptor in `lovelace-lang/src/registry.rs`, implementation arm in `lovelace-lang/src/builtins.rs`, test beside the existing batch files, corpus record in `parity/corpus/` |
-| a Modus plugin | a `ModusPlugin` implementation using the API in `lovelace-lang/src/modus.rs`; model it on `lovelace-lang/src/round67_modus.rs` (there is no production plugin directory yet) |
+| a statically integrated library family | a workspace crate under `lovelace-systems/` (typed models, exact arithmetic, no interpreter dependency) plus a thin adapter and static descriptors in `lovelace-lang`; follow `docs/extending.md` §2 |
 | a workbench pane | focus group in `lovelace-desktop/src/keyboard.rs`, layout and paint in `lovelace-desktop/src/ui/app.rs`, empty state in `lovelace-desktop/src/ui/empty.rs`, tokens in `lovelace-desktop/src/ui/theme.rs` |
 
 ### Fixture naming
@@ -289,7 +292,6 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
 | Goal | Skill |
 |---|---|
 | add a language builtin end to end | [add-builtin](.dsh/skills/add-builtin/SKILL.md) |
-| add a Modus plugin | [add-modus-plugin](.dsh/skills/add-modus-plugin/SKILL.md) |
 | add or change a workbench pane | [add-ui-pane](.dsh/skills/add-ui-pane/SKILL.md) |
 | change the lexer, parser or interpreter | [add-language-feature](.dsh/skills/add-language-feature/SKILL.md) |
 | add a headless acceptance mode or journey | [add-acceptance-mode](.dsh/skills/add-acceptance-mode/SKILL.md) |

@@ -1,41 +1,41 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
-  "mathIrVersion": 2,
-  "ok": false,
-  "code": "InvalidOperation",
+  "artifacts": [],
   "category": "DomainError",
-  "message": "solve(): currently supports domains real and complex; got integer.",
-  "recoverable": true,
+  "code": "InvalidOperation",
   "diagnostics": [
     {
-      "message": "solve(): currently supports domains real and complex; got integer.",
-      "position": 17,
+      "column": 18,
       "line": 1,
-      "column": 18
+      "message": "solve(): currently supports domains real and complex; got integer.",
+      "position": 17
     }
   ],
   "elapsed": "<volatile>",
   "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
+  "mathIrVersion": 2,
+  "message": "solve(): currently supports domains real and complex; got integer.",
+  "ok": false,
   "output": [],
   "partialVariables": [
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
   ],
-  "artifacts": []
+  "protocolVersion": 2,
+  "recoverable": true,
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>"
 }

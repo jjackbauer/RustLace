@@ -1,16 +1,16 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "CompilationResult(ir: #!mathir 2\nparam x\nconst (rat 1 1)\nconst (rat 2 1)\nConstant 0 0\nParameter 0 0\nConstant 0 1\nPowInt 0 1,2\nAdd 0 0,3, parameters: [ParameterInfo(name: x, domain: complex)], result_domain: complex, result_type: Integer, precision_policy: caller_supplied, optimization_policy: none, target: mathir, mathir_version: 2, exact: True, diagnostics: [])",
-    "typed": "CompilationResult(ir: #!mathir 2\nparam x\nconst (rat 1 1)\nconst (rat 2 1)\nConstant 0 0\nParameter 0 0\nConstant 0 1\nPowInt 0 1,2\nAdd 0 0,3, parameters: [ParameterInfo(name: x, domain: complex)], result_domain: complex, result_type: Integer, precision_policy: caller_supplied, optimization_policy: none, target: mathir, mathir_version: 2, exact: True, diagnostics: []) (CompilationResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "CompilationResult",
       "fields": [
         {
           "name": "ir",
@@ -22,15 +22,8 @@
         {
           "name": "parameters",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              1
-            ],
             "elements": [
               {
-                "kind": "Record",
-                "type": "ParameterInfo",
                 "fields": [
                   {
                     "name": "name",
@@ -42,20 +35,27 @@
                   {
                     "name": "domain",
                     "value": {
-                      "kind": "Domain",
-                      "domain": "complex"
+                      "domain": "complex",
+                      "kind": "Domain"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "ParameterInfo"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              1
+            ],
+            "type": "Vector"
           }
         },
         {
           "name": "result_domain",
           "value": {
-            "kind": "Domain",
-            "domain": "complex"
+            "domain": "complex",
+            "kind": "Domain"
           }
         },
         {
@@ -89,9 +89,9 @@
         {
           "name": "mathir_version",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "2",
-            "exact": true
+            "value": "2"
           }
         },
         {
@@ -104,26 +104,29 @@
         {
           "name": "diagnostics",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "CompilationResult"
+    },
+    "typed": "CompilationResult(ir: #!mathir 2\nparam x\nconst (rat 1 1)\nconst (rat 2 1)\nConstant 0 0\nParameter 0 0\nConstant 0 1\nPowInt 0 1,2\nAdd 0 0,3, parameters: [ParameterInfo(name: x, domain: complex)], result_domain: complex, result_type: Integer, precision_policy: caller_supplied, optimization_policy: none, target: mathir, mathir_version: 2, exact: True, diagnostics: []) (CompilationResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "CompilationResult(ir: #!mathir 2\nparam x\nconst (rat 1 1)\nconst (rat 2 1)\nConstant 0 0\nParameter 0 0\nConstant 0 1\nPowInt 0 1,2\nAdd 0 0,3, parameters: [ParameterInfo(name: x, domain: complex)], result_domain: complex, result_type: Integer, precision_policy: caller_supplied, optimization_policy: none, target: mathir, mathir_version: 2, exact: True, diagnostics: [])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "CompilationResult",
         "fields": [
           {
             "name": "ir",
@@ -135,15 +138,8 @@
           {
             "name": "parameters",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                1
-              ],
               "elements": [
                 {
-                  "kind": "Record",
-                  "type": "ParameterInfo",
                   "fields": [
                     {
                       "name": "name",
@@ -155,20 +151,27 @@
                     {
                       "name": "domain",
                       "value": {
-                        "kind": "Domain",
-                        "domain": "complex"
+                        "domain": "complex",
+                        "kind": "Domain"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "ParameterInfo"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                1
+              ],
+              "type": "Vector"
             }
           },
           {
             "name": "result_domain",
             "value": {
-              "kind": "Domain",
-              "domain": "complex"
+              "domain": "complex",
+              "kind": "Domain"
             }
           },
           {
@@ -202,9 +205,9 @@
           {
             "name": "mathir_version",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "2",
-              "exact": true
+              "value": "2"
             }
           },
           {
@@ -217,37 +220,34 @@
           {
             "name": "diagnostics",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "CompilationResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

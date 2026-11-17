@@ -3,7 +3,7 @@
 //! The C# assertions are the contract. The engine-level tests drive the same
 //! `Engine::eval` surface the suite uses; the cancellation tests arm the same
 //! thread-local deadline the runner arms. Rows whose C# assertion has no Rust
-//! analogue (a CLR exception type, a Modus plugin registration, a ValueKind enum)
+//! analogue (a CLR exception type, a host registration, a ValueKind enum)
 //! are deliberately absent rather than weakened.
 
 use crate::syntax::{Expr, Parser, Stmt};

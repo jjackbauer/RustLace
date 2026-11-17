@@ -9,6 +9,7 @@
 // risk the frozen wire contract.
 #![allow(clippy::result_large_err)]
 #![allow(clippy::needless_range_loop)]
+#![forbid(unsafe_code)]
 
 pub mod argument_contract;
 pub mod builtins;
@@ -24,7 +25,6 @@ pub mod fixed_dsp;
 pub mod help;
 pub mod lexer;
 pub mod mathir;
-pub mod modus;
 pub mod name_suggestions;
 pub mod numeric;
 pub mod plot_file;
@@ -37,6 +37,7 @@ pub mod signals;
 pub mod structural_equality;
 pub mod structured;
 pub mod syntax;
+pub mod systems_family;
 mod unicode;
 pub mod value_widen;
 
@@ -49,7 +50,7 @@ pub mod cancel {
     pub use lovelace_symbolics::cancel::*;
 }
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -661,7 +662,8 @@ pub struct StateVariable {
 ///
 /// The reference's `StateFunction` record (`Name`, `Parameters`, `IsBuiltin`, `Span`,
 /// `Plugin`). The Rust engine does not track a source span on a user definition, so the span
-/// field of the reference record has no counterpart here; every other field is published.
+/// field of the reference record has no counterpart here; the family label is published as
+/// `module` and gates nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateFunction {
     /// The function name as written in source.
@@ -676,10 +678,11 @@ pub struct StateFunction {
     /// `FunctionDefinition.Variadic`): an upper bound of infinity rather than the parameter
     /// count.
     pub variadic: bool,
-    /// True for a builtin (native or plugin) and false for a user definition.
+    /// True for a builtin and false for a user definition.
     pub is_builtin: bool,
-    /// The plugin that registered the builtin, when one did.
-    pub plugin: Option<String>,
+    /// The static family that publishes the builtin (`Core`, `DSP`, `Symbolics`, `MathIR`,
+    /// `Systems`), or `User` for a script definition. Discovery metadata only.
+    pub module: String,
 }
 
 /// An immutable capture of the engine's variables and functions, with the revision it was
@@ -807,12 +810,6 @@ pub struct Engine {
     /// solve, simplify, simplify_full and inspect read. One set per engine, so two engines that
     /// run concurrently never answer each other's queries.
     assumptions: lovelace_symbolics::assumptions::AssumptionSet,
-    /// The plugin seam: registered builtins, kernels, loaded plugin names and the optional
-    /// plugin-instance assumption context (the reference's `ModusHost`).
-    modus: modus::ModusHost,
-    /// `None` keeps every advertised builtin available (the runner's behaviour). `Some` is a
-    /// bare engine that exposes only core builtins plus the plugins it has loaded.
-    enabled_plugins: Option<HashSet<String>>,
     /// Subscribers to the [`VariableChanged`] event, in subscription order.
     variable_listeners: Vec<VariableChangedListener>,
     /// Subscribers to the [`FunctionDefined`] event, in subscription order.
@@ -861,157 +858,14 @@ impl Engine {
             domain_assumptions: Vec::new(),
             bounds: Vec::new(),
             assumptions: lovelace_symbolics::assumptions::AssumptionSet::empty(),
-            modus: modus::ModusHost::new(),
-            enabled_plugins: None,
             variable_listeners: Vec::new(),
             function_listeners: Vec::new(),
         }
     }
 
-    /// Creates a BARE engine: core builtins only, with the descriptors advertised by a plugin
-    /// unavailable until that plugin is loaded. This is the Rust equivalent of the reference's
-    /// `new SuiteEngine()`, which does not expose `fft` until `DspPlugin` is loaded. `Engine::new()`
-    /// remains the runner's all-plugins-loaded engine, so no existing behaviour moves.
-    pub fn new_bare() -> Engine {
-        let mut engine = Engine::new();
-        engine.enabled_plugins = Some(HashSet::new());
-        engine
-    }
-
-    /// Loads a Modus plugin, stamping its registrations and enabling the builtins its descriptor
-    /// advertises on a bare engine.
-    pub fn load_plugin(&mut self, plugin: &mut dyn modus::ModusPlugin) -> Result<(), LangError> {
-        self.modus.load(plugin)?;
-        if let Some(enabled) = &mut self.enabled_plugins {
-            enabled.insert(plugin.name().to_string());
-        }
-        Ok(())
-    }
-
-    /// Registers a host builtin directly (the reference's `SuiteEngine.RegisterBuiltin`).
-    pub fn register_builtin<F>(
-        &mut self,
-        name: &str,
-        parameters: &[&str],
-        implementation: F,
-    ) -> Result<(), LangError>
-    where
-        F: Fn(&modus::PluginArgs) -> Result<modus::Payload, modus::PluginError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.modus
-            .register_builtin(name, parameters, implementation)?;
-        self.raise_function_defined(StateFunction {
-            name: name.to_string(),
-            parameters: parameters.iter().map(|p| (*p).to_string()).collect(),
-            min_arity: parameters.len(),
-            variadic: false,
-            is_builtin: true,
-            plugin: self.modus.plugin_name_of(name).map(str::to_string),
-        });
-        Ok(())
-    }
-
-    /// Registers a descriptor-carrying host builtin.
-    pub fn register_builtin_descriptor<F>(
-        &mut self,
-        descriptor: modus::BuiltinDescriptor,
-        implementation: F,
-    ) -> Result<(), LangError>
-    where
-        F: Fn(&modus::PluginArgs) -> Result<modus::Payload, modus::PluginError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let definition = StateFunction {
-            name: descriptor.name.clone(),
-            min_arity: descriptor.min_arity.unwrap_or(descriptor.parameters.len()),
-            variadic: descriptor.variadic,
-            parameters: descriptor.parameters.clone(),
-            is_builtin: true,
-            plugin: self
-                .modus
-                .plugin_name_of(&descriptor.name)
-                .map(str::to_string),
-        };
-        self.modus
-            .register_builtin_descriptor(descriptor, implementation)?;
-        self.raise_function_defined(definition);
-        Ok(())
-    }
-
-    /// Registers an array-to-array host builtin.
-    pub fn register_array_builtin<F>(
-        &mut self,
-        name: &str,
-        implementation: F,
-    ) -> Result<(), LangError>
-    where
-        F: Fn(&modus::PayloadArray) -> Result<modus::PayloadArray, modus::PluginError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.modus.register_array_builtin(name, implementation)
-    }
-
-    /// Registers an exact-field elementwise kernel.
-    pub fn register_kernel<T: modus::KernelScalar>(
-        &mut self,
-        kernel: Box<dyn modus::FieldKernel<T>>,
-    ) {
-        self.modus.register_kernel(kernel);
-    }
-
-    /// Fallible kernel dispatch over the plugin host.
-    pub fn try_dispatch_kernel<T: modus::KernelScalar>(
-        &self,
-        op: modus::ArrayOp,
-        left: &[T],
-        right: &[T],
-        result: &mut [T],
-    ) -> bool {
-        self.modus.try_dispatch(op, left, right, result)
-    }
-
-    /// The plugin that registered a builtin: a host registration's plugin stamp, otherwise the
-    /// static descriptor's plugin (core builtins carry none).
-    pub fn plugin_name_of(&self, name: &str) -> Option<&str> {
-        self.modus
-            .plugin_name_of(name)
-            .or_else(|| crate::registry::find(name).and_then(|info| info.plugin))
-    }
-
-    /// True when the name is available on this engine: core names always, plugin-advertised
-    /// names only when the engine is all-plugins (`Engine::new`) or the plugin was loaded.
-    fn plugin_enabled(&self, name: &str) -> bool {
-        let Some(enabled) = &self.enabled_plugins else {
-            return true;
-        };
-        match crate::registry::find(name).and_then(|info| info.plugin) {
-            Some(plugin) => enabled.contains(plugin),
-            None => true,
-        }
-    }
-
-    /// The descriptor a host registration stored, when it carried metadata.
-    pub fn registered_descriptor(&self, name: &str) -> Option<&modus::BuiltinDescriptor> {
-        self.modus.descriptor_of(name)
-    }
-
-    /// True when the engine resolves the name as a user function or a registered builtin.
+    /// True when the engine resolves the name as a user function or the static builtin registry.
     pub fn has_function(&self, name: &str) -> bool {
-        self.funcs.contains_key(name)
-            || self.modus.contains(name)
-            || crate::registry::find(name).is_some()
-    }
-
-    /// Registers the plugin-instance assumption context whose caller scopes the engine honours.
-    pub fn register_assumption_context(&mut self, context: std::sync::Arc<context::Context>) {
-        self.modus.register_assumption_context(context);
+        self.funcs.contains_key(name) || crate::registry::find(name).is_some()
     }
 
     /// Sets the computation and display precision (decimal places).
@@ -1201,9 +1055,9 @@ impl Engine {
     /// The Rust counterpart of the reference's `SuiteEngine.CaptureState`. Variables carry the
     /// same three fields as `StateVariable` (name, kind, display). Functions carry the same
     /// observable identity as `StateFunction` — name, declared parameters, builtin flag and the
-    /// registering plugin — for the engine's user definitions, its Modus registrations and every
-    /// builtin the engine currently exposes. The reference's `Span` has no Rust counterpart and
-    /// is not published. The maps are owned copies, so later mutation cannot change them.
+    /// static module label — for the engine's user definitions and every builtin the engine
+    /// exposes. The reference's `Span` has no Rust counterpart and is not published. The maps
+    /// are owned copies, so later mutation cannot change them.
     pub fn capture_state(&self) -> StateSnapshot {
         let mut variables: BTreeMap<String, StateVariable> = BTreeMap::new();
         for (name, value) in &self.vars {
@@ -1223,9 +1077,6 @@ impl Engine {
 
         let mut functions: BTreeMap<String, StateFunction> = BTreeMap::new();
         for builtin in crate::registry::BUILTINS {
-            if !self.plugin_enabled(builtin.name) {
-                continue;
-            }
             functions.insert(
                 builtin.name.to_string(),
                 StateFunction {
@@ -1238,12 +1089,9 @@ impl Engine {
                     min_arity: builtin.min_arity,
                     variadic: builtin.variadic,
                     is_builtin: true,
-                    plugin: builtin.plugin.map(|p| p.to_string()),
+                    module: builtin.module.to_string(),
                 },
             );
-        }
-        for name in self.modus.names() {
-            functions.insert(name.to_string(), self.host_function(name));
         }
         for (name, (parameters, _)) in &self.funcs {
             functions.insert(
@@ -1254,7 +1102,7 @@ impl Engine {
                     min_arity: parameters.len(),
                     variadic: false,
                     is_builtin: false,
-                    plugin: None,
+                    module: "User".to_string(),
                 },
             );
         }
@@ -1341,24 +1189,6 @@ impl Engine {
         }
     }
 
-    /// The snapshot view of one Modus-registered builtin.
-    fn host_function(&self, name: &str) -> StateFunction {
-        let descriptor = self.modus.descriptor_of(name);
-        let parameters = descriptor
-            .map(|descriptor| descriptor.parameters.clone())
-            .unwrap_or_default();
-        StateFunction {
-            name: name.to_string(),
-            min_arity: descriptor
-                .and_then(|descriptor| descriptor.min_arity)
-                .unwrap_or(parameters.len()),
-            variadic: descriptor.is_some_and(|descriptor| descriptor.variadic),
-            parameters,
-            is_builtin: true,
-            plugin: self.modus.plugin_name_of(name).map(str::to_string),
-        }
-    }
-
     /// Evaluates a script and returns its final value.
     ///
     /// The deadline and the live cancellation flag are armed for exactly this evaluation (and
@@ -1373,19 +1203,7 @@ impl Engine {
         // sink never survives the evaluation that armed it.
         let progress_scope = crate::progress::arm(self.progress_sink.clone());
         self.cancelled = false;
-        // A caller-installed plugin scope takes precedence INSIDE this evaluation, and the
-        // engine's own session set is restored when the evaluation ends (the reference's
-        // "the engine installs its own store only when the caller has not installed one").
-        let scoped = self.modus.active_assumption_scope();
-        let saved_assumptions = scoped.map(|assumptions| {
-            let previous = self.assumptions.clone();
-            self.assumptions = assumptions;
-            previous
-        });
         let mut result = self.eval_inner(source);
-        if let Some(previous) = saved_assumptions {
-            self.assumptions = previous;
-        }
         if lovelace_symbolics::cancel::observed() {
             self.cancelled = true;
             // A kernel stopped early and returned its identity value; that value is not a result.
@@ -1823,7 +1641,7 @@ impl Engine {
                     min_arity: params.len(),
                     variadic: false,
                     is_builtin: false,
-                    plugin: None,
+                    module: "User".to_string(),
                 });
                 Ok(Flow::Value(Value::Void))
             }
@@ -2136,18 +1954,8 @@ impl Engine {
         if lovelace_symbolics::cancel::check() {
             return Err(cancelled_error());
         }
-        // A dynamically registered builtin (a plugin or host registration) is dispatched before
-        // the static builtin table, so a plugin can own a name the language match does not know.
-        if let Some(result) = self.modus.call(name, &args, pos) {
-            return result;
-        }
-        // A bare engine hides the builtins a plugin descriptor advertises until that plugin is
-        // loaded; the unresolved call is the same vocabulary failure an absent builtin gives.
-        if !self.plugin_enabled(name) {
-            return Err(builtins::unknown_function_among(name, pos, &|candidate| {
-                self.plugin_enabled(candidate)
-            }));
-        }
+        // The static registry is the ONE dispatch table: there is no dynamically registered
+        // builtin layer in front of it. An unknown name is the ordinary vocabulary failure.
         // A builtin that failed without naming its own position failed at the CALL: the
         // published diagnostic points at the call site, which is where the caller must look.
         match builtins::call(self, name, args, pos) {
@@ -2165,9 +1973,9 @@ impl Engine {
         self.precision
     }
 
-    /// The precision a DSP (plugin-style) builtin computes at: the reference runs plugin
-    /// builtins at a 30-place fast default and follows the engine knob once it is set
-    /// explicitly (`ModusHost.PluginPrecisionScope` / `PluginStandardComputationPrecision`).
+    /// The precision a DSP builtin computes at: DSP runs at a 30-place fast default and follows
+    /// the engine knob once it is set explicitly (ADR-004, preserved independently of the deleted
+    /// plugin host).
     pub(crate) fn dsp_precision(&self) -> usize {
         if self.precision_explicit {
             self.precision
@@ -2790,15 +2598,11 @@ mod round66_resweep;
 #[cfg(test)]
 mod arity_taxonomy_round73;
 
-/// Round-67 Modus plugin-seam member map: the 22 deferred census rows whose contract is the
-/// registration surface, the payload channel, load-time refusals, kernel dispatch, descriptor
-/// arity and the plugin-instance assumption scope.
+/// Round-69 ParameterDomain row: the solution-family wire field (the payload projection this
+/// module once also covered is deleted with the extension host; the independent family
+/// assertion stays).
 #[cfg(test)]
-mod round67_modus;
-
-/// Round-69 ParameterDomain row: the Modus-seam projection and the solution-family wire field.
-#[cfg(test)]
-mod round69_parameter_domain;
+mod parameter_domain_family;
 
 #[cfg(test)]
 mod dsp_round20;

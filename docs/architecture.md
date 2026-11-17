@@ -7,15 +7,18 @@ the ones below it; the dependency graph is in `Cargo.toml` of each crate and is 
 flowchart TB
     ui["lovelace-desktop<br/>native workbench (eframe/egui)"]
     host["lovelace-run · lovelace-know · lovelace-corpus · lovelace-bench<br/>execution hosts, wire protocol, parity gate, micro-benchmarks"]
-    lang["lovelace-lang<br/>values, lexer, parser, interpreter, builtins, Modus, MathIR, plots"]
+    lang["lovelace-lang<br/>values, lexer, parser, interpreter, builtins, MathIR, plots"]
+    sys["lovelace-systems<br/>exact queueing, operational laws, networks, MVA, capacity, sweeps"]
     num["lovelace-real · lovelace-array · lovelace-symbolics<br/>numeric kernels and symbolic algebra"]
     val["lovelace-json · lovelace-nat · lovelace-int<br/>values and wire primitives"]
 
     ui --> host
     ui --> lang
     host --> lang
+    lang --> sys
     lang --> num
-    lang --> val
+    sys --> num
+    sys --> val
     num --> val
 ```
 
@@ -35,9 +38,12 @@ a numeric field is reproduced byte-for-byte instead of round-tripping through bi
 (`lovelace-json/src/lib.rs`).
 
 **Invariant.** No floating point appears in any value path. `#![forbid(unsafe_code)]` guards
-`lovelace-array`, `lovelace-int` and `lovelace-know`; `lovelace-desktop` carries
-`#![cfg_attr(not(windows), forbid(unsafe_code))]`, so the whole crate forbids unsafe code on
-non-Windows targets.
+`lovelace-array`, `lovelace-int`, `lovelace-know`, `lovelace-json`, `lovelace-nat`, `lovelace-real`,
+`lovelace-symbolics`, `lovelace-lang`, `lovelace-corpus` and `lovelace-bench`; `lovelace-desktop`
+carries `#![cfg_attr(not(windows), forbid(unsafe_code))]`, so the whole crate forbids unsafe code on
+non-Windows targets. `lovelace-run` carries `#![deny(unsafe_code)]`; its sole allowed lane is the
+Windows terminal module in `src/repl.rs` (three kernel32 console calls, documented with SAFETY
+comments and validated handles).
 
 ## 2. Numeric kernels (`lovelace-real`, `lovelace-array`, `lovelace-symbolics`)
 
@@ -59,9 +65,11 @@ cancellation token that every long kernel polls (`lovelace-symbolics/src/lib.rs`
 ## 3. Language and engine (`lovelace-lang`)
 
 `lovelace-lang` is the whole language: values, lexer, parser, tree-walking interpreter, the builtin
-registry and the builtin implementations, the Modus plugin host, MathIR, complex arithmetic, SVG
-plotting and progress reporting. The engine facade is `Engine` and its evaluation entry point is
-`Engine::eval` → `eval_text`.
+registry and the builtin implementations, MathIR, complex arithmetic, SVG plotting and progress
+reporting. The engine facade is `Engine` and its evaluation entry point is
+`Engine::eval` → `eval_text`. There is one static builtin registry and one dispatcher; the
+`module` label on a descriptor groups a function for discovery and is never consulted to decide
+whether a name resolves.
 
 Two seams matter for every host:
 
@@ -72,7 +80,17 @@ Two seams matter for every host:
   live flag. Both are scoped into `lovelace_symbolics::cancel::arm_with_flag` for the duration of
   one evaluation (`Engine::eval`).
 
-## 4. Execution hosts (`lovelace-run`, `lovelace-know`, `lovelace-corpus`, `lovelace-bench`)
+## 4. Systems models (`lovelace-systems`)
+
+`lovelace-systems` is an exact queueing and operations-research library: rational arithmetic
+(`numeric::Q` over `Nat`/`Int` with gcd reduction), units, typed models, validation, M/M/1, M/M/c,
+M/M/∞, operational laws, open Jackson networks, exact single-class MVA, bottleneck/capacity
+analysis and sweeps. Every result carries its model class, solver name and version, assumptions,
+exactness status, precision and warnings. Unsupported models and unstable systems are stable
+categorized errors, never fabricated steady-state metrics. It depends only on the numeric crates;
+the `sys_*` adapter in section 3 is the only interpreter code that knows it exists.
+
+## 5. Execution hosts (`lovelace-run`, `lovelace-know`, `lovelace-corpus`, `lovelace-bench`)
 
 `lovelace-run` is the non-interactive runner and the agent-facing wire protocol: exactly one JSON
 document on stdout, a stable field set and three exit codes (0 success, 1 script/diagnostic failure,
@@ -88,7 +106,7 @@ over stdin/stdout → observation → reducer → convergence, with JSON persist
 pass (`lovelace-corpus/src/main.rs`). `lovelace-bench` is the micro-benchmark harness shared with
 the C# reference's measurements (`lovelace-bench/src/main.rs`).
 
-## 5. UI (`lovelace-desktop`)
+## 6. UI (`lovelace-desktop`)
 
 The desktop binary has a windowed workbench and a set of headless modes
 (`lovelace-desktop/src/main.rs`). The window is eframe/egui 0.37 with resvg 0.50 rendering the

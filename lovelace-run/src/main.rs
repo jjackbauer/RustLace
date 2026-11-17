@@ -7,6 +7,8 @@
 //! Positions published in the envelope are UTF-16 code-unit offsets into the caller's text,
 //! which is what the C# runner publishes and what a consumer slices with.
 
+#![deny(unsafe_code)]
+
 use std::io::{Read, Write};
 
 use lovelace_json::Json;
@@ -14,7 +16,7 @@ use lovelace_lang::{Engine, registry, structured};
 
 use script_source::{ScriptSource, SourceIdentity, SourceOrigin};
 
-const PROTOCOL_VERSION: &str = "1";
+const PROTOCOL_VERSION: &str = "2";
 const SYMBOLIC_FORMAT_VERSION: &str = "#!lovelace-sym 1";
 const MATH_IR_VERSION: &str = "2";
 // A test-only clock hook: the cancellation rows that assert the ledger's verdict need the

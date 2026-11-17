@@ -1629,3 +1629,50 @@ pub fn send_key(hwnd: HWND, virtual_key: u16, scan: u16, extended: bool, down: b
     let message = if down { WM_KEYDOWN } else { WM_KEYUP };
     send(hwnd, message, virtual_key as WPARAM, lparam);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `COR-015b`: the safe wrapper around `GetClientRect` refuses an invalid handle instead of
+    /// dereferencing it; the FFI call returns 0 and the wrapper maps that to `(0, 0)`.
+    #[test]
+    fn client_size_of_an_invalid_handle_is_zero() {
+        assert_eq!(client_size(0), (0, 0));
+    }
+
+    /// A null handle short-circuits before the text APIs, so the wrapper is total.
+    #[test]
+    fn window_text_of_an_invalid_handle_is_empty() {
+        assert_eq!(window_text(0), "");
+    }
+
+    /// `GetWindowRect` on a null handle returns 0; the wrapper maps that to `(0, 0)`.
+    #[test]
+    fn window_size_of_an_invalid_handle_is_zero() {
+        assert_eq!(window_size(0), (0, 0));
+    }
+
+    /// `set_text` rejects a null handle before the FFI call.
+    #[test]
+    fn set_text_on_an_invalid_handle_is_a_no_op() {
+        set_text(0, "ignored");
+    }
+
+    /// A sweep of the non-dialog wrapper paths with a null handle: every call must fail or return
+    /// harmlessly instead of dereferencing the handle or panicking.
+    #[test]
+    fn invalid_handle_operations_do_not_crash() {
+        move_window(0, 0, 0, 0, 0);
+        invalidate(0);
+        show_window(0);
+        update_window(0);
+        assert!(!destroy_window(0));
+        set_focus(0);
+        set_timer(0, 1, 1);
+        kill_timer(0, 1);
+        send_key(0, 0x41, 0, false, true);
+        let _ = ime_context(0);
+        let _ = ime_default_window(0);
+    }
+}

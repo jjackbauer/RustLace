@@ -17,8 +17,34 @@ struct Example {
     text: String,
 }
 
+/// The corpus runs its scripts on a worker with the same 256 MiB stack the CLI runner uses
+/// (`lovelace-run/src/main.rs`): evaluation is native recursion, and a debug build overflows the
+/// default main-thread stack at `lang/061`. Corpus parsing stays on the main thread; only the
+/// engine work needs the larger stack.
+const CORPUS_STACK_BYTES: usize = 256 * 1024 * 1024;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    ExitCode::from(run_on_worker(args))
+}
+
+/// Runs the corpus on a dedicated worker so a deep script cannot crash the host with a
+/// main-thread stack overflow. A panicking worker is a failure (1), never a silent pass.
+fn run_on_worker(args: Vec<String>) -> u8 {
+    match std::thread::Builder::new()
+        .name("corpus".to_string())
+        .stack_size(CORPUS_STACK_BYTES)
+        .spawn(move || run(&args))
+    {
+        Ok(worker) => worker.join().unwrap_or(1),
+        Err(error) => {
+            eprintln!("cannot start the corpus worker: {error}");
+            2
+        }
+    }
+}
+
+fn run(args: &[String]) -> u8 {
     let filter = args.iter().find(|a| !a.starts_with("--")).cloned();
     let verbose = args.iter().any(|a| a == "--verbose");
 
@@ -26,6 +52,7 @@ fn main() -> ExitCode {
     let files = [
         root.join("parity").join("corpus").join("lang.json"),
         root.join("parity").join("corpus").join("symbolics.json"),
+        root.join("parity").join("corpus").join("systems.json"),
     ];
 
     let mut examples = Vec::new();
@@ -34,19 +61,19 @@ fn main() -> ExitCode {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("cannot read corpus {}: {e}", path.display());
-                return ExitCode::from(2);
+                return 2;
             }
         };
         let doc = match Json::parse(&text) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("cannot parse corpus {}: {e}", path.display());
-                return ExitCode::from(2);
+                return 2;
             }
         };
         let Some(items) = doc.get("examples").and_then(|v| v.as_arr()) else {
             eprintln!("corpus {} has no examples array", path.display());
-            return ExitCode::from(2);
+            return 2;
         };
         for it in items {
             let field = |k: &str| it.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -61,7 +88,7 @@ fn main() -> ExitCode {
 
     if examples.is_empty() {
         eprintln!("corpus is empty: refusing a vacuous pass");
-        return ExitCode::from(2);
+        return 2;
     }
 
     let total = examples.len();
@@ -107,11 +134,7 @@ fn main() -> ExitCode {
         failures.len(),
         filter.map(|f| format!(" (filter {f})")).unwrap_or_default()
     );
-    if failures.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    }
+    if failures.is_empty() { 0 } else { 1 }
 }
 
 fn one_line(s: &str) -> String {
@@ -143,5 +166,21 @@ fn run_example(engine: &mut Engine, ex: &Example) -> Result<String, String> {
             Err(e) => Err(format!("error: {}", e.message)),
         },
         other => Err(format!("unknown expectation kind '{other}'")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_on_worker;
+
+    /// `COR-011`: the recursive corpus case overflows the default main-thread stack in debug.
+    /// The corpus must run it on the same large worker stack the CLI runner uses.
+    #[test]
+    fn lang_061_finishes_on_the_corpus_worker_stack() {
+        assert_eq!(
+            run_on_worker(vec!["lang/061".to_string()]),
+            0,
+            "the debug corpus worker must not overflow on the recursive fixture"
+        );
     }
 }

@@ -1,79 +1,79 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Vector",
     "display": "[6, -1.5 + 0.8660254037844386467637231707525i, -1.5 - 0.8660254037844386467637231707525i]",
-    "typed": "[6, -1.5 + 0.8660254037844386467637231707525i, -1.5 - 0.8660254037844386467637231707525i] (Vector)",
+    "kind": "Vector",
     "structured": {
+      "elements": [
+        {
+          "exact": true,
+          "im": "0",
+          "kind": "Complex",
+          "re": "6"
+        },
+        {
+          "exact": false,
+          "im": "0.8660254037844386467637231707525",
+          "kind": "Complex",
+          "re": "-1.5"
+        },
+        {
+          "exact": false,
+          "im": "-0.8660254037844386467637231707525",
+          "kind": "Complex",
+          "re": "-1.5"
+        }
+      ],
       "kind": "Array",
-      "type": "Vector",
       "shape": [
         3
       ],
-      "elements": [
-        {
-          "kind": "Complex",
-          "exact": true,
-          "re": "6",
-          "im": "0"
-        },
-        {
-          "kind": "Complex",
-          "exact": false,
-          "re": "-1.5",
-          "im": "0.8660254037844386467637231707525"
-        },
-        {
-          "kind": "Complex",
-          "exact": false,
-          "re": "-1.5",
-          "im": "-0.8660254037844386467637231707525"
-        }
-      ]
-    }
+      "type": "Vector"
+    },
+    "typed": "[6, -1.5 + 0.8660254037844386467637231707525i, -1.5 - 0.8660254037844386467637231707525i] (Vector)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Vector",
       "display": "[6, -1.5 + 0.8660254037844386467637231707525i, -1.5 - 0.8660254037844386467637231707525i]",
+      "kind": "Vector",
+      "name": "_",
       "structured": {
+        "elements": [
+          {
+            "exact": true,
+            "im": "0",
+            "kind": "Complex",
+            "re": "6"
+          },
+          {
+            "exact": false,
+            "im": "0.8660254037844386467637231707525",
+            "kind": "Complex",
+            "re": "-1.5"
+          },
+          {
+            "exact": false,
+            "im": "-0.8660254037844386467637231707525",
+            "kind": "Complex",
+            "re": "-1.5"
+          }
+        ],
         "kind": "Array",
-        "type": "Vector",
         "shape": [
           3
         ],
-        "elements": [
-          {
-            "kind": "Complex",
-            "exact": true,
-            "re": "6",
-            "im": "0"
-          },
-          {
-            "kind": "Complex",
-            "exact": false,
-            "re": "-1.5",
-            "im": "0.8660254037844386467637231707525"
-          },
-          {
-            "kind": "Complex",
-            "exact": false,
-            "re": "-1.5",
-            "im": "-0.8660254037844386467637231707525"
-          }
-        ]
+        "type": "Vector"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

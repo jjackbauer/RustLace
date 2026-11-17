@@ -175,3 +175,112 @@ fn real_periodic_minus_its_own_truncation_is_the_remainder() {
     assert_eq!(difference.period_len, 1);
     assert_eq!(difference.exp, -1001);
 }
+
+/// COR-004: a deterministic numeric-literal campaign with accepted and rejected censuses.
+#[test]
+fn numeric_literal_fuzz_campaign_never_panics() {
+    fn next(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+    const FRAGMENTS: &[&str] = &[
+        "0", "1", "9", "3", ".", "-", "+", "(", ")", "e", "E", "a", " ", "0.(3)", "..", "--",
+        "\u{0}", "é",
+    ];
+    let mut state = 0x0d15_ea5e_2026_1118u64;
+    let mut accepted = 0usize;
+    let mut rejected = 0usize;
+    for step in 0..20_000 {
+        let mut text = String::new();
+        if step % 2 == 0 {
+            // One definitely valid form: digits, optional fraction, optional periodic suffix.
+            let integer = next(&mut state) % 10_000;
+            text.push_str(&integer.to_string());
+            if next(&mut state) % 2 == 0 {
+                text.push('.');
+                text.push_str(&(next(&mut state) % 1000).to_string());
+            }
+            if next(&mut state) % 7 == 0 {
+                text.push_str(".(3)");
+            }
+        } else {
+            let pieces = (next(&mut state) % 12) as usize;
+            for _ in 0..pieces {
+                text.push_str(FRAGMENTS[(next(&mut state) as usize) % FRAGMENTS.len()]);
+            }
+        }
+        if Real::from_str(&text).is_some() {
+            accepted += 1;
+        } else {
+            rejected += 1;
+        }
+    }
+    assert!(
+        accepted > 1_000,
+        "only {accepted} generated literals parsed; campaign is not exercising the parser"
+    );
+    assert!(
+        rejected > 100,
+        "only {rejected} generated literals were rejected; campaign has no rejection signal"
+    );
+}
+
+/// WL-01 (numeric kernel): randomized 12-digit factors promote 64 -> 128 exactly, and a
+/// 20-digit x 20-digit product promotes 128 -> Real. Every fixed-width result is compared with the
+/// arbitrary-precision `Real` oracle.
+#[test]
+fn lreal_tier_boundaries_promote_and_match_real() {
+    use crate::lreal::{LReal64, LReal128, LRealError};
+
+    fn next(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    let mut state = 0x0d15_ea5e_2026_1121u64;
+    for _ in 0..200 {
+        // Twelve significant digits each; the 24-digit product exceeds u64 but fits u128.
+        let a = format!(
+            "{:012}",
+            100_000_000_000u64 + next(&mut state) % 900_000_000_000
+        );
+        let b = format!(
+            "{:012}",
+            100_000_000_000u64 + next(&mut state) % 900_000_000_000
+        );
+        let a64 = LReal64::parse(&a).expect("12 digits fit LReal64");
+        let b64 = LReal64::parse(&b).expect("12 digits fit LReal64");
+        assert_eq!(
+            a64.mul(&b64),
+            Err(LRealError::Promote),
+            "{a} * {b} needs the wide tier"
+        );
+        let a128 = LReal128::parse(&a).expect("12 digits fit LReal128");
+        let b128 = LReal128::parse(&b).expect("12 digits fit LReal128");
+        let product = a128.mul(&b128).expect("24 digits fit LReal128");
+        let oracle = Real::from_str(&a)
+            .unwrap()
+            .mul(&Real::from_str(&b).unwrap());
+        assert_eq!(product.to_real(), oracle, "{a} * {b}");
+    }
+
+    let a = "12345678901234567890";
+    let b = "98765432109876543210";
+    let a128 = LReal128::parse(a).expect("20 digits fit LReal128");
+    let b128 = LReal128::parse(b).expect("20 digits fit LReal128");
+    assert_eq!(
+        a128.mul(&b128),
+        Err(LRealError::Promote),
+        "the 40-digit product exceeds LReal128"
+    );
+    let oracle = Real::from_str(a).unwrap().mul(&Real::from_str(b).unwrap());
+    assert_eq!(a128.to_real().mul(&b128.to_real()), oracle);
+}
