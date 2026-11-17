@@ -54,6 +54,11 @@
 #    32. a documented output the current language does not produce
 #    33. a ```lovelace fence with no recorded ```text output
 #    34. no ```lovelace example in the tree at all
+#    35. a not-run annotation that is honored (positive), then removed
+#    36. a not-run annotation that is not immediately above its fence
+#    37. a not-run annotation with an empty reason
+#    38. a tree whose every snippet is exempted (no executed example)
+#    39. an unexpected runner exit that prints the matching output
 #
 # The check-docs cases also carry a positive control for the declared-absent
 # exemption: a missing file named on a line that says it was deleted must pass,
@@ -609,7 +614,7 @@ make_docs_report_tree() {
     write_report_stub "$root" run-tutorials \
         'DOCREPORT gate=run-tutorials status=ok tutorials=4 fences=8 oracles=1 failures=0'
     write_report_stub "$root" check-doc-examples \
-        'DOCREPORT gate=check-doc-examples status=ok pages=1 examples=1 excluded=0 failures=0'
+        'DOCREPORT gate=check-doc-examples status=ok pages=1 discovered=1 executed=1 passed=1 failed=0 exempted=0'
     write_report_stub "$root" check-docs \
         'DOCREPORT gate=check-docs status=ok pages=1 links=1 anchors=1 refs=1 citations=0 symbols=0 claims=0 tutorials=0 sections=0 readme=0 modes=stub failures=0'
     write_report_stub "$root" check-reference-pages \
@@ -1383,10 +1388,10 @@ SH
     expect_success "doc examples: matching fixture" \
         "$work/doc-examples-mismatch/baseline.log" \
         env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
-    if ! grep -Fq -- 'DOCREPORT gate=check-doc-examples status=ok pages=1 examples=1 excluded=0 failures=0' \
+    if ! grep -Fq -- 'DOCREPORT gate=check-doc-examples status=ok pages=1 discovered=1 executed=1 passed=1 failed=0 exempted=0' \
         "$work/doc-examples-mismatch/baseline.log"; then
         fail "doc examples: clean baseline" \
-            "the DOCREPORT line is not ok with one example"
+            "the DOCREPORT line is not ok with one discovered and one executed example"
     fi
     sed 's/= 2 (Natural)/= 3 (Natural)/' "$root/docs/guide.md" >"$root/docs/guide.tmp"
     mv -- "$root/docs/guide.tmp" "$root/docs/guide.md"
@@ -1425,6 +1430,119 @@ MD
         "docs/" "refusing to pass on zero work" \
         "$work/doc-examples-zero/mutated.log" \
         env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+}
+
+# ---------------------------------------------------------------------------
+# 35-39. tools/check-doc-examples.sh: the exemption contract, the zero-executed
+# rule and unexpected runner exits. 35 is a positive control (a broken snippet
+# is skipped and reported) followed by its negative (removing the annotation
+# makes the same snippet fail), so "the exemption is honored" is proven in both
+# directions rather than by a single passing run.
+# ---------------------------------------------------------------------------
+{
+    root=$work/doc-examples-exemption/repo
+    make_doc_examples_tree "$root"
+    cat >>"$root/docs/guide.md" <<'MD'
+
+<!-- not-run: the lexer refuses this snippet on purpose -->
+```lovelace
+this is not valid lovelace source
+```
+MD
+    expect_success "doc examples: honored exemption fixture" \
+        "$work/doc-examples-exemption/baseline.log" \
+        env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+    if ! grep -Fq -- 'EXCLUDED docs/guide.md' "$work/doc-examples-exemption/baseline.log"; then
+        fail "doc examples: honored exemption" "the exempted snippet was not reported as EXCLUDED"
+    fi
+    if ! grep -Fq -- 'discovered=2 executed=1 passed=1 failed=0 exempted=1' \
+        "$work/doc-examples-exemption/baseline.log"; then
+        fail "doc examples: honored exemption counts" \
+            "the DOCREPORT line does not report discovered=2 executed=1 exempted=1"
+    fi
+    sed '/not-run: the lexer refuses/d' "$root/docs/guide.md" >"$root/docs/guide.tmp"
+    mv -- "$root/docs/guide.tmp" "$root/docs/guide.md"
+    expect_failure "doc examples: exemption removed" \
+        "docs/guide.md" "must be followed immediately by its" \
+        "$work/doc-examples-exemption/mutated.log" \
+        env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+}
+
+{
+    root=$work/doc-examples-annotation-separated/repo
+    make_doc_examples_tree "$root"
+    cat >>"$root/docs/guide.md" <<'MD'
+
+<!-- not-run: separated by prose -->
+
+A paragraph between the annotation and the fence is not immediately above.
+
+```lovelace
+1 + 1
+```
+```text
+= 2 (Natural)
+```
+MD
+    expect_failure "doc examples: annotation not immediately above its fence" \
+        "docs/guide.md" "must sit immediately above" \
+        "$work/doc-examples-annotation-separated/mutated.log" \
+        env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+}
+
+{
+    root=$work/doc-examples-empty-reason/repo
+    make_doc_examples_tree "$root"
+    cat >>"$root/docs/guide.md" <<'MD'
+
+<!-- not-run:  -->
+```lovelace
+1 + 1
+```
+MD
+    expect_failure "doc examples: not-run annotation with an empty reason" \
+        "docs/guide.md" "empty reason" \
+        "$work/doc-examples-empty-reason/mutated.log" \
+        env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+}
+
+{
+    root=$work/doc-examples-all-exempted/repo
+    mkdir -p -- "$root/docs" "$root/tools"
+    copy_checker "$repo_root/tools/check-doc-examples.sh" "$root/tools/check-doc-examples.sh"
+    cat >"$root/docs/guide.md" <<'MD'
+# Scratch guide
+
+<!-- not-run: nothing on this page can run -->
+```lovelace
+this is not valid lovelace source
+```
+MD
+    expect_failure "doc examples: every snippet exempted" \
+        "docs/" "refusing to pass on zero work" \
+        "$work/doc-examples-all-exempted/mutated.log" \
+        env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+}
+
+{
+    root=$work/doc-examples-unexpected-exit/repo
+    make_doc_examples_tree "$root"
+    mkdir -p -- "$root/fake-target/debug"
+    # A runner that prints output the page also documents, but exits 2. Both
+    # names are written so the same fixture works with and without the Windows
+    # .exe suffix; Git Bash executes a shebang script under either name.
+    for runner_name in lovelace-run lovelace-run.exe; do
+        cat >"$root/fake-target/debug/$runner_name" <<'SH'
+#!/usr/bin/env bash
+printf '= 2 (Natural)\n'
+exit 2
+SH
+        chmod +x "$root/fake-target/debug/$runner_name" || exit 2
+    done
+    expect_failure "doc examples: unexpected runner exit" \
+        "docs/guide.md" "neither success (0) nor a documented refusal (1)" \
+        "$work/doc-examples-unexpected-exit/mutated.log" \
+        env CARGO_TARGET_DIR="$root/fake-target" bash "$root/tools/check-doc-examples.sh"
 }
 
 check_ci_wiring "$repo_root/.github/workflows/ci.yml"
