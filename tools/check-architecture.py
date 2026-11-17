@@ -156,10 +156,19 @@ def load_metadata(root: Path, override: str | None) -> dict:
             command, cwd=root, capture_output=True, text=True, check=False
         )
         if completed.returncode != 0:
-            raise ConfigError(
-                "cargo metadata failed; the checker cannot inspect the workspace:\n"
-                + (completed.stderr or completed.stdout)
+            # The offline flag is the engine-development default. A cold CI runner may not have
+            # the registry index cached yet; retry once with the network allowed, and keep the
+            # offline failure in the diagnostic if neither attempt works.
+            offline_error = completed.stderr or completed.stdout
+            online = [argument for argument in command if argument != "--offline"]
+            completed = subprocess.run(
+                online, cwd=root, capture_output=True, text=True, check=False
             )
+            if completed.returncode != 0:
+                raise ConfigError(
+                    "cargo metadata failed offline and online; the checker cannot inspect the workspace:\n"
+                    + "offline: " + offline_error + "\nonline: " + (completed.stderr or completed.stdout)
+                )
         try:
             data = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
