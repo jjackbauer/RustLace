@@ -20,10 +20,11 @@
 # Gates, in this order:
 #   1. check-crate-examples.sh   compile and run the docs/crates/ Rust fences
 #   2. run-tutorials.sh          run the four tutorials as contracts
-#   3. check-docs.sh --symbols --claims --readme
+#   3. check-doc-examples.sh     execute every documented ```lovelace snippet
+#   4. check-docs.sh --symbols --claims --readme
 #                                links, anchors, references, citations, symbols,
 #                                claims, tutorial precision sections, README
-#   4. check-reference-pages.sh  the seven-section reference-page contract
+#   5. check-reference-pages.sh  the seven-section reference-page contract
 #
 # check-docs.sh runs once with all three audit flags, the way the script is
 # designed to compose, so one line carries every mode's counts with
@@ -172,6 +173,7 @@ run_gate() {
 # ---------------------------------------------------------------------------
 run_gate check-crate-examples bash tools/check-crate-examples.sh
 run_gate run-tutorials bash tools/run-tutorials.sh
+run_gate check-doc-examples bash tools/check-doc-examples.sh
 run_gate check-docs bash tools/check-docs.sh --symbols --claims --readme
 run_gate check-reference-pages bash tools/check-reference-pages.sh
 
