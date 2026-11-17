@@ -17,11 +17,12 @@
 #     pages run with `--text`;
 #   * every other page documents the result line only, so it runs with
 #     `--text --omit-variables`, the same invocation the extension runner uses.
-#   * a successful run (exit 0) is compared on stdout; a failing run (exit 1)
-#     is compared on stderr, because that is where the runner prints the typed
-#     error the documented block shows. Whitespace runs are collapsed and the
-#     ends trimmed before comparison, so indentation is not part of the
-#     contract.
+#   * a successful run (exit 0) is compared on stdout; a documented refusal
+#     (exit 1) is compared on stderr, because that is where the runner prints
+#     the typed error the documented block shows. Any other exit code is an
+#     unexpected runner state and is a failure whatever it printed.
+#   * whitespace runs are collapsed and the ends trimmed before comparison, so
+#     indentation is not part of the contract.
 #   * every run gets a scratch --plot-dir/--plot-file, so a documented plot
 #     writes outside the repository and cannot make the gate depend on the
 #     caller's application directory.
@@ -42,9 +43,15 @@
 #
 #     <!-- not-run: <reason> -->
 #
-# Every exemption is printed with page:line and reason, so the list is
-# auditable; an annotation that is not attached to a lovelace fence, or that
-# has an empty reason, is itself a failure.
+# An exempted snippet is not executed and is counted as `exempted`, separately
+# from `discovered` and `executed`. Every exemption is printed with page:line
+# and reason, so the list is auditable; an annotation that is not attached to
+# its lovelace fence, that has an empty reason, or that is not immediately
+# above the fence is itself a failure.
+#
+# Zero work is not a pass. The gate fails when no snippet is executed, which
+# covers both an empty tree and a tree whose every snippet is exempted; the
+# two cases report different counts.
 #
 # Runner discovery is the same rule as the other example runners:
 # ${CARGO_TARGET_DIR:-<repo>/target}/{debug,release}/lovelace-run, with the
@@ -53,13 +60,16 @@
 # CI builds `cargo build -p lovelace-run` before running it.
 #
 # Exit status:
-#   0  every included snippet ran and its output matched
-#   1  a mismatch, an unpaired fence, an annotation problem or an unusable run
-#   2  bad usage, no runner, or no snippet at all (zero work is not a pass)
+#   0  every discovered snippet was executed or exempted, and every executed
+#      snippet's output matched
+#   1  a mismatch, an unpaired fence, an annotation problem or an unexpected
+#      runner exit
+#   2  bad usage, no runner, or no executed snippet (zero work)
 #
 # The last stdout line is the machine-readable evidence line docs-report.sh
-# collects:
-#   DOCREPORT gate=check-doc-examples status=<ok|fail> pages=<n> examples=<n> excluded=<n> failures=<n>
+# collects. Every quantity is counted independently:
+#   DOCREPORT gate=check-doc-examples status=<ok|fail> pages=<n> discovered=<n>
+#             executed=<n> passed=<n> failed=<n> exempted=<n>
 
 set -u
 
@@ -97,7 +107,7 @@ case "$(uname -s 2>/dev/null || true)" in
     MINGW* | MSYS* | CYGWIN*) is_windows=1 ;;
     *) is_windows=0 ;;
 esac
-if (( is_windows )); then exe_suffix=.exe; else exe_suffix=; fi
+if ((is_windows)); then exe_suffix=.exe; else exe_suffix=; fi
 
 if [[ -n ${CARGO_TARGET_DIR:-} ]]; then
     target_dir=$CARGO_TARGET_DIR
@@ -122,7 +132,7 @@ if [[ -z $exe ]]; then
     printf 'check-doc-examples: build it first with: cargo build -p lovelace-run\n' >&2
     exit 2
 fi
-if (( ! is_windows )) && [[ ! -x $exe ]]; then
+if ((!is_windows)) && [[ ! -x $exe ]]; then
     printf 'check-doc-examples: lovelace-run is not executable: %s\n' "$exe" >&2
     exit 2
 fi
@@ -179,22 +189,18 @@ done < <(
 )
 if [[ ${#pages[@]} -eq 0 ]]; then
     printf 'check-doc-examples: no Markdown page under docs/; refusing to pass on zero work\n' >&2
-    printf 'DOCREPORT gate=check-doc-examples status=fail pages=0 examples=0 excluded=0 failures=1\n'
+    printf 'DOCREPORT gate=check-doc-examples status=fail pages=0 discovered=0 executed=0 passed=0 failed=1 exempted=0\n'
     exit 2
 fi
 
 pages_scanned=0
 pages_with_examples=0
-examples=0
+discovered=0
+executed=0
 passed=0
 failed=0
-excluded=0
+exempted=0
 problems=0
-
-fail() {
-    printf 'FAIL %s\n' "$1" >&2
-    failed=$((failed + 1))
-}
 
 for page in "${pages[@]}"; do
     pages_scanned=$((pages_scanned + 1))
@@ -205,7 +211,9 @@ for page in "${pages[@]}"; do
     done <"$page"
     line_count=${#page_lines[@]}
 
-    # Split the page into fenced blocks and attach `not-run` annotations.
+    # Split the page into fenced blocks and attach `not-run` annotations. The
+    # pending annotation is promoted to active_reason when its fence opens, so
+    # the reason survives until the block is recorded at the closing fence.
     block_lang=()
     block_text=()
     block_open=()
@@ -216,6 +224,7 @@ for page in "${pages[@]}"; do
     buffer=
     sep=
     open_line=0
+    active_reason=
     pending_reason=
     pending_line=0
 
@@ -228,9 +237,8 @@ for page in "${pages[@]}"; do
                 block_text+=("$buffer")
                 block_open+=("$open_line")
                 block_close+=($((n + 1)))
-                block_reason+=("${pending_reason:-}")
-                pending_reason=
-                pending_line=0
+                block_reason+=("${active_reason}")
+                active_reason=
             else
                 buffer+=$sep$line
                 sep=$'\n'
@@ -245,7 +253,9 @@ for page in "${pages[@]}"; do
             sep=
             open_line=$((n + 1))
             if [[ -n $pending_reason ]]; then
-                if [[ $lang != lovelace ]] || ((open_line != pending_line + 1)); then
+                if [[ $lang == lovelace ]] && ((open_line == pending_line + 1)); then
+                    active_reason=$pending_reason
+                else
                     printf 'FAIL %s:%d: a not-run annotation must sit immediately above a ```lovelace fence\n' \
                         "$page" "$pending_line"
                     problems=$((problems + 1))
@@ -257,6 +267,11 @@ for page in "${pages[@]}"; do
         fi
 
         if [[ $line =~ ^[[:space:]]*'<!--'[[:space:]]*not-run: ]]; then
+            if [[ -n $pending_reason ]]; then
+                printf 'FAIL %s:%d: a not-run annotation for %s was not attached to a fence\n' \
+                    "$page" "$pending_line" "$page"
+                problems=$((problems + 1))
+            fi
             reason=$line
             reason=${reason#*not-run:}
             reason=${reason%%-->*}
@@ -264,25 +279,15 @@ for page in "${pages[@]}"; do
             if [[ -z $reason ]]; then
                 printf 'FAIL %s:%d: not-run annotation has an empty reason\n' "$page" "$((n + 1))"
                 problems=$((problems + 1))
+                pending_reason=
+                pending_line=0
                 continue
-            fi
-            if [[ -n $pending_reason ]]; then
-                printf 'FAIL %s:%d: a not-run annotation for %s was not attached to a fence\n' \
-                    "$page" "$pending_line" "$page"
-                problems=$((problems + 1))
             fi
             pending_reason=$reason
             pending_line=$((n + 1))
             continue
         fi
-
-        if [[ -n $pending_reason ]] && [[ $line =~ [^[:space:]] ]]; then
-            printf 'FAIL %s:%d: a not-run annotation must sit immediately above its ```lovelace fence (reason: %s)\n' \
-                "$page" "$pending_line" "$pending_reason"
-            problems=$((problems + 1))
-            pending_reason=
-            pending_line=0
-        fi    done
+    done
 
     if ((in_fence)); then
         printf 'FAIL %s:%d: fence is never closed\n' "$page" "$open_line" >&2
@@ -307,12 +312,12 @@ for page in "${pages[@]}"; do
     block_count=${#block_lang[@]}
     for ((b = 0; b < block_count; b++)); do
         [[ ${block_lang[b]} == lovelace ]] || continue
-        examples=$((examples + 1))
+        discovered=$((discovered + 1))
         page_examples=$((page_examples + 1))
         fence_line=${block_open[b]}
 
         if [[ -n ${block_reason[b]} ]]; then
-            excluded=$((excluded + 1))
+            exempted=$((exempted + 1))
             printf 'EXCLUDED %s:%d (reason: %s)\n' "$page" "$fence_line" "${block_reason[b]}"
             continue
         fi
@@ -337,29 +342,36 @@ for page in "${pages[@]}"; do
             continue
         fi
 
-        script=$scratch/example-$examples.lv
+        executed=$((executed + 1))
+        script=$scratch/example-$executed.lv
         printf '%s' "${block_text[b]}" >"$script"
-        stdout_file=$scratch/example-$examples.out
-        stderr_file=$scratch/example-$examples.err
+        stdout_file=$scratch/example-$executed.out
+        stderr_file=$scratch/example-$executed.err
         : >"$stdout_file"
         : >"$stderr_file"
 
         if "$exe" --file "$(native_path "$script")" \
             --plot-dir "$(native_path "$scratch/plots")" \
-            --plot-file "example-$examples.svg" \
+            --plot-file "example-$executed.svg" \
             "${family_args[@]}" >"$stdout_file" 2>"$stderr_file"; then
             rc=0
         else
             rc=$?
         fi
 
+        # Only 0 (success) and 1 (documented refusal) are runner states this
+        # contract knows. Anything else is a failure whatever the output says,
+        # so a broken or replaced runner cannot pass by printing the right text.
+        if ((rc != 0 && rc != 1)); then
+            printf 'FAIL %s:%d: the runner exited %d, which is neither success (0) nor a documented refusal (1)\n' \
+                "$page" "$fence_line" "$rc" >&2
+            failed=$((failed + 1))
+            continue
+        fi
+
         if ((rc == 0)); then
             raw=$(cat "$stdout_file")
-        elif ((rc == 1)); then
-            raw=$(cat "$stderr_file")
         else
-            printf 'FAIL %s:%d: the runner exited %d (not 0 for success or 1 for a documented refusal)\n' \
-                "$page" "$fence_line" "$rc" >&2
             raw=$(cat "$stderr_file")
         fi
 
@@ -389,17 +401,19 @@ if ((failures > 0)); then
     status=fail
     printf 'check-doc-examples: %d failure(s)\n' "$failures" >&2
 fi
-if ((examples == 0)); then
-    printf 'check-doc-examples: no ```lovelace fence found under docs/; refusing to pass on zero work\n' >&2
-    printf 'DOCREPORT gate=check-doc-examples status=fail pages=%d examples=0 excluded=%d failures=1\n' \
-        "$pages_scanned" "$excluded"
+
+if ((executed == 0)); then
+    printf 'check-doc-examples: docs/ yielded no executed example (%d discovered, %d exempted); refusing to pass on zero work\n' \
+        "$discovered" "$exempted" >&2
+    printf 'DOCREPORT gate=check-doc-examples status=fail pages=%d discovered=%d executed=0 passed=0 failed=%d exempted=%d\n' \
+        "$pages_with_examples" "$discovered" $((failures + 1)) "$exempted"
     exit 2
 fi
 
-printf 'check-doc-examples: %d page(s) scanned, %d with examples, %d example(s) executed, %d matched, %d excluded, %d failure(s)\n' \
-    "$pages_scanned" "$pages_with_examples" "$examples" "$passed" "$excluded" "$failures"
-printf 'DOCREPORT gate=check-doc-examples status=%s pages=%d examples=%d excluded=%d failures=%d\n' \
-    "$status" "$pages_with_examples" "$examples" "$excluded" "$failures"
+printf 'check-doc-examples: %d page(s) scanned, %d with examples, %d discovered, %d executed, %d matched, %d exempted, %d failure(s)\n' \
+    "$pages_scanned" "$pages_with_examples" "$discovered" "$executed" "$passed" "$exempted" "$failures"
+printf 'DOCREPORT gate=check-doc-examples status=%s pages=%d discovered=%d executed=%d passed=%d failed=%d exempted=%d\n' \
+    "$status" "$pages_with_examples" "$discovered" "$executed" "$passed" "$failures" "$exempted"
 
 if [[ $status == fail ]]; then
     exit 1
