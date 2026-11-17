@@ -1056,7 +1056,9 @@ pub static BUILTINS: &[BuiltinInfo] = &[
         variadic: false,
         module: "Core",
         category: "Arrays",
-        summary: Some("Matrix product (including batched matrix products for matching leading dimensions)."),
+        summary: Some(
+            "Matrix product (including batched matrix products for matching leading dimensions).",
+        ),
         return_kind: Some("Vector | Array"),
         related: &["dot"],
         examples: &["matmul([[1, 2], [3, 4]], [[5], [6]])"],
@@ -1069,7 +1071,9 @@ pub static BUILTINS: &[BuiltinInfo] = &[
         variadic: false,
         module: "Core",
         category: "Linear Algebra",
-        summary: Some("Exact rational matrix rank; symbolic matrices retain a legacy generic estimate."),
+        summary: Some(
+            "Exact rational matrix rank; symbolic matrices retain a legacy generic estimate.",
+        ),
         return_kind: Some("Integer"),
         related: &["det", "linsolve"],
         examples: &["matrix_rank([[x, 1], [1, x]])"],
