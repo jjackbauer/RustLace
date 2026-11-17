@@ -3,9 +3,9 @@
 **Status:** RNL-001 implemented in commit `32ea6cd0f185e4e8f28d53369837085933ec6e65` (`32ea6cd`).
 PR #9's review remediation is commit `c26f909cabaeab6d5f664974ae1c06eb8ceeb9de` (`c26f909`),
 merged with `main` in `55a8a421f3599eacfd8300948f09183169e56e36` (`55a8a42`). All seven required
-PR checks passed in run 44125853308; §6 maps the review findings to the fix. This page records the
-commands, the observed results and the remaining limitations so a reader does not have to trust a
-summary.
+PR checks passed in run 44125853308; §6 maps the review findings to the fix. A second review followed;
+§7 records its corrections. This page records the commands, the observed results and the remaining
+limitations so a reader does not have to trust a summary.
 
 ## 1. What changed
 
@@ -28,19 +28,19 @@ summary.
 
 ## 2. Commands and observed results
 
-Measured in the committed working tree on Windows 11 x86_64, 2026-11-17, rustc 1.100.0,
-release benchmarks with `opt-level = 3`:
+Measured in the `fix/release-provenance` working tree (the second-review fixes are uncommitted) on
+Windows 11 x86_64, 2026-11-17, rustc 1.100.0, release benchmarks with `opt-level = 3`:
 
 | Command | Observed result |
 |---|---|
-| `cargo test --workspace --no-fail-fast` | 45 targets, **6276 passed, 0 failed, 0 ignored** (exit 0) |
+| `cargo test --workspace --no-fail-fast` | 45 targets, **6280 passed, 0 failed, 0 ignored** (exit 0) |
 | `cargo run --release -p lovelace-corpus` | **corpus: 231 passed, 0 failed, 231 total** (exit 0) |
 | `python tools/check-architecture.py` | **14 crates, 332 files, 0 violations, 0 waived** (exit 0) |
 | `python tools/check-architecture.py --json` | the same graph as a machine-readable impact report |
-| `python tools/test-architecture-gates.py` | **20 mutation scenarios, 20 passed, 0 failed**; the valid fixture reports 7 crates, 7 files, 0 violations |
+| `python tools/test-architecture-gates.py` | **21 mutation scenarios, 21 passed, 0 failed**; the valid fixture reports 7 crates, 7 files, 0 violations |
 | `python tools/rational-oracle.py --check` | 730 cases match the Python `Fraction` oracle |
 | `python tools/systems-oracle.py --check` | 25 systems metrics match the independent formulas |
-| `cargo test -p lovelace-rational --test properties` | 12 seeded property campaigns, 0 failed |
+| `cargo test -p lovelace-rational --test properties` | 16 seeded property campaigns, 0 failed |
 | `cargo test -p lovelace-rational --test oracle` | 2 tests, 730 recorded cases recomputed |
 | `cargo test -p lovelace-systems --test oracle` | 3 tests, M/M/1, Erlang C, MVA and Jackson |
 | `cargo test -p lovelace-lang --test cross_library` | 5 tests, kernel/Symbolics/Systems/language |
@@ -66,7 +66,7 @@ table is in [`testing.md`](testing.md#1-unit-tests-in-crate-test).
 | Symbolics and Systems consume the same implementation | `Q` is an alias and `Rat` a re-export; `cross_library` compares them by type and value |
 | Arithmetic edge cases and Systems defects have regression coverage | `(1/2)/(-1/4) = -2`, `i64::MIN`, large-GCD normalization, MVA think-state occupancy, sweep endpoint refusals |
 | Exact values and precision-limited projections are distinguishable | `exact_values` on analysis and model-construction records in the language/wire; `Conversion`/`ExactnessProvenance` in Rust; the precision-boundary test |
-| The checker rejects seeded duplicates and forbidden dependencies | `tools/test-architecture-gates.py`, 20 scenarios including duplicate rational, duplicate in an owner crate, split/generic/free-function/renamed shapes, forbidden edge, cycle, undeclared numeric, broad exception, unresolved arithmetic impl and zero scan |
+| The checker rejects seeded duplicates and forbidden dependencies | `tools/test-architecture-gates.py`, 21 scenarios including duplicate rational, duplicate in an owner crate, split/generic/free-function/renamed shapes, a two-field/two-method partial representation, forbidden edge, cycle, undeclared numeric, broad exception, unresolved arithmetic impl and zero scan |
 | Legitimate domain code remains permitted | the valid fixture carries a domain formula, a typed unit, a permitted delegating specialization and a canonical alias |
 | CI enforces architecture rules as required checks | all seven PR checks are required on `main` with strict up-to-date branches and `enforce_admins`; negative-probe PR #10 failed the architecture checks and its merge was refused |
 | Contributor and agent instructions require reuse | `AGENTS.md`, `.github/copilot-instructions.md`, `docs/contributing.md`, `docs/extending.md` §2 and the three numeric/language skills |
@@ -129,9 +129,31 @@ records under `docs/goal-docs-rnl-001-review/round-2/`.
 | Finding | Correction now in the working tree | Evidence |
 |---|---|---|
 | 1 — Exact model values are lost during construction (P0) | `Station` and `QueueNetwork` records carry additive `exact_values` for service time, visits and service demand, or arrival rate / think time; `parse_station` and `parse_network` consume the sidecar and use the decimal field only when the whole sidecar is absent. | `long_period_service_time_survives_station_and_open` and `long_period_think_time_survives_closed_and_mva`; `1/97` keeps denominator 97 through `sys_station → sys_open → sys_analyze` and `sys_station → sys_closed → sys_mva`. |
-| 2 — Checker detection gaps (P1) | Method counts are summed across split `impl` blocks; generic wrapper targets are resolved; empty or generic arithmetic-trait targets are reported as `review-required`; kernel-named free functions are restricted to their owner. | Nine new mutation scenarios (`split-impl`, `generic-arithmetic-trait`, `free-function-kernel`, `unresolved-arithmetic-impl` and the owner-crate cases); the suite now has 20 scenarios. |
+| 2 — Checker detection gaps (P1) | Method counts are summed across split `impl` blocks; generic wrapper targets are resolved; empty or generic arithmetic-trait targets are reported as `review-required`; kernel-named free functions are restricted to their owner; a two-field/two-method partial representation is flagged below the four-method threshold. | Nine new mutation scenarios (`split-impl`, `generic-arithmetic-trait`, `free-function-kernel`, `unresolved-arithmetic-impl` and the owner-crate cases); the suite now has 21 scenarios including the second-review `partial-duplicate-kernel`. |
 | 3 — Required CI jobs are not required merge checks (P1) | Seven PR checks are required on `main`, with strict up-to-date branches, `enforce_admins`, and force pushes and deletions disabled. | Protection read-back; negative-probe PR #10 failed the architecture checks and its merge was refused. |
 | 4 — Whole-crate exemptions undermine the single owner (P0) | `ownerCrates` is retired and rejected; `reservedTypeNames` and `permittedRepresentations` enforce per-type ownership. | A `Rat` in `lovelace-lang` and in `lovelace-real`, and a second `Real` in `lovelace-real`, are rejected; the real workspace reports 14 crates, 332 files, 0 violations. |
-| 5 — Arithmetic budgets are checked after allocation (P1) | `Limits::check_digits` and preflights in `add_with`/`sub_with`/`mul_with`/`checked_div_with` and before the power loop; `from_parts_with` preflights the unreduced digits and polls cancellation before and after normalization. | Preflight and cancellation tests in `lovelace-rational`; `Nat::gcd` has no internal cancel hook, so normalization is the cancellation granularity. |
+| 5 — Arithmetic budgets are checked after allocation (P1) | `Limits::check_digits` and preflights in `add_with`/`sub_with`/`mul_with`/`checked_div_with` and before the power loop; `from_parts_with` preflights the unreduced digits, polls cancellation before and after normalization, and checks the normalized value against both bounds. | Preflight and cancellation tests in `lovelace-rational`; `Nat::gcd` has no internal cancel hook, so normalization is the cancellation granularity. |
 | 6 — Architecture exceptions are too easy to broaden (P1) | Exception scopes must be exact paths or crate names; `*`, `?`, `[` and `]` are rejected. CODEOWNERS declares review ownership. | The `broad-exception-scope` scenario; DEC-002 records why required code-owner review is not enabled. |
 | 7 — Benchmark wording and repository hygiene (P2) | The prose now matches the measured table: multiplication about 2× faster, division essentially unchanged (0.116 vs 0.109 ms), addition slower (0.192 vs 0.239 ms), `pow` about 6×, normalize about 2×. The tracked Python bytecode is removed and `.gitignore` covers `__pycache__/` and `*.py[cod]`. | `docs/benchmarks-numerics.md`; `git ls-files` no longer lists a `.pyc`; both ignore rules match. |
+
+## 7. Second review (2026-11-17)
+
+The second review of PR #9 raised two further gaps. Both are fixed in the uncommitted working tree
+on top of `428f3ba`; the source records are
+`docs/goal-docs-rnl-001-review-2/round-1/bit-budget.md` and
+`docs/goal-docs-rnl-001-review-2/round-1/partial-duplicate.md`.
+
+- **`from_parts_with` honours bit-only budgets.** The constructor keeps its unreduced digit
+  preflight, then calls `Limits::check` on the normalized value before returning it. The check
+  covers the zero value — `0/1` under `bits(0)` is `BitBudgetExceeded { limit: 0, observed: 1 }` —
+  and already-reduced input such as `2/1` under `bits(1)`. `from_parts` remains the unbounded,
+  uncancellable form.
+- **Partial representations are detected below the four-method threshold.** The policy adds
+  `minimumRepresentationMethods: 2`; a struct or union with at least two numeric-typed fields and
+  at least two arithmetic methods is reported as `duplicate-numeric-representation`. The new
+  `partial-duplicate-kernel` scenario fails pre-fix and passes with that diagnostic, and the suite
+  is now 21 scenarios. The valid fixture and the real workspace (14 crates, 332 files) remain at 0
+  violations, and no new `permittedRepresentations` entry was added.
+
+The final local workspace suite is **45 targets, 6280 passed, 0 failed, 0 ignored**; the rational
+crate is 34 tests (16 unit + 16 property + 2 oracle).

@@ -21,15 +21,16 @@ is carried forward as a current total. The aggregate below was measured on **Win
 on **2026-11-17**, at review-remediation commit
 **`c26f909cabaeab6d5f664974ae1c06eb8ceeb9de`** (`c26f909`), merged with `main` in
 `55a8a42`, on top of RNL-001 commit
-**`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`), with:
+**`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`), plus the uncommitted second-review
+corrections, with:
 
 ```console
 $ cargo test --workspace --no-fail-fast
 ```
 
-The run reports **45 test targets: 6276 passed, 0 failed, 0 ignored**. The per-crate rows below
+The run reports **45 test targets: 6280 passed, 0 failed, 0 ignored**. The per-crate rows below
 are the same commands grouped by crate (`cargo test -p <crate>`, with the desktop under its normal
-test path), measured at the same commit; they sum to the same 6276 passed and 0 ignored.
+test path), measured in the same working tree; they sum to the same 6280 passed and 0 ignored.
 
 | Crate | Test targets | Passed | Failed | Ignored |
 |---|---:|---:|---:|---:|
@@ -44,14 +45,14 @@ test path), measured at the same commit; they sum to the same 6276 passed and 0 
 | `lovelace-systems` | 3 | 55 | 0 | 0 |
 | `lovelace-know` | 12 | 56 | 0 | 0 |
 | `lovelace-corpus` | 5 | 28 | 0 | 0 |
-| `lovelace-rational` | 4 | 30 | 0 | 0 |
+| `lovelace-rational` | 4 | 34 | 0 | 0 |
 | `lovelace-json` | 2 | 20 | 0 | 0 |
 | `lovelace-bench` | 1 | 0 | 0 | 0 |
-| **Total** | **45** | **6276** | **0** | **0** |
+| **Total** | **45** | **6280** | **0** | **0** |
 
 Rows that compose more than one target:
 
-- `lovelace-rational` is 16 unit tests, 12 seeded property campaigns and 2 oracle comparisons, plus
+- `lovelace-rational` is 16 unit tests, 16 seeded property campaigns and 2 oracle comparisons, plus
   one zero-test doctest target.
 - `lovelace-systems` is 51 unit tests, 3 independent-oracle tests and 1 doctest, plus one
   zero-test integration target.
@@ -228,11 +229,13 @@ reason.
   language, and compares exact values, signs, precision classification and error codes.
 - **Architecture policy** — `tools/check-architecture.py` reads
   `tools/architecture-policy.json`, asks `cargo metadata` for the real graph, and scans Rust items.
-  `tools/test-architecture-gates.py` has **20 scenarios**: the 11 original rules plus nine
+  `tools/test-architecture-gates.py` has **21 scenarios**: the 11 original rules, nine
   review-remediation scenarios (three owner-crate duplicates — a `Rat` in `lovelace-lang`, a `Rat`
   in `lovelace-real`, a second `Real` in `lovelace-real` — plus a split `impl`, a generic
   arithmetic trait, a free-function kernel, a renamed representation, a broad exception scope and
-  an unresolved arithmetic impl). Each injects the
+  an unresolved arithmetic impl), and `partial-duplicate-kernel` (two numeric fields with two
+  arithmetic methods, flagged below the four-method threshold by
+  `minimumRepresentationMethods: 2`). Each injects the
   forbidden change into an isolated fixture and requires a nonzero exit with the named rule; the
   valid fixture (7 crates, 7 files) proves domain formulas, typed units, a canonical alias and the
   permitted representations are accepted. Ownership is abstraction-specific through

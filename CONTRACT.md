@@ -47,8 +47,10 @@ reserved type and its owner, `permittedRepresentations` allows only `Complex` in
 `docs/architecture-ownership.md` is normative and `tools/architecture-policy.json` is its
 machine-readable form; `python tools/check-architecture.py` verifies the real `cargo metadata` graph
 and the source declarations, and the `architecture-policy` CI job is a required check. The
-architecture gate's mutation suite (`tools/test-architecture-gates.py`) has 20 scenarios, and an
-arithmetic impl whose target is empty or a generic parameter is reported as `review-required`.
+architecture gate's mutation suite (`tools/test-architecture-gates.py`) has 21 scenarios, including a
+two-numeric-field/two-method partial representation flagged through
+`minimumRepresentationMethods: 2`, and an arithmetic impl whose target is empty or a generic
+parameter is reported as `review-required`.
 
 ## Fixed APIs
 

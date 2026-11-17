@@ -339,20 +339,24 @@ impl Rat {
     /// cancellation check.
     ///
     /// The unreduced numerator-plus-denominator digit count is preflighted **before** the GCD runs;
-    /// the caller's [`Cancel`] token is polled **before and after** the GCD normalization. A
-    /// cancelled or over-budget call returns [`RationalError::Cancelled`] or
-    /// [`RationalError::DigitBudgetExceeded`] and no value: a partially normalized rational is never
+    /// the caller's [`Cancel`] token is polled **before and after** the GCD normalization; and the
+    /// normalized value is then checked against **both** configured bounds with [`Limits::check`],
+    /// so a bit-only budget is enforced on the value that is returned. A cancelled or over-budget
+    /// call returns [`RationalError::Cancelled`], [`RationalError::DigitBudgetExceeded`] or
+    /// [`RationalError::BitBudgetExceeded`] and no value: a partially normalized rational is never
     /// returned. [`Nat::gcd`] itself has no cancellation hook, so the poll granularity is the
     /// normalization as a whole rather than one GCD iteration.
     ///
     /// The preflight over-counts by construction: it measures the unreduced parts. A fraction whose
-    /// parts exceed the budget is refused even when its reduced value would fit (for example
+    /// parts exceed the digit budget is refused even when its reduced value would fit (for example
     /// `10^60 / 10^60` under a sixty-digit budget), which is the price of refusing before the GCD.
-    /// When a call is both cancelled and over budget, [`RationalError::Cancelled`] is reported: the
-    /// caller has already abandoned the result. A zero numerator is `0/1` and is returned after the
-    /// first cancellation poll without running the GCD. A zero denominator is
-    /// [`RationalError::ZeroDenominator`], which is reported before the budget preflight and before
-    /// the cancellation poll.
+    /// The final check measures the reduced value, so a bit-only budget is refused there and an
+    /// already-reduced input is still checked. When a call is both cancelled and over budget,
+    /// [`RationalError::Cancelled`] is reported: the caller has already abandoned the result. A zero
+    /// numerator is `0/1` and is returned after the first cancellation poll without running the
+    /// GCD, but it is still checked against both bounds: `0/1` has bit length one and two
+    /// upper-bound decimal digits. A zero denominator is [`RationalError::ZeroDenominator`], which
+    /// is reported before the budget preflight and before the cancellation poll.
     pub fn from_parts_with(
         num: Int,
         den: Nat,
@@ -366,7 +370,9 @@ impl Rat {
             return Err(RationalError::Cancelled);
         }
         if num.is_zero() {
-            return Ok(Rat::zero());
+            let value = Rat::zero();
+            limits.check(&value)?;
+            return Ok(value);
         }
         limits.check_digits(
             decimal_digits_upper_bound(num.magnitude())
@@ -376,7 +382,9 @@ impl Rat {
         if cancel.is_cancelled() {
             return Err(RationalError::Cancelled);
         }
-        Rat::reduce_by(num, den, &divisor)
+        let value = Rat::reduce_by(num, den, &divisor)?;
+        limits.check(&value)?;
+        Ok(value)
     }
 
     /// Compatibility spelling of [`Rat::from_parts`].

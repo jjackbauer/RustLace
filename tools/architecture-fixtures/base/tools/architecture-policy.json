@@ -167,6 +167,7 @@
       "AddAssign"
     ],
     "minimumArithmeticMethods": 4,
+    "minimumRepresentationMethods": 2,
     "permittedSpecializations": [
       {
         "crate": "lovelace-systems",

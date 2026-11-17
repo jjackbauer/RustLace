@@ -279,6 +279,21 @@ def main() -> int:
             "}\n",
         )
 
+    def partial_duplicate_kernel(scenario: Scenario) -> None:
+        # The second-review Finding 2 shape: `n`/`d` are not a recognized numeric field pair and
+        # only two arithmetic methods are implemented, so neither the named-pair rule nor the
+        # four-method threshold may be what rejects it. Numeric storage plus two arithmetic
+        # methods is itself the structural signal.
+        scenario.append(
+            "lovelace-systems/src/lib.rs",
+            "\nuse lovelace_int::Int;\nuse lovelace_nat::Nat;\n\n"
+            "pub struct RatioValue { pub n: Int, pub d: Nat }\n\n"
+            "impl RatioValue {\n"
+            "    pub fn add(&self, other: &RatioValue) -> RatioValue { other.clone() }\n"
+            "    pub fn div(&self, other: &RatioValue) -> RatioValue { other.clone() }\n"
+            "}\n",
+        )
+
     def broad_exception_scope(scenario: Scenario) -> None:
         # A complete, otherwise-valid exception whose scope is `lovelace-*`. The old checker only
         # rejected the literal "*", so this waived a real violation and the gate exited 0.
@@ -365,6 +380,12 @@ def main() -> int:
         renamed_representation,
     )
     expect(
+        "partial-duplicate-kernel",
+        1,
+        "duplicate-numeric-representation",
+        partial_duplicate_kernel,
+    )
+    expect(
         "broad-exception-scope", 1, "unauthorized-exception", broad_exception_scope
     )
     expect(
@@ -374,7 +395,7 @@ def main() -> int:
         unresolved_arithmetic_impl,
     )
 
-    if executed < 20:
+    if executed < 21:
         print(f"FAIL: only {executed} mutation scenarios executed", file=sys.stderr)
         return 1
     if failures:

@@ -80,14 +80,17 @@ The following are violations even when every test passes and the arithmetic is c
 - a silent fallback (`unwrap_or_else(...::zero)`, an empty result, a fabricated success) after a
   failed fundamental arithmetic operation.
 
-Three declaration shapes need care. A numeric implementation split across two `impl` blocks is
+Four declaration shapes need care. A numeric implementation split across two `impl` blocks is
 counted as one implementation: method counts are summed, not measured per block. An arithmetic trait
 implemented for a generic wrapper is resolved to the wrapper type, and an impl whose target is empty
 or one of its own generic parameters cannot be classified; that header is reported as
 `review-required` rather than silently passing. A free function that implements a kernel operation
 (`rat_add`, `fraction_mul`, `rational_div`, `q_gcd`-style names) is checked against
 `freeFunctionPatterns` and may only appear in a crate listed in `freeFunctionOwners`
-(`lovelace-rational`).
+(`lovelace-rational`). A partial representation is a violation below the four-method
+`minimumArithmeticMethods` threshold: a struct or union with at least two numeric-typed fields and
+at least two arithmetic methods, summed over its `impl` blocks, is reported as
+`duplicate-numeric-representation` through `minimumRepresentationMethods: 2`.
 
 The checker inspects declarations, field shapes, inherent methods, free functions and trait
 implementations. It does not reject arithmetic expressions, formulas or typed units.
@@ -163,15 +166,16 @@ workspace, no source files, missing required crate or file). It exits `1` on a v
 reports an empty scan as success. On the real workspace it reports `crates=14 files=332 violations=0`,
 and the valid fixture reports `crates=7 files=7 violations=0`.
 
-The mutation suite (`tools/test-architecture-gates.py`) has **20 scenarios**: the 11 original rules
-plus nine added for the review remediation — a duplicate `Rat` in a numeric-owner crate
+The mutation suite (`tools/test-architecture-gates.py`) has **21 scenarios**: the 11 original rules,
+nine added for the review remediation — a duplicate `Rat` in a numeric-owner crate
 (`lovelace-lang` and `lovelace-real`), a second `Real` in `lovelace-real`, a split `impl`, a generic
 arithmetic trait, a free-function kernel, a renamed representation, a broad exception scope, and an
-unclassifiable arithmetic impl. Each scenario injects the forbidden change into an isolated fixture
-and requires the checker to fail with the named rule; the valid fixture contains domain formulas,
-typed units, a canonical alias, a delegating specialization and the permitted `Complex`
-representation. A scenario that stops failing fails the suite, and the suite minimum is 20 so
-deleting one is itself a failure.
+unclassifiable arithmetic impl — and `partial-duplicate-kernel`, a two-numeric-field struct with two
+arithmetic methods that the `minimumRepresentationMethods: 2` signal must reject. Each scenario
+injects the forbidden change into an isolated fixture and requires the checker to fail with the
+named rule; the valid fixture contains domain formulas, typed units, a canonical alias, a delegating
+specialization and the permitted `Complex` representation. A scenario that stops failing fails the
+suite, and the suite minimum is 21 so deleting one is itself a failure.
 
 `main` protection requires the seven PR checks: both `architecture-policy` matrix legs,
 `numerical-kernel`, `windows` (workspace tests and corpus), `linux`, and both `docs` matrix legs.

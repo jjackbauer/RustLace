@@ -311,6 +311,7 @@
       "RemAssign"
     ],
     "minimumArithmeticMethods": 4,
+    "minimumRepresentationMethods": 2,
     "permittedSpecializations": [],
     "permittedAliases": []
   },

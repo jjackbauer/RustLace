@@ -25,7 +25,10 @@ their full arbitrary-precision GCD. Normalization and arithmetic never go throug
   `RationalError::ZeroDenominator`; there is no public constructor that can build an invalid value.
   `from_parts_with(Int, Nat, &Limits, &dyn Cancel)` is the budgeted, cancellable form: it preflights
   the unreduced numerator-plus-denominator digit count before the GCD, polls the cancel token before
-  and after normalization, and returns `RationalError::DigitBudgetExceeded` or `Cancelled`.
+  and after normalization, and then calls `Limits::check` on the normalized value, so the digit
+  **and** bit limits are enforced on the value actually returned. That final check covers `0/1`
+  and an already-reduced input as well as a value the GCD has just reduced. It returns
+  `RationalError::DigitBudgetExceeded`, `BitBudgetExceeded` or `Cancelled`.
   `from_parts` performs the same canonicalization with no budget and no cancellation.
 - Arithmetic — `add`, `sub`, `mul`, `neg`, `abs`, `cmp`, `div -> Option<Rat>`,
   `checked_div -> Result<Rat, RationalError>`, `pow_i64 -> Option<Rat>` and

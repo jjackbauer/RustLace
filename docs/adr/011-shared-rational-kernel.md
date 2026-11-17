@@ -184,10 +184,13 @@ not change it. They are recorded here rather than by rewriting the original deci
   by the checker. `reservedTypeNames` names the owner of each foundational type, and
   `permittedRepresentations` allows only `Complex` in `lovelace-lang` and `Fixed` in
   `lovelace-real`. An owner crate may declare its canonical type once; a second `Rat` in
-  `lovelace-lang` or `lovelace-real`, or a second `Real` in `lovelace-real`, is a violation. The
-  mutation suite has 20 scenarios (11 original + 9 new), including split `impl`, generic arithmetic
-  trait, free-function kernel, renamed representation and broad exception scope; an arithmetic impl
-  whose target is empty or a generic parameter is reported as `review-required`.
+  `lovelace-lang` or `lovelace-real`, or a second `Real` in `lovelace-real`, is a violation. A
+  partial representation with two numeric-typed fields and two arithmetic methods is also caught,
+  below the four-method threshold, through `minimumRepresentationMethods: 2`. The mutation suite has
+  21 scenarios (11 original + 9 ownership/detection + `partial-duplicate-kernel`), including split
+  `impl`, generic arithmetic trait, free-function kernel, renamed representation and broad exception
+  scope; an arithmetic impl whose target is empty or a generic parameter is reported as
+  `review-required`.
 - **Code-owner review is declared, not enforced.** `.github/CODEOWNERS` declares ownership of the
   policy, checker, mutation fixtures, this ADR, the ownership document and the rational kernel.
   Required code-owner review is not enabled because the repository has one collaborator, the author

@@ -896,9 +896,12 @@ def numeric_field_match(
     """True when a declaration is a plausible general-purpose scalar representation.
 
     A named `numerator`/`denominator`-style pair is conclusive. Arbitrary field names are only
-    suspicious when the type also carries at least the configured minimum of scalar arithmetic
-    methods; a struct with two numeric configuration fields and no arithmetic is not a competing
-    kernel. Enums are excluded structurally: their variants are not a numerator/denominator pair.
+    suspicious when the type also carries at least `minimumRepresentationMethods` scalar
+    arithmetic methods: numeric storage plus a small arithmetic surface is already a competing
+    representation, even when it stays below the separate `minimumArithmeticMethods` threshold
+    used by the arithmetic-impl rule. A struct with two numeric configuration fields and no
+    arithmetic is not a competing kernel. Enums are excluded structurally: their variants are not
+    a numerator/denominator pair.
     """
     if declaration.kind not in ("struct", "union"):
         return False
@@ -908,7 +911,7 @@ def numeric_field_match(
             return True
     numeric_types = {name.lower() for name in detection["numericFieldTypes"]}
     typed = [name for name in declaration.field_types if name.lower() in numeric_types]
-    minimum = int(detection.get("minimumArithmeticMethods", 4))
+    minimum = int(detection.get("minimumRepresentationMethods", 2))
     return len(typed) >= 2 and arithmetic_method_count >= minimum
 
 

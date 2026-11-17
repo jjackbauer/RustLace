@@ -90,7 +90,10 @@ A reviewer should be able to answer these from the diff alone:
    GitHub's required code-owner review cannot be enabled while the repository has one collaborator,
    the PR author (DEC-002). An arithmetic impl whose target is empty or one of its generic
    parameters is reported as `review-required`; that is a review gate, not a pass, and the author
-   classifies or narrows the impl instead of dismissing it. The reviewer asks the five questions in
+   classifies or narrows the impl instead of dismissing it. A partial representation with two
+   numeric-typed fields and two arithmetic methods is flagged as
+   `duplicate-numeric-representation` below the four-method threshold, through
+   `minimumRepresentationMethods: 2`. The reviewer asks the five questions in
    RNL-AGT-002: does it exist, is it suitable, can the shared
    implementation be improved, would a new one create competing semantics, and does an approved ADR
    authorize it?
@@ -129,7 +132,8 @@ A change is done when all of the following hold:
 - The tests for its layer pass, and `cargo test --workspace` has the same pass/fail shape as before
   (the single known-ignored test stays the only ignore).
 - `python tools/check-architecture.py` exits 0 and `python tools/test-architecture-gates.py`
-  passes its 20 scenarios; a new crate is declared in `tools/architecture-policy.json` with its
+  passes its 21 scenarios, including the two-field/two-method `partial-duplicate-kernel`; a new
+  crate is declared in `tools/architecture-policy.json` with its
   layer, responsibility, dependencies and reused abstractions, and a policy, checker or ownership
   change is declared in `.github/CODEOWNERS`.
 - The documentation corpus gate passes in release: 231 of 231.

@@ -580,3 +580,163 @@ fn normalization_is_cancellable() {
         Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
     );
 }
+
+#[test]
+fn normalization_enforces_bit_budget() {
+    // 2/1 is already canonical, and its bit length is three: two bits for the numerator plus one
+    // for the denominator. A bit-only budget has no digit preflight that could catch it, so the
+    // normalized value itself must be checked.
+    assert_eq!(Rat::from_i64(2).bit_length(), 3);
+    let result = Rat::from_parts_with(
+        Int::from_i64(2),
+        Nat::from_u64(1),
+        &Limits::bits(1),
+        &NeverCancel,
+    );
+    assert_eq!(
+        result,
+        Err(RationalError::BitBudgetExceeded {
+            limit: 1,
+            observed: 3,
+        })
+    );
+    let error = result.expect_err("a one-bit budget cannot hold 2/1");
+    assert_eq!(error.code(), "RationalBitBudgetExceeded");
+    assert_eq!(error.category(), "BudgetExceeded");
+}
+
+#[test]
+fn normalization_enforces_digit_budget() {
+    // 2/1 is two upper-bound decimal digits: one for each part.
+    assert_eq!(Rat::from_i64(2).decimal_digits(), 2);
+    let result = Rat::from_parts_with(
+        Int::from_i64(2),
+        Nat::from_u64(1),
+        &Limits::digits(1),
+        &NeverCancel,
+    );
+    assert_eq!(
+        result,
+        Err(RationalError::DigitBudgetExceeded {
+            limit: 1,
+            observed: 2,
+        })
+    );
+    let error = result.expect_err("a one-digit budget cannot hold 2/1");
+    assert_eq!(error.code(), "RationalDigitBudgetExceeded");
+
+    // A generous digit budget accepts the same normalized value.
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::from_i64(2),
+            Nat::from_u64(1),
+            &Limits::digits(10),
+            &NeverCancel,
+        ),
+        Ok(Rat::from_i64(2))
+    );
+}
+
+#[test]
+fn normalization_enforces_combined_budget() {
+    // The digit preflight passes and the post-normalization bit check refuses: the value must be
+    // checked against every configured bound, not only the digit preflight.
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::from_i64(2),
+            Nat::from_u64(1),
+            &Limits::bits(2).with_digits(10),
+            &NeverCancel,
+        ),
+        Err(RationalError::BitBudgetExceeded {
+            limit: 2,
+            observed: 3,
+        })
+    );
+
+    // A digit-tight, bit-generous combination is refused by the digit preflight before the GCD,
+    // with the digit code.
+    let error = Rat::from_parts_with(
+        Int::from_i64(2),
+        Nat::from_u64(1),
+        &Limits::bits(100).with_digits(1),
+        &NeverCancel,
+    )
+    .expect_err("two digits exceed a one-digit budget");
+    assert_eq!(
+        error,
+        RationalError::DigitBudgetExceeded {
+            limit: 1,
+            observed: 2,
+        }
+    );
+    assert_eq!(error.code(), "RationalDigitBudgetExceeded");
+}
+
+#[test]
+fn normalization_checks_zero_and_reduced_inputs() {
+    // Zero is canonical 0/1: bit length one, two upper-bound decimal digits.
+    assert_eq!(Rat::zero().bit_length(), 1);
+    assert_eq!(Rat::zero().decimal_digits(), 2);
+
+    // The zero branch returns early, so it must check the budget itself: one bit fits zero.
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::zero(),
+            Nat::from_u64(1),
+            &Limits::bits(1),
+            &NeverCancel,
+        ),
+        Ok(Rat::zero())
+    );
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::zero(),
+            Nat::from_u64(1),
+            &Limits::bits(0),
+            &NeverCancel,
+        ),
+        Err(RationalError::BitBudgetExceeded {
+            limit: 0,
+            observed: 1,
+        })
+    );
+    // 0/1 is two upper-bound digits, so a one-digit budget refuses zero too.
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::zero(),
+            Nat::from_u64(1),
+            &Limits::digits(1),
+            &NeverCancel,
+        ),
+        Err(RationalError::DigitBudgetExceeded {
+            limit: 1,
+            observed: 2,
+        })
+    );
+
+    // 10/5 passes the digit-only preflight and is refused by bit length only after it reduces
+    // to 2/1 ...
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::from_i64(10),
+            Nat::from_u64(5),
+            &Limits::bits(2),
+            &NeverCancel,
+        ),
+        Err(RationalError::BitBudgetExceeded {
+            limit: 2,
+            observed: 3,
+        })
+    );
+    // ... while the already-reduced 2/1 fits a three-bit budget exactly.
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::from_i64(2),
+            Nat::from_u64(1),
+            &Limits::bits(3),
+            &NeverCancel,
+        ),
+        Ok(Rat::from_i64(2))
+    );
+}
