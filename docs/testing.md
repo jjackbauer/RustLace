@@ -18,8 +18,8 @@ Every crate keeps its tests beside the code as `#[cfg(test)]` modules: parity ro
 
 Every count in the current table is an **exact** observation of a named revision; none of the rows
 is carried forward as a current total. The aggregate below was measured on **Windows 11 x86_64**
-on **2026-11-17**, against baseline commit
-**`8b124d1`** plus the uncommitted RNL-001 working tree, with:
+on **2026-11-17**, at commit
+**`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`, the RNL-001 implementation), with:
 
 ```console
 $ cargo test --workspace --no-fail-fast

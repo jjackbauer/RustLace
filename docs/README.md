@@ -17,6 +17,7 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 | [benchmarks-numerics.md](benchmarks-numerics.md) | you need the measured rational/symbolic/systems benchmark evidence and its environment |
 | [build-and-run.md](build-and-run.md) | you are setting up a machine, or a build/launch fails |
 | [testing.md](testing.md) | you are changing code and need the commands, the counts, or the layers |
+| [rnl-001-evidence.md](rnl-001-evidence.md) | you are reviewing the rational consolidation: commit, commands, observed results and remaining limitations |
 | [extending.md](extending.md) | you are adding a builtin, a statically integrated library family, a UI pane, a diagnostic or a fixture |
 | [parity-with-studio.md](parity-with-studio.md) | you need to know what the port preserves from the C# Studio and where it deliberately differs |
 | [release.md](release.md) | you are cutting a release |

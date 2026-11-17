@@ -13,7 +13,7 @@ review criterion, not a suggestion.
 |---|---|---|
 | Natural integers | `lovelace-nat` | every crate that needs limb arithmetic |
 | Signed integers | `lovelace-int` | numeric, domain and language crates |
-| Exact rationals | `lovelace-rational` | `lovelace-real`, `lovelace-symbolics`, `lovelace-systems`, `lovelace-lang` |
+| Exact rationals | `lovelace-rational` | `lovelace-real`, `lovelace-symbolics`, `lovelace-systems`, `lovelace-know`, `lovelace-lang`, `lovelace-bench` |
 | Arbitrary-precision real representation | `lovelace-real` | `lovelace-lang`, execution hosts, `lovelace-systems` via the language only |
 | Symbolic expressions | `lovelace-symbolics` | `lovelace-lang`, `lovelace-corpus`, `lovelace-desktop` |
 | Queueing and systems models | `lovelace-systems` | `lovelace-lang`, `lovelace-bench` |
