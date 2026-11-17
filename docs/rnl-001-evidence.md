@@ -1,10 +1,11 @@
 # RNL-001 release evidence
 
-**Status:** implemented in commit `32ea6cd0f185e4e8f28d53369837085933ec6e65` (`32ea6cd`), on
-top of baseline `8b124d1`. PR #9's review remediation is a later working-tree change on
-`fix/release-provenance`; it is not a commit on this page, and §6 maps the review findings to it.
-This page records the commands, the observed results and the remaining limitations so a
-reader does not have to trust a summary.
+**Status:** RNL-001 implemented in commit `32ea6cd0f185e4e8f28d53369837085933ec6e65` (`32ea6cd`).
+PR #9's review remediation is commit `c26f909cabaeab6d5f664974ae1c06eb8ceeb9de` (`c26f909`),
+merged with `main` in `55a8a421f3599eacfd8300948f09183169e56e36` (`55a8a42`). All seven required
+PR checks passed in run 44125853308; §6 maps the review findings to the fix. This page records the
+commands, the observed results and the remaining limitations so a reader does not have to trust a
+summary.
 
 ## 1. What changed
 
@@ -89,9 +90,11 @@ before merge, regardless of passing unit tests. It is demonstrated twice:
 
 ## 5. Remaining limitations
 
-- **CI has not run from this host.** The workflow and policy are committed and the jobs are
-  defined; the Windows job, Linux/Xvfb job, architecture matrix and documentation matrix must run
-  on GitHub before merge. The local observations above are Windows-only.
+- **CI has run on PR #9.** At head `55a8a42`, all seven checks passed: architecture-policy
+  (Ubuntu and Windows), numerical-kernel, Windows full workspace, Linux/Xvfb desktop and
+  documentation examples (Ubuntu and Windows), in run
+  [44125853308](https://github.com/jjackbauer/RustLace/actions/runs/44125853308). The local
+  observations above are Windows-only; the CI run is the Linux and Windows reproduction.
 - **Branch protection is configured.** `main` requires the seven PR checks: both
   `architecture-policy` matrix legs, `numerical-kernel`, `windows`, `linux` and both `docs` matrix
   legs. Protection also requires strict up-to-date branches, applies to administrators
@@ -119,9 +122,9 @@ before merge, regardless of passing unit tests. It is demonstrated twice:
 
 ## 6. PR #9 review remediation
 
-The independent review of PR #9 raised seven findings. This section maps each to the fix in the
-working tree; the detailed command output is in the round-2 records under
-`docs/goal-docs-rnl-001-review/round-2/`.
+The independent review of PR #9 raised seven findings. This section maps each to the fix in
+commit `c26f909`, merged with `main` in `55a8a42`; the detailed command output is in the round-2
+records under `docs/goal-docs-rnl-001-review/round-2/`.
 
 | Finding | Correction now in the working tree | Evidence |
 |---|---|---|

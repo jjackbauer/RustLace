@@ -18,9 +18,10 @@ Every crate keeps its tests beside the code as `#[cfg(test)]` modules: parity ro
 
 Every count in the current table is an **exact** observation of a named revision; none of the rows
 is carried forward as a current total. The aggregate below was measured on **Windows 11 x86_64**
-on **2026-11-17**, in the `fix/release-provenance` working tree that contains the PR #9 review
-remediation on top of
-**`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`, the RNL-001 implementation), with:
+on **2026-11-17**, at review-remediation commit
+**`c26f909cabaeab6d5f664974ae1c06eb8ceeb9de`** (`c26f909`), merged with `main` in
+`55a8a42`, on top of RNL-001 commit
+**`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`), with:
 
 ```console
 $ cargo test --workspace --no-fail-fast
@@ -28,7 +29,7 @@ $ cargo test --workspace --no-fail-fast
 
 The run reports **45 test targets: 6276 passed, 0 failed, 0 ignored**. The per-crate rows below
 are the same commands grouped by crate (`cargo test -p <crate>`, with the desktop under its normal
-test path), measured in the same working tree; they sum to the same 6276 passed and 0 ignored.
+test path), measured at the same commit; they sum to the same 6276 passed and 0 ignored.
 
 | Crate | Test targets | Passed | Failed | Ignored |
 |---|---:|---:|---:|---:|
