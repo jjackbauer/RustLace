@@ -27,6 +27,13 @@
         "lovelace-int"
       ]
     },
+    "lovelace-real": {
+      "layer": "numeric-kernel",
+      "responsibility": "the canonical real kernel",
+      "reuses": [
+        "lovelace-rational"
+      ]
+    },
     "lovelace-symbolics": {
       "layer": "domain",
       "responsibility": "symbolic expressions",
@@ -46,6 +53,7 @@
       "responsibility": "language and dispatch",
       "reuses": [
         "lovelace-rational",
+        "lovelace-real",
         "lovelace-symbolics",
         "lovelace-systems"
       ]
@@ -61,6 +69,9 @@
       "lovelace-nat",
       "lovelace-int"
     ],
+    "lovelace-real": [
+      "lovelace-rational"
+    ],
     "lovelace-symbolics": [
       "lovelace-rational"
     ],
@@ -69,6 +80,7 @@
     ],
     "lovelace-lang": [
       "lovelace-rational",
+      "lovelace-real",
       "lovelace-symbolics",
       "lovelace-systems"
     ]
@@ -79,23 +91,44 @@
     "natural": "lovelace-nat",
     "signed-integer": "lovelace-int",
     "rational": "lovelace-rational",
+    "real": "lovelace-real",
     "symbolic-expression": "lovelace-symbolics",
     "systems-models": "lovelace-systems",
     "numeric-promotion": "lovelace-lang"
   },
   "duplicateDetection": {
-    "ownerCrates": [
-      "lovelace-nat",
-      "lovelace-int",
-      "lovelace-rational"
-    ],
+    "reservedTypeNames": {
+      "Nat": "lovelace-nat",
+      "Int": "lovelace-int",
+      "Rat": "lovelace-rational",
+      "Rational": "lovelace-rational",
+      "Fraction": "lovelace-rational",
+      "BigRational": "lovelace-rational",
+      "BigFraction": "lovelace-rational",
+      "Frac": "lovelace-rational",
+      "Q": "lovelace-rational",
+      "Real": "lovelace-real",
+      "NdArray": "lovelace-array"
+    },
+    "permittedRepresentations": {
+      "lovelace-lang": [
+        "Complex"
+      ]
+    },
     "forbiddenTypeNames": [
       "Rat",
       "Rational",
       "Fraction",
       "BigRational",
+      "BigFraction",
       "Frac",
       "Q"
+    ],
+    "freeFunctionPatterns": [
+      "^(?:rat|rational|fraction|frac|q)_(?:add|sub|mul|div|rem|neg|abs|gcd|lcm|reduce|normalize|reciprocal)$"
+    ],
+    "freeFunctionOwners": [
+      "lovelace-rational"
     ],
     "numericFieldPairs": [
       [
@@ -153,9 +186,10 @@
   "exceptions": [],
   "requiredChecks": {
     "minimumSourceFiles": 1,
-    "minimumWorkspaceCrates": 6,
+    "minimumWorkspaceCrates": 7,
     "requiredCrates": [
       "lovelace-rational",
+      "lovelace-real",
       "lovelace-symbolics",
       "lovelace-systems"
     ],

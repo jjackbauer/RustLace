@@ -1,7 +1,9 @@
 # RNL-001 release evidence
 
 **Status:** implemented in commit `32ea6cd0f185e4e8f28d53369837085933ec6e65` (`32ea6cd`), on
-top of baseline `8b124d1`. This page records the commands, the observed results and the remaining limitations so a
+top of baseline `8b124d1`. PR #9's review remediation is a later working-tree change on
+`fix/release-provenance`; it is not a commit on this page, and §6 maps the review findings to it.
+This page records the commands, the observed results and the remaining limitations so a
 reader does not have to trust a summary.
 
 ## 1. What changed
@@ -30,14 +32,14 @@ release benchmarks with `opt-level = 3`:
 
 | Command | Observed result |
 |---|---|
-| `cargo test --workspace --no-fail-fast` | 45 targets, **6267 passed, 0 failed, 0 ignored** (exit 0) |
+| `cargo test --workspace --no-fail-fast` | 45 targets, **6276 passed, 0 failed, 0 ignored** (exit 0) |
 | `cargo run --release -p lovelace-corpus` | **corpus: 231 passed, 0 failed, 231 total** (exit 0) |
 | `python tools/check-architecture.py` | **14 crates, 332 files, 0 violations, 0 waived** (exit 0) |
 | `python tools/check-architecture.py --json` | the same graph as a machine-readable impact report |
-| `python tools/test-architecture-gates.py` | **11 mutation scenarios, 11 passed, 0 failed** |
+| `python tools/test-architecture-gates.py` | **20 mutation scenarios, 20 passed, 0 failed**; the valid fixture reports 7 crates, 7 files, 0 violations |
 | `python tools/rational-oracle.py --check` | 730 cases match the Python `Fraction` oracle |
 | `python tools/systems-oracle.py --check` | 25 systems metrics match the independent formulas |
-| `cargo test -p lovelace-rational --test properties` | 9 seeded campaigns, 0 failed |
+| `cargo test -p lovelace-rational --test properties` | 12 seeded property campaigns, 0 failed |
 | `cargo test -p lovelace-rational --test oracle` | 2 tests, 730 recorded cases recomputed |
 | `cargo test -p lovelace-systems --test oracle` | 3 tests, M/M/1, Erlang C, MVA and Jackson |
 | `cargo test -p lovelace-lang --test cross_library` | 5 tests, kernel/Symbolics/Systems/language |
@@ -62,10 +64,10 @@ table is in [`testing.md`](testing.md#1-unit-tests-in-crate-test).
 | Exactly one canonical rational implementation remains | `python tools/check-architecture.py` (0 duplicate declarations); the Systems kernel and the Know implementation are deleted/migrated |
 | Symbolics and Systems consume the same implementation | `Q` is an alias and `Rat` a re-export; `cross_library` compares them by type and value |
 | Arithmetic edge cases and Systems defects have regression coverage | `(1/2)/(-1/4) = -2`, `i64::MIN`, large-GCD normalization, MVA think-state occupancy, sweep endpoint refusals |
-| Exact values and precision-limited projections are distinguishable | `exact_values` in the language/wire; `Conversion`/`ExactnessProvenance` in Rust; the precision-boundary test |
-| The checker rejects seeded duplicates and forbidden dependencies | `tools/test-architecture-gates.py`, 11 scenarios including duplicate rational, duplicate trait, forbidden edge, cycle, undeclared numeric, unauthorized exception, zero scan |
+| Exact values and precision-limited projections are distinguishable | `exact_values` on analysis and model-construction records in the language/wire; `Conversion`/`ExactnessProvenance` in Rust; the precision-boundary test |
+| The checker rejects seeded duplicates and forbidden dependencies | `tools/test-architecture-gates.py`, 20 scenarios including duplicate rational, duplicate in an owner crate, split/generic/free-function/renamed shapes, forbidden edge, cycle, undeclared numeric, broad exception, unresolved arithmetic impl and zero scan |
 | Legitimate domain code remains permitted | the valid fixture carries a domain formula, a typed unit, a permitted delegating specialization and a canonical alias |
-| CI enforces architecture rules as required checks | `architecture-policy` and `numerical-kernel` jobs in `.github/workflows/ci.yml`; the policy names the required jobs and the checker fails if one disappears |
+| CI enforces architecture rules as required checks | all seven PR checks are required on `main` with strict up-to-date branches and `enforce_admins`; negative-probe PR #10 failed the architecture checks and its merge was refused |
 | Contributor and agent instructions require reuse | `AGENTS.md`, `.github/copilot-instructions.md`, `docs/contributing.md`, `docs/extending.md` §2 and the three numeric/language skills |
 | Documentation reflects the implementation | `CONTRACT.md`, ADR-011, `docs/architecture-ownership.md`, `docs/architecture.md`, the crate pages, the precision guide |
 | Workspace tests, corpus and documentation gates pass | the table above |
@@ -90,10 +92,16 @@ before merge, regardless of passing unit tests. It is demonstrated twice:
 - **CI has not run from this host.** The workflow and policy are committed and the jobs are
   defined; the Windows job, Linux/Xvfb job, architecture matrix and documentation matrix must run
   on GitHub before merge. The local observations above are Windows-only.
-- **Branch protection is an administrative setting.** The repository can verify that the required
-  jobs are defined (the checker does); it cannot configure the protected-branch list from code.
-  A maintainer must require `architecture-policy` (both OS variants), `numerical-kernel`, `windows`
-  and `docs` (both OS variants).
+- **Branch protection is configured.** `main` requires the seven PR checks: both
+  `architecture-policy` matrix legs, `numerical-kernel`, `windows`, `linux` and both `docs` matrix
+  legs. Protection also requires strict up-to-date branches, applies to administrators
+  (`enforce_admins`), and disables force pushes and branch deletion. Negative-probe PR #10 carried
+  a deliberately forbidden Systems rational: both architecture checks failed and
+  `gh pr merge 10 --merge` was refused with "the base branch policy prohibits the merge." Required
+  code-owner review is **not** enabled: `.github/CODEOWNERS` declares ownership of the architecture
+  policy, checker, mutation fixtures, ownership document, ADR-011 and the rational kernel, but the
+  repository has one collaborator, the PR author, and GitHub does not allow self-approval. This is
+  the recorded user-approved limitation DEC-002; the status checks are enforced independently.
 - **The checker is syntax-aware, not a proof.** It parses declarations, fields, impl methods and
   trait impls after stripping comments/strings, and it uses `cargo metadata` for the real graph.
   A sufficiently obfuscated duplicate can evade a heuristic; `docs/architecture-ownership.md` defines
@@ -108,3 +116,19 @@ before merge, regardless of passing unit tests. It is demonstrated twice:
   module is gone. ADR-011 records the replacements; the language promotion policy is unchanged.
 - **Exactness is provenance, not world-truth.** An exact model solution is exact under its
   assumptions; the systems crate does not test that a real system is Poisson or product-form.
+
+## 6. PR #9 review remediation
+
+The independent review of PR #9 raised seven findings. This section maps each to the fix in the
+working tree; the detailed command output is in the round-2 records under
+`docs/goal-docs-rnl-001-review/round-2/`.
+
+| Finding | Correction now in the working tree | Evidence |
+|---|---|---|
+| 1 — Exact model values are lost during construction (P0) | `Station` and `QueueNetwork` records carry additive `exact_values` for service time, visits and service demand, or arrival rate / think time; `parse_station` and `parse_network` consume the sidecar and use the decimal field only when the whole sidecar is absent. | `long_period_service_time_survives_station_and_open` and `long_period_think_time_survives_closed_and_mva`; `1/97` keeps denominator 97 through `sys_station → sys_open → sys_analyze` and `sys_station → sys_closed → sys_mva`. |
+| 2 — Checker detection gaps (P1) | Method counts are summed across split `impl` blocks; generic wrapper targets are resolved; empty or generic arithmetic-trait targets are reported as `review-required`; kernel-named free functions are restricted to their owner. | Nine new mutation scenarios (`split-impl`, `generic-arithmetic-trait`, `free-function-kernel`, `unresolved-arithmetic-impl` and the owner-crate cases); the suite now has 20 scenarios. |
+| 3 — Required CI jobs are not required merge checks (P1) | Seven PR checks are required on `main`, with strict up-to-date branches, `enforce_admins`, and force pushes and deletions disabled. | Protection read-back; negative-probe PR #10 failed the architecture checks and its merge was refused. |
+| 4 — Whole-crate exemptions undermine the single owner (P0) | `ownerCrates` is retired and rejected; `reservedTypeNames` and `permittedRepresentations` enforce per-type ownership. | A `Rat` in `lovelace-lang` and in `lovelace-real`, and a second `Real` in `lovelace-real`, are rejected; the real workspace reports 14 crates, 332 files, 0 violations. |
+| 5 — Arithmetic budgets are checked after allocation (P1) | `Limits::check_digits` and preflights in `add_with`/`sub_with`/`mul_with`/`checked_div_with` and before the power loop; `from_parts_with` preflights the unreduced digits and polls cancellation before and after normalization. | Preflight and cancellation tests in `lovelace-rational`; `Nat::gcd` has no internal cancel hook, so normalization is the cancellation granularity. |
+| 6 — Architecture exceptions are too easy to broaden (P1) | Exception scopes must be exact paths or crate names; `*`, `?`, `[` and `]` are rejected. CODEOWNERS declares review ownership. | The `broad-exception-scope` scenario; DEC-002 records why required code-owner review is not enabled. |
+| 7 — Benchmark wording and repository hygiene (P2) | The prose now matches the measured table: multiplication about 2× faster, division essentially unchanged (0.116 vs 0.109 ms), addition slower (0.192 vs 0.239 ms), `pow` about 6×, normalize about 2×. The tracked Python bytecode is removed and `.gitignore` covers `__pycache__/` and `*.py[cod]`. | `docs/benchmarks-numerics.md`; `git ls-files` no longer lists a `.pyc`; both ignore rules match. |

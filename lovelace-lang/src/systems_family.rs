@@ -320,12 +320,96 @@ fn arity_error(name: &str, pos: usize) -> LangError {
     )
 }
 
+/// Reads the authoritative `exact_values.<name>` entry from a model record.
+///
+/// `Ok(None)` means the whole `exact_values` record is absent: that is the one backward-compatible
+/// case where the caller may read the decimal `Real` field. A present sidecar is authoritative, so a
+/// missing, mistyped or non-canonical entry is refused instead of silently falling back to the
+/// projection.
+fn exact_value(
+    ctx: &Ctx<'_>,
+    fields: &[(String, Value)],
+    name: &str,
+    index: usize,
+) -> Result<Option<Q>, LangError> {
+    let Some(sidecar) = fields
+        .iter()
+        .find(|(field, _)| field == "exact_values")
+        .map(|(_, value)| value)
+    else {
+        return Ok(None);
+    };
+    let exact_fields = ctx.record(sidecar, index, "ExactValues")?;
+    let entry = exact_fields
+        .iter()
+        .find(|(field, _)| field == name)
+        .map(|(_, value)| value)
+        .ok_or_else(|| {
+            ctx.error(
+                index,
+                format!("an ExactValues record carrying the exact field '{name}'"),
+                "an ExactValues record without it",
+            )
+        })?;
+    let rational_fields = ctx.record(entry, index, "ExactRational")?;
+    let numerator = match field(ctx, rational_fields, "numerator", index)? {
+        Value::Integer(value) => value.clone(),
+        other => {
+            return Err(ctx.error(
+                index,
+                format!("an Integer ExactRational numerator for '{name}'"),
+                other.kind_name(),
+            ));
+        }
+    };
+    let denominator = match field(ctx, rational_fields, "denominator", index)? {
+        Value::Natural(value) => value.clone(),
+        other => {
+            return Err(ctx.error(
+                index,
+                format!("a Natural ExactRational denominator for '{name}'"),
+                other.kind_name(),
+            ));
+        }
+    };
+    if denominator.is_zero() {
+        return Err(ctx.error(
+            index,
+            format!("a non-zero ExactRational denominator for '{name}'"),
+            "zero",
+        ));
+    }
+    Q::from_parts(numerator, denominator)
+        .map(Some)
+        .map_err(|error| {
+            ctx.error(
+                index,
+                format!("a canonical ExactRational for '{name}'"),
+                error,
+            )
+        })
+}
+
+/// An exact model parameter: the authoritative sidecar when present, otherwise the legacy decimal
+/// field (and only then may the projection be consulted).
+fn model_number(
+    ctx: &Ctx<'_>,
+    fields: &[(String, Value)],
+    name: &str,
+    index: usize,
+) -> Result<Q, LangError> {
+    match exact_value(ctx, fields, name, index)? {
+        Some(value) => Ok(value),
+        None => ctx.number(field(ctx, fields, name, index)?, index),
+    }
+}
+
 fn parse_station(ctx: &Ctx<'_>, value: &Value, index: usize) -> Result<Station, LangError> {
     let fields = ctx.record(value, index, "Station")?;
     let id = ctx.text(field(ctx, fields, "id", index)?, index)?;
     let discipline = ctx.text(field(ctx, fields, "discipline", index)?, index)?;
-    let service_time = ctx.number(field(ctx, fields, "service_time", index)?, index)?;
-    let visits = ctx.number(field(ctx, fields, "visits", index)?, index)?;
+    let service_time = model_number(ctx, fields, "service_time", index)?;
+    let visits = model_number(ctx, fields, "visits", index)?;
     let discipline = match discipline.as_str() {
         "fcfs" => ServiceDiscipline::FcfsSingleServer,
         "delay" => ServiceDiscipline::Delay,
@@ -361,11 +445,11 @@ fn parse_network(
     let stations = ctx.stations(field(ctx, fields, "stations", index)?, index)?;
     let workload = match workload.as_str() {
         "open" => Workload::Open(OpenWorkload {
-            arrival_rate: ctx.number(field(ctx, fields, "arrival_rate", index)?, index)?,
+            arrival_rate: model_number(ctx, fields, "arrival_rate", index)?,
         }),
         "closed" => Workload::Closed(ClosedWorkload {
             population: ctx.count(field(ctx, fields, "population", index)?, index)?,
-            think_time: ctx.number(field(ctx, fields, "think_time", index)?, index)?,
+            think_time: model_number(ctx, fields, "think_time", index)?,
         }),
         _ => {
             return Err(ctx.error(index, "a workload of open or closed", workload));
@@ -484,6 +568,7 @@ fn count(value: u64) -> Value {
 }
 
 fn station_record(station: &Station, precision: usize) -> Value {
+    let service_demand = station.service_demand();
     let mut fields = vec![
         ("id", Value::Text(station.id.as_str().to_string())),
         (
@@ -492,11 +577,21 @@ fn station_record(station: &Station, precision: usize) -> Value {
         ),
         ("service_time", real(&station.service_time, precision)),
         ("visits", real(&station.visits, precision)),
-        ("service_demand", real(&station.service_demand(), precision)),
+        ("service_demand", real(&service_demand, precision)),
     ];
     if let Some(servers) = station.servers() {
         fields.push(("servers", count(servers as u64)));
     }
+    // The decimal fields above are display projections; this additive sidecar is the authoritative
+    // model transport, so a long-period rational such as 1/97 survives a re-parse unchanged.
+    fields.push((
+        "exact_values",
+        exact_values(vec![
+            ("service_time", &station.service_time),
+            ("visits", &station.visits),
+            ("service_demand", &service_demand),
+        ]),
+    ));
     record("Station", fields)
 }
 
@@ -518,10 +613,20 @@ fn network_record(network: &QueueNetwork, precision: usize) -> Value {
         ("precision", count(precision as u64)),
     ];
     match &network.workload {
-        Workload::Open(open) => fields.push(("arrival_rate", real(&open.arrival_rate, precision))),
+        Workload::Open(open) => {
+            fields.push(("arrival_rate", real(&open.arrival_rate, precision)));
+            fields.push((
+                "exact_values",
+                exact_values(vec![("arrival_rate", &open.arrival_rate)]),
+            ));
+        }
         Workload::Closed(closed) => {
             fields.push(("population", count(closed.population)));
             fields.push(("think_time", real(&closed.think_time, precision)));
+            fields.push((
+                "exact_values",
+                exact_values(vec![("think_time", &closed.think_time)]),
+            ));
         }
     }
     record("QueueNetwork", fields)
@@ -844,7 +949,8 @@ fn sweep_record(sweep: &lovelace_systems::SweepResult, precision: usize) -> Valu
 
 #[cfg(test)]
 mod tests {
-    use crate::{Engine, LangError};
+    use crate::{Engine, LangError, Value};
+    use lovelace_nat::Nat;
 
     fn eval(source: &str) -> String {
         let mut engine = Engine::new();
@@ -906,6 +1012,133 @@ mod tests {
         assert!(eval_ok(
             "sys_closed(2, 9/100, [sys_station(\"cpu\", 1/100, 1)]).population == 2"
         ));
+    }
+
+    #[test]
+    fn long_period_service_time_survives_station_and_open() {
+        // 1/97 has a 96-digit period, so its decimal projection at DEFAULT_PRECISION is lossy.
+        // The whole end-to-end call must succeed on the authoritative exact value, not on the
+        // projection (the pre-fix failure is the InvalidArgument named by the review).
+        let source = "s = sys_station(\"cpu\", 1/97, 1); m = sys_open(1, [s]); sys_analyze(m)";
+        let analysis = eval(source);
+        assert!(analysis.starts_with("Analysis("), "{analysis}");
+
+        assert!(eval_ok(
+            "sys_station(\"cpu\", 1/97, 1).exact_values.service_time.denominator == 97"
+        ));
+        assert!(eval_ok(
+            "s = sys_station(\"cpu\", 1/97, 1); m = sys_open(1, [s]); \
+             sys_analyze(m).stations[0].exact_values.service_time.denominator == 97"
+        ));
+    }
+
+    #[test]
+    fn long_period_think_time_survives_closed_and_mva() {
+        // The closed workload's think time is also projected at DEFAULT_PRECISION in the network
+        // record; MVA must consume the exact sidecar on re-parse and keep denominator 97.
+        let source = "s = sys_station(\"cpu\", 1/97, 1); m = sys_closed(2, 1/97, [s]); sys_mva(m)";
+        let analysis = eval(source);
+        assert!(analysis.starts_with("Analysis("), "{analysis}");
+
+        assert!(eval_ok(
+            "s = sys_station(\"cpu\", 1/97, 1); m = sys_closed(2, 1/97, [s]); \
+             sys_mva(m).exact_values.think_time.denominator == 97"
+        ));
+    }
+
+    #[test]
+    fn long_period_arrival_rate_survives_open_network() {
+        // The open workload's arrival rate is projected the same way; the re-parsed network must
+        // carry 1/97 exactly or this analyze call refuses the projection.
+        assert!(eval_ok(
+            "sys_analyze(sys_open(1/97, [sys_station(\"cpu\", 1, 1)])).exact_values.throughput.denominator == 97"
+        ));
+    }
+
+    #[test]
+    fn malformed_exact_values_are_refused_instead_of_falling_back() {
+        let mut engine = Engine::new();
+        let decimal = engine.eval("1/10").expect("1/10 is an exact Real");
+        let station = Value::Record(
+            "Station".to_string(),
+            vec![
+                ("id".to_string(), Value::Text("cpu".to_string())),
+                ("discipline".to_string(), Value::Text("fcfs".to_string())),
+                ("service_time".to_string(), decimal),
+                ("visits".to_string(), Value::Natural(Nat::from_u64(1))),
+                (
+                    "exact_values".to_string(),
+                    Value::Record(
+                        "ExactValues".to_string(),
+                        vec![(
+                            "service_time".to_string(),
+                            Value::Record(
+                                "ExactRational".to_string(),
+                                vec![
+                                    ("numerator".to_string(), Value::Text("one".to_string())),
+                                    ("denominator".to_string(), Value::Natural(Nat::from_u64(97))),
+                                ],
+                            ),
+                        )],
+                    ),
+                ),
+            ],
+        );
+        let ctx = super::Ctx {
+            name: "sys_open",
+            pos: 0,
+        };
+        // The decimal field alone is lossless here, so a silent fallback would succeed; the
+        // malformed authoritative entry must be the observable refusal.
+        let error = super::parse_station(&ctx, &station, 0)
+            .expect_err("a present exact_values record is authoritative");
+        assert_eq!(error.code, "InvalidArgument");
+        assert_eq!(error.category, "TypeMismatch");
+        assert!(
+            error.message.contains("Integer ExactRational numerator"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn decimal_only_records_still_parse_for_backward_compatibility() {
+        let mut engine = Engine::new();
+        let decimal = engine.eval("1/10").expect("1/10 is an exact Real");
+        let station = Value::Record(
+            "Station".to_string(),
+            vec![
+                ("id".to_string(), Value::Text("cpu".to_string())),
+                ("discipline".to_string(), Value::Text("fcfs".to_string())),
+                ("service_time".to_string(), decimal.clone()),
+                ("visits".to_string(), Value::Natural(Nat::from_u64(1))),
+            ],
+        );
+        let ctx = super::Ctx {
+            name: "sys_open",
+            pos: 0,
+        };
+        let parsed =
+            super::parse_station(&ctx, &station, 0).expect("a legacy Station record still parses");
+        assert_eq!(parsed.service_time.to_string(), "1/10");
+
+        let network = Value::Record(
+            "QueueNetwork".to_string(),
+            vec![
+                ("name".to_string(), Value::Text("legacy".to_string())),
+                ("workload".to_string(), Value::Text("open".to_string())),
+                ("stations".to_string(), Value::Vector(vec![station])),
+                ("arrival_rate".to_string(), decimal),
+                ("precision".to_string(), Value::Natural(Nat::from_u64(30))),
+            ],
+        );
+        let (parsed, precision) = super::parse_network(&ctx, &network, 0)
+            .expect("a legacy QueueNetwork record still parses");
+        assert_eq!(precision, 30);
+        match parsed.workload {
+            super::Workload::Open(open) => assert_eq!(open.arrival_rate.to_string(), "1/10"),
+            other => panic!("expected an open workload, got {other:?}"),
+        }
     }
 
     #[test]

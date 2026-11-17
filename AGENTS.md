@@ -47,7 +47,8 @@ cargo clippy --workspace --all-targets
 cargo run --release -p lovelace-corpus
 cargo run --release -p lovelace-corpus -- lang/001
 
-# canonical numerical kernel and architecture policy (run before calling a change done)
+# canonical numerical kernel and architecture policy (run before calling a change done;
+# the mutation suite has 20 scenarios, and CODEOWNERS declares the policy and kernel owners)
 python tools/check-architecture.py
 python tools/test-architecture-gates.py
 cargo test -p lovelace-rational
@@ -128,7 +129,7 @@ manual dispatch:
 |---|---|
 | Windows (full workspace) | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets`, `cargo test --workspace`, `cargo build --release -p lovelace-desktop`, then upload `target/release/lovelace-desktop.exe` as `lovelace-desktop-windows-x86_64` |
 | Linux (engine crates + GUI desktop under Xvfb) | `cargo fmt --all -- --check`, the Linux GUI runtime, `cargo clippy -p lovelace-lang -p lovelace-rational -p lovelace-real -p lovelace-nat -p lovelace-symbolics -p lovelace-systems --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics -p lovelace-systems`, `cargo build --release -p lovelace-desktop`, the glibc ABI guard over the built artifact, `xvfb-run ... --gui-selftest` (exit 0 and `checks=20 failed=0`), `xvfb-run ... cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-gui-x86_64` |
-| Architecture policy (`ubuntu-latest` and `windows-latest`) | `python tools/check-architecture.py --report architecture-impact-<os>.md`, `python tools/test-architecture-gates.py`, `python tools/rational-oracle.py --check`, `python tools/systems-oracle.py --check`, then upload the impact report. Independent of the unit-test jobs: a green suite cannot outvote a second rational kernel. |
+| Architecture policy (`ubuntu-latest` and `windows-latest`) | `python tools/check-architecture.py --report architecture-impact-<os>.md`, `python tools/test-architecture-gates.py` (20 scenarios), `python tools/rational-oracle.py --check`, `python tools/systems-oracle.py --check`, then upload the impact report. Ownership is abstraction-specific (`reservedTypeNames`, `permittedRepresentations`), and `.github/CODEOWNERS` routes policy, checker, mutation-fixture, ownership-document and rational-kernel changes to the owner. Independent of the unit-test jobs: a green suite cannot outvote a second rational kernel. |
 | Numerical kernel | `cargo test -p lovelace-rational -p lovelace-int -p lovelace-nat -p lovelace-real`, `cargo test -p lovelace-rational --test properties`, `--test oracle`, `cargo test -p lovelace-systems --test oracle`, `cargo test -p lovelace-lang --test cross_library` |
 | Documentation examples (`ubuntu-latest` and `windows-latest`) | twelve steps, one definition, two OS variants: checkout pinning `core.autocrlf=false`, Rust toolchain, cargo cache, `cargo build -p lovelace-run`, `bash tools/check-crate-examples.sh`, `bash tools/run-tutorials.sh`, `bash docs/language/examples/run-examples.sh` (fenced examples plus the builtin-catalogue check against `--functions`) and `bash docs/extensions/examples/run-examples.sh`, `bash tools/check-docs.sh --symbols`, `--claims`, `--readme`, `bash tools/check-reference-pages.sh`, and `bash tools/test-docs-gates.sh` (the mutation self-test) |
 
@@ -292,8 +293,11 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
   `lovelace-know::ExactNumber` is a delegating facade. Do not add numerator/denominator storage,
   GCD normalization or scalar arithmetic traits outside the owners. Improve the owner instead
   (RNL-ARC-001, RNL-AGT-003). Run `python tools/check-architecture.py` and the cross-library tests;
-  a local test pass is not completion evidence. Never weaken the policy, delete a failing test or
-  grant yourself an exception (RNL-AGT-006).
+  a local test pass is not completion evidence. The mutation suite is 20 scenarios; ownership is
+  per reserved type, not per crate; an arithmetic impl the scanner cannot classify is reported as
+  `review-required`, not passed. Policy, checker, mutation-fixture, ownership-document and
+  rational-kernel changes are declared in `.github/CODEOWNERS`. Never weaken the policy, delete a
+  failing test or grant yourself an exception (RNL-AGT-006).
 - No external crate may enter an engine crate (ADR-001). The desktop's GUI stack is the only
   external dependency, declared in the desktop crate only: eframe's default wgpu on Windows, plus
   glow on Linux.

@@ -3,9 +3,10 @@
     {"name": "lovelace-nat", "id": "nat", "manifest_path": "lovelace-nat/Cargo.toml", "dependencies": []},
     {"name": "lovelace-int", "id": "int", "manifest_path": "lovelace-int/Cargo.toml", "dependencies": [{"name": "lovelace-nat", "kind": null}]},
     {"name": "lovelace-rational", "id": "rational", "manifest_path": "lovelace-rational/Cargo.toml", "dependencies": [{"name": "lovelace-nat", "kind": null}, {"name": "lovelace-int", "kind": null}]},
+    {"name": "lovelace-real", "id": "real", "manifest_path": "lovelace-real/Cargo.toml", "dependencies": [{"name": "lovelace-rational", "kind": null}]},
     {"name": "lovelace-symbolics", "id": "symbolics", "manifest_path": "lovelace-symbolics/Cargo.toml", "dependencies": [{"name": "lovelace-rational", "kind": null}]},
     {"name": "lovelace-systems", "id": "systems", "manifest_path": "lovelace-systems/Cargo.toml", "dependencies": [{"name": "lovelace-rational", "kind": null}]},
-    {"name": "lovelace-lang", "id": "lang", "manifest_path": "lovelace-lang/Cargo.toml", "dependencies": [{"name": "lovelace-rational", "kind": null}, {"name": "lovelace-symbolics", "kind": null}, {"name": "lovelace-systems", "kind": null}]}
+    {"name": "lovelace-lang", "id": "lang", "manifest_path": "lovelace-lang/Cargo.toml", "dependencies": [{"name": "lovelace-rational", "kind": null}, {"name": "lovelace-real", "kind": null}, {"name": "lovelace-symbolics", "kind": null}, {"name": "lovelace-systems", "kind": null}]}
   ],
-  "workspace_members": ["nat", "int", "rational", "symbolics", "systems", "lang"]
+  "workspace_members": ["nat", "int", "rational", "real", "symbolics", "systems", "lang"]
 }

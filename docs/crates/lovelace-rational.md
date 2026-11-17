@@ -23,15 +23,25 @@ their full arbitrary-precision GCD. Normalization and arithmetic never go throug
   `from_nat`, `from_int`, `from_decimal` (a parsing boundary; also `FromStr`). The fallible
   constructor `from_parts(Int, Nat) -> Result<Rat, RationalError>` returns
   `RationalError::ZeroDenominator`; there is no public constructor that can build an invalid value.
+  `from_parts_with(Int, Nat, &Limits, &dyn Cancel)` is the budgeted, cancellable form: it preflights
+  the unreduced numerator-plus-denominator digit count before the GCD, polls the cancel token before
+  and after normalization, and returns `RationalError::DigitBudgetExceeded` or `Cancelled`.
+  `from_parts` performs the same canonicalization with no budget and no cancellation.
 - Arithmetic — `add`, `sub`, `mul`, `neg`, `abs`, `cmp`, `div -> Option<Rat>`,
   `checked_div -> Result<Rat, RationalError>`, `pow_i64 -> Option<Rat>` and
   `checked_pow(i64, &Limits, &dyn Cancel)`. Multiplication and division cross-cancel before forming
   products; addition uses the least common multiple of the denominators.
 - Budgets — `Limits::digits(n)`, `Limits::bits(n)`, `Limits::unlimited()` and the `*_with` forms.
+  `Limits::check_digits(observed)` is the cheap digits-only comparison the preflights use;
+  `Limits::check` runs it before checking a materialized value. `add_with`, `sub_with`, `mul_with`,
+  `checked_div_with` and `checked_pow` estimate the result size and refuse before the expensive
+  products, division or squaring, then check the materialized result again.
   `RationalError::DigitBudgetExceeded` and `BitBudgetExceeded` are the deterministic refusals; a
   budget failure never returns a partially computed value.
-- Cancellation — the `Cancel` trait and `NeverCancel`; `checked_pow` polls it between squaring
-  steps.
+- Cancellation — the `Cancel` trait and `NeverCancel`; `checked_pow` polls it before the power loop
+  and between squaring steps, and `from_parts_with` polls it before and after the GCD normalization.
+  `Nat::gcd` has no internal cancel hook, so a single GCD call cannot be interrupted; the
+  normalization as a whole is the cancellation granularity.
 - Exactness — `provenance::{ComputationExactness, InputFidelity, RepresentationExactness,
   ExactnessProvenance, Conversion}`. The four claims stay independent: computation exactness, input
   fidelity, representation exactness and render precision.
@@ -52,8 +62,11 @@ flag is true only when neither the input fidelity nor the representation lost an
 ## Precision behaviour
 
 `Rat` is exact; there is no precision knob and no rounding. A computation is either exact or it
-returns an error. `Limits` bounds growth but does not approximate: a value over the budget is
-refused, not truncated. A renderer that needs a decimal projection asks `lovelace-real` for a
+returns an error. `Limits` bounds growth but does not approximate: a value over the budget is refused,
+not truncated. The preflight refuses an operation before it allocates, and the materialized result is
+checked afterwards; the estimate deliberately measures unreduced parts and does not model
+cross-cancellation, so it is a conservative safety refusal rather than a prediction of the exact
+result size. A renderer that needs a decimal projection asks `lovelace-real` for a
 `Real`; the conversion reports `RepresentationExactness::Truncated { precision }` when the period
 did not close inside the budget. A `Real` converted back to a `Rat` is an exact representation of
 its stored digits and reports `InputFidelity::Truncated` when the value had already lost digits.
@@ -84,6 +97,10 @@ same refusals and never substitute zero.
   two. It is a budget measure, not a printed digit count.
 - `Limits::unlimited()` is an explicit opt-out; with it, a legitimately huge power can exhaust
   memory. `pow_i64` uses the default one-million-digit budget.
+- The preflight is a conservative refusal, not a precise prediction. It can refuse a large-operand
+  operation whose reduced result would fit, and a `Limits::bits`-only caller of `add_with`,
+  `mul_with` or `checked_div_with` is still checked after the operation rather than before it.
+  `Nat::gcd` cannot be interrupted mid-call, so cancellation is polled around normalization.
 - The exactness types describe provenance, not correctness: an exact rational computed from a
   wrong model is still exact under that model.
 

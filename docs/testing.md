@@ -18,21 +18,22 @@ Every crate keeps its tests beside the code as `#[cfg(test)]` modules: parity ro
 
 Every count in the current table is an **exact** observation of a named revision; none of the rows
 is carried forward as a current total. The aggregate below was measured on **Windows 11 x86_64**
-on **2026-11-17**, at commit
+on **2026-11-17**, in the `fix/release-provenance` working tree that contains the PR #9 review
+remediation on top of
 **`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`, the RNL-001 implementation), with:
 
 ```console
 $ cargo test --workspace --no-fail-fast
 ```
 
-The run reports **45 test targets: 6267 passed, 0 failed, 0 ignored**. The per-crate rows below
+The run reports **45 test targets: 6276 passed, 0 failed, 0 ignored**. The per-crate rows below
 are the same commands grouped by crate (`cargo test -p <crate>`, with the desktop under its normal
-test path), measured in the same working tree; they sum to the same 6267 passed and 0 ignored.
+test path), measured in the same working tree; they sum to the same 6276 passed and 0 ignored.
 
 | Crate | Test targets | Passed | Failed | Ignored |
 |---|---:|---:|---:|---:|
 | `lovelace-real` | 2 | 2493 | 0 | 0 |
-| `lovelace-lang` | 3 | 1742 | 0 | 0 |
+| `lovelace-lang` | 3 | 1747 | 0 | 0 |
 | `lovelace-desktop` (Windows) | 2 | 729 | 0 | 0 |
 | `lovelace-run` | 3 | 454 | 0 | 0 |
 | `lovelace-nat` | 2 | 271 | 0 | 0 |
@@ -42,18 +43,18 @@ test path), measured in the same working tree; they sum to the same 6267 passed 
 | `lovelace-systems` | 3 | 55 | 0 | 0 |
 | `lovelace-know` | 12 | 56 | 0 | 0 |
 | `lovelace-corpus` | 5 | 28 | 0 | 0 |
-| `lovelace-rational` | 4 | 26 | 0 | 0 |
+| `lovelace-rational` | 4 | 30 | 0 | 0 |
 | `lovelace-json` | 2 | 20 | 0 | 0 |
 | `lovelace-bench` | 1 | 0 | 0 | 0 |
-| **Total** | **45** | **6267** | **0** | **0** |
+| **Total** | **45** | **6276** | **0** | **0** |
 
 Rows that compose more than one target:
 
-- `lovelace-rational` is 15 unit tests, 9 seeded property campaigns and 2 oracle comparisons, plus
+- `lovelace-rational` is 16 unit tests, 12 seeded property campaigns and 2 oracle comparisons, plus
   one zero-test doctest target.
 - `lovelace-systems` is 51 unit tests, 3 independent-oracle tests and 1 doctest, plus one
   zero-test integration target.
-- `lovelace-lang` is 1737 in-crate tests plus 5 cross-library semantics tests.
+- `lovelace-lang` is 1742 in-crate tests plus 5 cross-library semantics tests.
 - `lovelace-run` is 442 in `src/main.rs` (including the additive `exact_values` wire test), 1 in
   `tests/recursion_depth.rs` and 11 in `tests/repl.rs`.
 - `lovelace-know` is 56 across nine integration targets, with two zero-test unit targets and one
@@ -226,10 +227,18 @@ reason.
   language, and compares exact values, signs, precision classification and error codes.
 - **Architecture policy** — `tools/check-architecture.py` reads
   `tools/architecture-policy.json`, asks `cargo metadata` for the real graph, and scans Rust items.
-  `tools/test-architecture-gates.py` injects every required forbidden change into an isolated
-  fixture and requires a nonzero exit; the valid fixture proves domain formulas, typed units and a
-  canonical alias are accepted. Both run as the `architecture-policy` CI job, on Linux and Windows,
-  independently of the unit tests.
+  `tools/test-architecture-gates.py` has **20 scenarios**: the 11 original rules plus nine
+  review-remediation scenarios (three owner-crate duplicates — a `Rat` in `lovelace-lang`, a `Rat`
+  in `lovelace-real`, a second `Real` in `lovelace-real` — plus a split `impl`, a generic
+  arithmetic trait, a free-function kernel, a renamed representation, a broad exception scope and
+  an unresolved arithmetic impl). Each injects the
+  forbidden change into an isolated fixture and requires a nonzero exit with the named rule; the
+  valid fixture (7 crates, 7 files) proves domain formulas, typed units, a canonical alias and the
+  permitted representations are accepted. Ownership is abstraction-specific through
+  `reservedTypeNames` and `permittedRepresentations`; whole-crate `ownerCrates` is retired and
+  rejected. Both run as the `architecture-policy` CI job, on Linux and Windows, independently of
+  the unit tests; `.github/CODEOWNERS` declares the owner of the policy, checker and mutation
+  suite.
 
 ## 3. Desktop GUI harness
 

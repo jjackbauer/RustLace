@@ -354,3 +354,229 @@ fn cancellation_is_polled_during_a_long_power() {
     let result = Rat::from_i64(3).checked_pow(1_000, &Limits::unlimited(), &token);
     assert_eq!(result, Err(RationalError::Cancelled));
 }
+
+/// A rational whose numerator and denominator each have 101 decimal digits and are coprime.
+///
+/// The two parts differ by two and both are odd, so their only common divisor is one: the value is
+/// already canonical and its parts are genuinely large, not a disguised small fraction.
+fn hundred_digit_rational(offset: u64) -> Rat {
+    assert!(offset % 2 == 1, "an odd offset keeps both parts coprime");
+    let ten100 = Nat::from_u64(10).pow(100);
+    Rat::from_parts(
+        Int::from_nat(ten100.add(&Nat::from_u64(offset))),
+        ten100.add(&Nat::from_u64(offset + 2)),
+    )
+    .expect("the denominator is non-zero")
+}
+
+#[test]
+fn preflight_refuses_multiplication_before_the_products_are_formed() {
+    let limits = Limits::digits(50);
+    let left = hundred_digit_rational(1);
+    let right = hundred_digit_rational(5);
+    assert!(
+        left.decimal_digits() > 100,
+        "the operands are genuinely large"
+    );
+
+    // The exact product needs on the order of 200 numerator digits and 200 denominator digits.
+    let error = left
+        .mul_with(&right, &limits)
+        .expect_err("the product is far over 50 digits");
+    assert_eq!(error.code(), "RationalDigitBudgetExceeded");
+    assert_eq!(error.category(), "BudgetExceeded");
+    match error {
+        RationalError::DigitBudgetExceeded { limit, observed } => {
+            assert_eq!(limit, 50);
+            assert!(observed > 50, "the estimate must exceed the limit");
+        }
+        other => panic!("expected DigitBudgetExceeded, got {other}"),
+    }
+
+    // These exact results are one, zero and one: each fits the 50-digit budget comfortably. Only a
+    // check performed before the product/sum is formed can refuse them, so these cases separate
+    // "the result was checked" from "the operation was preflighted". The documented trade-off is
+    // that the conservative estimate over-counts and refuses a few results that would have fit.
+    let reciprocal = Rat::from_parts(
+        Int::from_nat(left.denominator().clone()),
+        left.numerator().magnitude().clone(),
+    )
+    .expect("non-zero denominator");
+    assert_eq!(left.mul(&reciprocal), Rat::one());
+    let error = left
+        .mul_with(&reciprocal, &limits)
+        .expect_err("the preflight must refuse before forming the ~200-digit product");
+    assert!(matches!(
+        error,
+        RationalError::DigitBudgetExceeded { limit: 50, .. }
+    ));
+
+    let negative = left.neg();
+    assert_eq!(left.add(&negative), Rat::zero());
+    let error = left
+        .add_with(&negative, &limits)
+        .expect_err("the preflight must refuse before forming the common denominator");
+    assert!(matches!(
+        error,
+        RationalError::DigitBudgetExceeded { limit: 50, .. }
+    ));
+
+    assert_eq!(left.checked_div(&left), Ok(Rat::one()));
+    let error = left
+        .checked_div_with(&left, &limits)
+        .expect_err("the preflight must refuse before forming the division products");
+    assert!(matches!(
+        error,
+        RationalError::DigitBudgetExceeded { limit: 50, .. }
+    ));
+}
+
+#[test]
+fn huge_power_is_refused_by_preflight() {
+    let limits = Limits::digits(50);
+
+    // 2^1_000_000 needs 301030 decimal digits. A preflight refusal can report a count derived from
+    // the exponent; the squaring loop cannot, because it stops at the first intermediate over 50
+    // digits (79 for this base). The observed size therefore distinguishes the two paths.
+    let error = Rat::from_i64(2)
+        .checked_pow(1_000_000, &limits, &NeverCancel)
+        .expect_err("2^1_000_000 is far over 50 digits");
+    match error {
+        RationalError::DigitBudgetExceeded { limit, observed } => {
+            assert_eq!(limit, 50);
+            assert!(
+                observed > 100_000,
+                "the refusal must come from the preflight estimate, not the first over-budget \
+                 squaring (observed {observed})"
+            );
+        }
+        other => panic!("expected DigitBudgetExceeded, got {other}"),
+    }
+
+    // The preflight must never reject a power whose exact result fits: 2^100 is 31 digits.
+    let value = Rat::from_i64(2)
+        .checked_pow(100, &limits, &NeverCancel)
+        .expect("2^100 fits fifty digits");
+    assert_eq!(value.to_string(), "1267650600228229401496703205376");
+
+    // With no digit budget the preflight has nothing to compare, so the loop's own cancellation
+    // poll is still what stops a huge exponent.
+    assert_eq!(
+        Rat::from_i64(2).checked_pow(1_000_000, &Limits::unlimited(), &AlwaysCancel),
+        Err(RationalError::Cancelled)
+    );
+}
+
+/// A cancellation token that reports false for `remaining` polls, then true forever.
+struct CancelOnNth {
+    remaining: std::cell::Cell<u32>,
+}
+
+impl CancelOnNth {
+    fn new(remaining: u32) -> CancelOnNth {
+        CancelOnNth {
+            remaining: std::cell::Cell::new(remaining),
+        }
+    }
+}
+
+impl Cancel for CancelOnNth {
+    fn is_cancelled(&self) -> bool {
+        let left = self.remaining.get();
+        if left == 0 {
+            return true;
+        }
+        self.remaining.set(left - 1);
+        false
+    }
+}
+
+/// A cancellation token that is already cancelled on the first poll.
+struct AlwaysCancel;
+
+impl Cancel for AlwaysCancel {
+    fn is_cancelled(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn normalization_is_cancellable() {
+    // 7*(10^80+1) / 11*(10^80+1): both parts are 81 and 82 digits and share the 81-digit factor,
+    // so the GCD and the reduction are the expensive steps and the canonical result is 7/11.
+    let shared = Nat::from_u64(10).pow(80).add(&Nat::from_u64(1));
+    let numerator = Int::from_nat(shared.mul(&Nat::from_u64(7)));
+    let denominator = shared.mul(&Nat::from_u64(11));
+    assert!(
+        numerator.magnitude().bit_length() > 200 && denominator.bit_length() > 200,
+        "the parts are large enough for the GCD to be the dominant cost"
+    );
+
+    // Cancelled before any normalizing work: no partially normalized value is returned.
+    assert_eq!(
+        Rat::from_parts_with(
+            numerator.clone(),
+            denominator.clone(),
+            &Limits::unlimited(),
+            &AlwaysCancel,
+        ),
+        Err(RationalError::Cancelled)
+    );
+
+    // A token that reports false once and true on its next poll must still stop normalization,
+    // which proves cancellation is polled more than once across the GCD, not only at the door.
+    assert_eq!(
+        Rat::from_parts_with(
+            numerator.clone(),
+            denominator.clone(),
+            &Limits::unlimited(),
+            &CancelOnNth::new(1),
+        ),
+        Err(RationalError::Cancelled)
+    );
+
+    // With no cancellation the same parts reduce exactly as `from_parts` does.
+    let expected = Rat::from_parts(Int::from_i64(7), Nat::from_u64(11)).expect("non-zero");
+    assert_eq!(
+        Rat::from_parts_with(
+            numerator.clone(),
+            denominator.clone(),
+            &Limits::unlimited(),
+            &NeverCancel,
+        ),
+        Ok(expected)
+    );
+
+    // The digit growth of the unreduced parts is preflighted before the GCD runs, and the refusal
+    // uses the existing digit-budget category.
+    let error = Rat::from_parts_with(numerator, denominator, &Limits::digits(50), &NeverCancel)
+        .expect_err("both unreduced parts exceed fifty digits");
+    match error {
+        RationalError::DigitBudgetExceeded { limit, observed } => {
+            assert_eq!(limit, 50);
+            assert!(observed > 50, "the estimate must exceed the limit");
+        }
+        other => panic!("expected DigitBudgetExceeded, got {other}"),
+    }
+
+    // The zero denominator keeps its domain error, and the unlimited form reduces exactly like
+    // `from_parts`, which remains the infallible-no-cancel form.
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::from_i64(1),
+            Nat::zero(),
+            &Limits::unlimited(),
+            &NeverCancel,
+        ),
+        Err(RationalError::ZeroDenominator)
+    );
+    assert_eq!(
+        Rat::from_parts_with(
+            Int::from_i64(2),
+            Nat::from_u64(4),
+            &Limits::unlimited(),
+            &NeverCancel,
+        ),
+        Rat::from_parts(Int::from_i64(1), Nat::from_u64(2))
+    );
+}

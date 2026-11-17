@@ -36,7 +36,9 @@ desktop reach it through the language, and none of those layers re-implements a 
   `div` returns `Option`, `checked_div` and `checked_pow` return categorized errors.
 - `model` — `Station`, `StationId`, `ServiceDiscipline` (`FcfsSingleServer`, `Delay`,
   `MultiServer { servers }`), `OpenWorkload`, `ClosedWorkload`, `Workload`, `QueueNetwork`,
-  `SolverOptions`, `Cancel`/`NeverCancel`/`FlagCancel`.
+  `SolverOptions`, `Cancel`/`NeverCancel`/`FlagCancel`. A `Station` or `QueueNetwork` record may
+  carry the additive `exact_values` sidecar; the language adapter consumes it, and a record without
+  the sidecar still parses from the decimal fields for backward compatibility.
 - `queueing` — `mm1`, `mmc`, `mm_infinity`, `solve_station`.
 - `operational_laws` — `little_law`, `utilization_law`, `forced_flow`, `interactive_response` and
   the exact `check_*` forms.
@@ -63,6 +65,15 @@ limit. A refusal is a stable code plus one of the frozen categories.
 Through the language, every numeric field is a decimal `Real` projection and an additive
 `exact_values` record carries the canonical numerator/denominator pair
 (`sys_mm1(8, 10).exact_values.utilization` is `ExactRational(numerator: 4, denominator: 5)`).
+
+The model-construction records are values too, and they carry the same sidecar. A `Station` record
+has `exact_values` with `service_time`, `visits` and `service_demand`; a `QueueNetwork` record has
+`arrival_rate` for an open workload or `think_time` for a closed one. The language adapter's
+`parse_station` and `parse_network` read that sidecar first and fall back to the decimal field only
+when the whole `exact_values` record is absent. A present but malformed sidecar is refused rather
+than silently replaced by the projection, so `sys_station("cpu", 1/97, 1)` reaches `sys_open` or
+`sys_closed` and then `sys_analyze` or `sys_mva` with denominator 97, not with the truncated decimal
+`0.0103...`.
 
 ## Precision behaviour
 
@@ -144,6 +155,8 @@ assert_eq!(mva.aggregate.throughput.to_string(), "2000/101");
 `cargo test -p lovelace-systems` runs the unit and golden tests: the M/M/1 and M/M/c published
 values, the MVA recurrence at N=1 and N=2, the think-state occupancy regression, the exact sweep
 grid, conservation checks, degenerate and unstable refusals, budget and cancellation paths, and
-the adapter/queueing contract. `tests/oracle.rs` compares selected results against the independent
+the adapter/queueing contract. The language family adds the `1/97` construction-to-analysis
+regressions through both open and closed networks, plus the decimal-only backward-compatibility
+path. `tests/oracle.rs` compares selected results against the independent
 Python `fractions.Fraction` formulas in `parity/systems/oracle.tsv`.
 `parity/corpus/systems.json` pins the same models through the language.

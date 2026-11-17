@@ -31,9 +31,15 @@
 //! # Resource limits
 //!
 //! [`Limits`] bounds decimal digit growth (and optionally bit growth) and returns
-//! [`RationalError::DigitBudgetExceeded`] *instead of* a partially computed result. [`Cancel`]
-//! is polled between squaring steps of [`Rat::checked_pow`]. [`Limits::unlimited`] is an explicit
-//! opt-out; the default used by [`Rat::pow_i64`] is [`DEFAULT_MAX_DIGITS`].
+//! [`RationalError::DigitBudgetExceeded`] *instead of* a partially computed result. A limit is
+//! enforced twice: a cheap conservative preflight refuses an operation whose operands already imply
+//! the result is over budget, and the materialized result is checked again. The preflight estimate
+//! deliberately over-counts, so an operation whose operands are large can be refused even when the
+//! reduced result would have fit; each operation's documentation states its estimate.
+//!
+//! [`Cancel`] is polled between squaring steps of [`Rat::checked_pow`] and around the GCD
+//! normalization in [`Rat::from_parts_with`]. [`Limits::unlimited`] is an explicit opt-out; the
+//! default used by [`Rat::pow_i64`] is [`DEFAULT_MAX_DIGITS`].
 //!
 //! # Exactness provenance
 //!
@@ -167,7 +173,8 @@ impl std::error::Error for RationalError {}
 ///
 /// The trait lives here so the kernel can poll long exact computations without depending on a
 /// domain crate. The interpreter adapter, the solver and the desktop implement it over their own
-/// deadline or flag.
+/// deadline or flag. It is polled between squaring steps of [`Rat::checked_pow`] and before and
+/// after the GCD normalization in [`Rat::from_parts_with`].
 pub trait Cancel {
     /// True when the caller has cancelled the computation.
     fn is_cancelled(&self) -> bool;
@@ -226,14 +233,27 @@ impl Limits {
         self.max_digits
     }
 
-    /// Refuses `value` when it is over either configured bound.
-    pub fn check(&self, value: &Rat) -> Result<(), RationalError> {
+    /// Refuses an estimated numerator-plus-denominator digit count.
+    ///
+    /// This is the cheap preflight counterpart of [`Limits::check`]: the caller derives an estimate
+    /// from operand sizes instead of materializing a [`Rat`]. The estimate is expected to be an
+    /// upper bound of the result's digit count; it may over-count, which refuses an operation
+    /// slightly early but never lets an over-budget result through. A bit-only budget never
+    /// refuses here, because a digit count says nothing sound about a bit count.
+    ///
+    /// Returns [`RationalError::DigitBudgetExceeded`] with the estimate as `observed`.
+    pub fn check_digits(&self, observed: usize) -> Result<(), RationalError> {
         if let Some(limit) = self.max_digits {
-            let observed = value.decimal_digits();
             if observed > limit {
                 return Err(RationalError::DigitBudgetExceeded { limit, observed });
             }
         }
+        Ok(())
+    }
+
+    /// Refuses `value` when it is over either configured bound.
+    pub fn check(&self, value: &Rat) -> Result<(), RationalError> {
+        self.check_digits(value.decimal_digits())?;
         if let Some(limit) = self.max_bits {
             let observed = value.bit_length();
             if observed > limit {
@@ -306,10 +326,57 @@ impl Rat {
     /// Builds a rational from a numerator and a denominator.
     ///
     /// The result is fully reduced; zero is `0/1`. A zero denominator is
-    /// [`RationalError::ZeroDenominator`]. This is the only public fallible constructor; there is
-    /// no public way to build a [`Rat`] with a zero or negative denominator.
+    /// [`RationalError::ZeroDenominator`]. This is the infallible-no-cancel form: it takes no
+    /// [`Limits`] and polls no [`Cancel`] token, so it cannot refuse an over-budget normalization
+    /// and cannot be stopped while the GCD runs. [`Rat::from_parts_with`] is the budgeted and
+    /// cancellable form; there is no public way to build a [`Rat`] with a zero or negative
+    /// denominator.
     pub fn from_parts(num: Int, den: Nat) -> Result<Rat, RationalError> {
         Rat::canonicalize(num, den)
+    }
+
+    /// Builds a rational from a numerator and a denominator under an explicit growth budget and
+    /// cancellation check.
+    ///
+    /// The unreduced numerator-plus-denominator digit count is preflighted **before** the GCD runs;
+    /// the caller's [`Cancel`] token is polled **before and after** the GCD normalization. A
+    /// cancelled or over-budget call returns [`RationalError::Cancelled`] or
+    /// [`RationalError::DigitBudgetExceeded`] and no value: a partially normalized rational is never
+    /// returned. [`Nat::gcd`] itself has no cancellation hook, so the poll granularity is the
+    /// normalization as a whole rather than one GCD iteration.
+    ///
+    /// The preflight over-counts by construction: it measures the unreduced parts. A fraction whose
+    /// parts exceed the budget is refused even when its reduced value would fit (for example
+    /// `10^60 / 10^60` under a sixty-digit budget), which is the price of refusing before the GCD.
+    /// When a call is both cancelled and over budget, [`RationalError::Cancelled`] is reported: the
+    /// caller has already abandoned the result. A zero numerator is `0/1` and is returned after the
+    /// first cancellation poll without running the GCD. A zero denominator is
+    /// [`RationalError::ZeroDenominator`], which is reported before the budget preflight and before
+    /// the cancellation poll.
+    pub fn from_parts_with(
+        num: Int,
+        den: Nat,
+        limits: &Limits,
+        cancel: &dyn Cancel,
+    ) -> Result<Rat, RationalError> {
+        if den.is_zero() {
+            return Err(RationalError::ZeroDenominator);
+        }
+        if cancel.is_cancelled() {
+            return Err(RationalError::Cancelled);
+        }
+        if num.is_zero() {
+            return Ok(Rat::zero());
+        }
+        limits.check_digits(
+            decimal_digits_upper_bound(num.magnitude())
+                .saturating_add(decimal_digits_upper_bound(&den)),
+        )?;
+        let divisor = num.magnitude().gcd(&den);
+        if cancel.is_cancelled() {
+            return Err(RationalError::Cancelled);
+        }
+        Rat::reduce_by(num, den, &divisor)
     }
 
     /// Compatibility spelling of [`Rat::from_parts`].
@@ -377,16 +444,24 @@ impl Rat {
             return Ok(Rat::zero());
         }
         let divisor = num.magnitude().gcd(&den);
+        Rat::reduce_by(num, den, &divisor)
+    }
+
+    /// Divides both parts by the already-computed `divisor` and returns the canonical value.
+    ///
+    /// The caller has established the non-zero denominator and the non-zero numerator, so the only
+    /// possible failures are the representation invariants of the divider.
+    fn reduce_by(num: Int, den: Nat, divisor: &Nat) -> Result<Rat, RationalError> {
         if divisor.is_one() {
             return Ok(Rat { num, den });
         }
         let (reduced_num, _) = num
-            .div_rem(&divisor)
+            .div_rem(divisor)
             .ok_or(RationalError::InternalInvariant {
                 operation: "normalize numerator",
             })?;
         let (reduced_den, _) = den
-            .div_rem(&divisor)
+            .div_rem(divisor)
             .ok_or(RationalError::InternalInvariant {
                 operation: "normalize denominator",
             })?;
@@ -544,7 +619,16 @@ impl Rat {
     }
 
     /// Addition with an explicit growth budget.
+    ///
+    /// The budget is enforced twice: a conservative preflight runs before [`Rat::add`] forms
+    /// `a*d + c*b` over the common denominator, then the materialized result is checked. The
+    /// preflight estimate is
+    /// `max(digits(a) + digits(d), digits(c) + digits(b)) + 1 + digits(b) + digits(d)` for
+    /// `a/b + c/d`, which bounds the carry and the unreduced denominator. It over-counts when the
+    /// denominators share a large factor (the real sum uses their least common multiple), so a
+    /// sum that would have fit can be refused when its operands are large.
     pub fn add_with(&self, other: &Rat, limits: &Limits) -> Result<Rat, RationalError> {
+        limits.check_digits(addition_digits_upper_bound(self, other))?;
         let value = self.add(other);
         limits.check(&value)?;
         Ok(value)
@@ -556,7 +640,11 @@ impl Rat {
     }
 
     /// Subtraction with an explicit growth budget.
+    ///
+    /// Subtraction is addition of the negation, so it uses the same conservative preflight as
+    /// [`Rat::add_with`] before the numerators are combined.
     pub fn sub_with(&self, other: &Rat, limits: &Limits) -> Result<Rat, RationalError> {
+        limits.check_digits(addition_digits_upper_bound(self, other))?;
         let value = self.sub(other);
         limits.check(&value)?;
         Ok(value)
@@ -577,7 +665,18 @@ impl Rat {
     }
 
     /// Multiplication with an explicit growth budget.
+    ///
+    /// The budget is enforced twice: the preflight runs before [`Rat::mul`] computes the two
+    /// numerator and denominator products, then the materialized result is checked. The estimate
+    /// is `self.decimal_digits() + other.decimal_digits()`: each result part is at most the product
+    /// of one numerator with one denominator, so its digit count is at most the sum of the factors'
+    /// counts, and the cross-cancellation only shrinks the parts. It over-counts by up to the two
+    /// cancelled factors, so a product that would have fit can be refused when its operands are
+    /// large (a value multiplied by its own reciprocal is refused under a tight budget even though
+    /// the exact result is one). A zero operand is `0/1`, which needs two digits, and forms no
+    /// product.
     pub fn mul_with(&self, other: &Rat, limits: &Limits) -> Result<Rat, RationalError> {
+        limits.check_digits(multiplication_digits_upper_bound(self, other))?;
         let value = self.mul(other);
         limits.check(&value)?;
         Ok(value)
@@ -612,7 +711,18 @@ impl Rat {
     }
 
     /// Division with an explicit growth budget.
+    ///
+    /// A zero divisor is still [`RationalError::DivisionByZero`], reported by
+    /// [`Rat::checked_div`] before any product exists. Otherwise the budget is enforced twice: the
+    /// preflight runs before the `a*d` and `b*c` products are formed, then the materialized result
+    /// is checked. The estimate is the same `self.decimal_digits() + other.decimal_digits()` bound
+    /// as [`Rat::mul_with`], because `(a/b) / (c/d) = (a*d) / (b*c)` pairs one numerator with one
+    /// denominator. It over-counts for the same reason: the cross-cancellation is not accounted
+    /// for, so a quotient that would have fit can be refused when its operands are large.
     pub fn checked_div_with(&self, other: &Rat, limits: &Limits) -> Result<Rat, RationalError> {
+        if !other.is_zero() {
+            limits.check_digits(multiplication_digits_upper_bound(self, other))?;
+        }
         let value = self.checked_div(other)?;
         limits.check(&value)?;
         Ok(value)
@@ -626,12 +736,14 @@ impl Rat {
 
     /// Exact integer power with explicit limits and cancellation.
     ///
-    /// Positive exponents use exponentiation by squaring. A negative exponent computes the
-    /// reciprocal of the positive power. `0^0` is `1` by the conventional empty-product rule;
-    /// `0` to a negative power is [`RationalError::NegativePowerOfZero`]. `i64::MIN` is handled
-    /// without overflowing: unit bases return their exact value, every other base is refused
-    /// with [`RationalError::ExponentOutOfRange`] because the exact result cannot be represented
-    /// by the supported computation.
+    /// Positive exponents use exponentiation by squaring, after a preflight that refuses a huge
+    /// exponent whose result provably exceeds the digit or bit budget (see [`Rat::pow_u64`]). A
+    /// negative exponent computes the reciprocal of the positive power. `0^0` is `1` by the
+    /// conventional empty-product rule; `0` to a negative power is
+    /// [`RationalError::NegativePowerOfZero`]. `i64::MIN` is handled without overflowing: unit bases
+    /// return their exact value, every other base is refused with
+    /// [`RationalError::ExponentOutOfRange`] because the exact result cannot be represented by the
+    /// supported computation.
     pub fn checked_pow(
         &self,
         exponent: i64,
@@ -668,6 +780,13 @@ impl Rat {
     }
 
     /// Exact non-negative integer power with explicit limits and cancellation.
+    ///
+    /// Before the first squaring, a digit budget is preflighted from the exponent alone: the bit
+    /// length of each part gives a sound lower bound on the result's digits, and a result that
+    /// provably exceeds the budget is refused immediately instead of after the first over-budget
+    /// intermediate. The preflight only refuses when the lower bound itself is over budget, so a
+    /// small legitimate power whose exact result fits is never rejected. A bit budget is preflighted
+    /// the same way. A zero result (`0^positive`) is returned without any preflight.
     pub fn pow_u64(
         &self,
         mut exponent: u64,
@@ -680,6 +799,7 @@ impl Rat {
         if self.is_zero() {
             return Ok(Rat::zero());
         }
+        check_power_preflight(self, exponent, limits)?;
         let mut base = self.clone();
         let mut accumulator = Rat::one();
         loop {
@@ -699,6 +819,133 @@ impl Rat {
         }
         Ok(accumulator)
     }
+}
+
+/// An upper bound on the decimal digits of `left + right`.
+///
+/// The unreduced sum is `(a*d + c*b) / (b*d)`: each product's digit count is at most the sum of its
+/// factors' counts, the addition can carry one digit, and the reduction only shrinks both parts.
+/// The denominator GCD is deliberately not computed — the preflight must stay cheap — so the bound
+/// over-counts when the denominators share a factor. Zero operands make [`Rat::add`] return the
+/// other value unchanged, so their exact digit count is used instead.
+fn addition_digits_upper_bound(left: &Rat, right: &Rat) -> usize {
+    if left.is_zero() {
+        return right.decimal_digits();
+    }
+    if right.is_zero() {
+        return left.decimal_digits();
+    }
+    let left_num = decimal_digits_upper_bound(left.num.magnitude());
+    let left_den = decimal_digits_upper_bound(&left.den);
+    let right_num = decimal_digits_upper_bound(right.num.magnitude());
+    let right_den = decimal_digits_upper_bound(&right.den);
+    // `digits(a*d)` and `digits(c*b)`, plus one digit for the carry.
+    let numerator = left_num
+        .saturating_add(right_den)
+        .max(right_num.saturating_add(left_den))
+        .saturating_add(1);
+    let denominator = left_den.saturating_add(right_den);
+    numerator.saturating_add(denominator)
+}
+
+/// An upper bound on the decimal digits of `left * right` and of `left / right`.
+///
+/// Both operations pair one numerator with one denominator, so each result part is at most the
+/// product of two operand parts and its digit count is at most the sum of their counts. The
+/// cross-cancellation is not accounted for, which is where the over-count comes from. A zero
+/// operand is the canonical `0/1`, two digits, and forms no product.
+fn multiplication_digits_upper_bound(left: &Rat, right: &Rat) -> usize {
+    if left.is_zero() || right.is_zero() {
+        return 2;
+    }
+    left.decimal_digits().saturating_add(right.decimal_digits())
+}
+
+/// Refuses a power whose exponent alone proves it over budget, before the first squaring.
+///
+/// For a base with bit length `B`, `base >= 2^(B-1)`, so `base^exponent >= 2^((B-1)*exponent)`;
+/// that gives a sound lower bound on the result's digits and bits. A refusal needs the lower bound
+/// to exceed the limit, which proves the exact result is over budget and keeps a fitting power
+/// accepted. The reported `observed` is the matching upper bound, so
+/// [`RationalError::DigitBudgetExceeded::observed`] stays an upper bound as documented.
+fn check_power_preflight(base: &Rat, exponent: u64, limits: &Limits) -> Result<(), RationalError> {
+    let num_bits = base.num.magnitude().bit_length();
+    let den_bits = base.den.bit_length();
+    if let Some(limit) = limits.max_digits() {
+        let lower = pow_decimal_digits_lower_bound(num_bits, exponent)
+            .saturating_add(pow_decimal_digits_lower_bound(den_bits, exponent));
+        if lower > limit {
+            let observed = pow_decimal_digits_upper_bound(num_bits, exponent)
+                .saturating_add(pow_decimal_digits_upper_bound(den_bits, exponent));
+            return Err(RationalError::DigitBudgetExceeded { limit, observed });
+        }
+    }
+    if let Some(limit) = limits.max_bits {
+        let lower = pow_bits_lower_bound(num_bits, exponent)
+            .saturating_add(pow_bits_lower_bound(den_bits, exponent));
+        if lower > u128::from(limit) {
+            let observed = pow_bits_upper_bound(num_bits, exponent)
+                .saturating_add(pow_bits_upper_bound(den_bits, exponent));
+            return Err(RationalError::BitBudgetExceeded {
+                limit,
+                observed: u64::try_from(observed).unwrap_or(u64::MAX),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// `30103 / 100000` is strictly greater than `log10(2)`, so a bit count scaled by it over-estimates
+/// the decimal digits.
+const LOG10_2_UPPER_NUMERATOR: u128 = 30_103;
+
+/// `30102 / 100000` is strictly less than `log10(2)`, so a bit count scaled by it under-estimates
+/// the decimal digits.
+const LOG10_2_LOWER_NUMERATOR: u128 = 30_102;
+
+/// A sound lower bound on the decimal digits of `value^exponent`, from `value`'s bit length.
+fn pow_decimal_digits_lower_bound(bits: u64, exponent: u64) -> usize {
+    let bit_floor = (bits.saturating_sub(1) as u128).saturating_mul(u128::from(exponent));
+    let digits = bit_floor
+        .checked_mul(LOG10_2_LOWER_NUMERATOR)
+        .map(|scaled| scaled / 100_000)
+        .unwrap_or(u128::MAX)
+        .saturating_add(1);
+    usize::try_from(digits).unwrap_or(usize::MAX)
+}
+
+/// A sound upper bound on the decimal digits of `value^exponent`, from `value`'s bit length.
+fn pow_decimal_digits_upper_bound(bits: u64, exponent: u64) -> usize {
+    if bits <= 1 {
+        // A bit length of one means the value is exactly one, whose every power is one digit.
+        return 1;
+    }
+    let bit_ceiling = (bits as u128).saturating_mul(u128::from(exponent));
+    let digits = bit_ceiling
+        .checked_mul(LOG10_2_UPPER_NUMERATOR)
+        .map(|scaled| scaled / 100_000)
+        .unwrap_or(u128::MAX)
+        .saturating_add(1);
+    usize::try_from(digits).unwrap_or(usize::MAX)
+}
+
+/// A sound lower bound on the bit length of `value^exponent`, from `value`'s bit length.
+fn pow_bits_lower_bound(bits: u64, exponent: u64) -> u128 {
+    if bits == 0 || exponent == 0 {
+        return 0;
+    }
+    (bits.saturating_sub(1) as u128)
+        .saturating_mul(u128::from(exponent))
+        .saturating_add(1)
+}
+
+/// A sound upper bound on the bit length of `value^exponent`, from `value`'s bit length.
+fn pow_bits_upper_bound(bits: u64, exponent: u64) -> u128 {
+    if bits <= 1 {
+        // A bit length of one means the value is exactly one, whose every power has bit length one.
+        return 1;
+    }
+    (bits as u128).saturating_mul(u128::from(exponent))
 }
 
 /// Divides both parts of a numerator/denominator pair by a common divisor when it is not one.
@@ -723,7 +970,7 @@ fn decimal_digits_upper_bound(value: &Nat) -> usize {
     if bits == 0 {
         return 1;
     }
-    ((bits as u128 * 30_103) / 100_000) as usize + 1
+    ((bits as u128 * LOG10_2_UPPER_NUMERATOR) / 100_000) as usize + 1
 }
 
 impl Default for Rat {
@@ -1029,5 +1276,25 @@ mod tests {
                 observed: value.bit_length()
             })
         );
+    }
+
+    #[test]
+    fn digit_preflight_reports_the_existing_category() {
+        assert_eq!(Limits::digits(10).check_digits(10), Ok(()));
+        let error = Limits::digits(10)
+            .check_digits(11)
+            .expect_err("eleven digits over a ten-digit budget");
+        assert_eq!(
+            error,
+            RationalError::DigitBudgetExceeded {
+                limit: 10,
+                observed: 11
+            }
+        );
+        assert_eq!(error.code(), "RationalDigitBudgetExceeded");
+        assert_eq!(error.category(), "BudgetExceeded");
+        assert_eq!(Limits::unlimited().check_digits(usize::MAX), Ok(()));
+        // A bit-only budget never refuses a digit preflight.
+        assert_eq!(Limits::bits(1).check_digits(usize::MAX), Ok(()));
     }
 }

@@ -191,6 +191,131 @@ def main() -> int:
         )
         scenario.write("lovelace-systems/src/lib.rs", text)
 
+    rat_representation = (
+        "\nuse lovelace_int::Int;\nuse lovelace_nat::Nat;\n\n"
+        "pub struct Rat { pub num: Int, pub den: Nat }\n\n"
+        "impl Rat {\n"
+        "    pub fn add(&self, other: &Rat) -> Rat { other.clone() }\n"
+        "    pub fn sub(&self, other: &Rat) -> Rat { other.clone() }\n"
+        "    pub fn mul(&self, other: &Rat) -> Rat { other.clone() }\n"
+        "    pub fn div(&self, other: &Rat) -> Rat { other.clone() }\n"
+        "}\n"
+    )
+
+    def duplicate_in_owner_crate(scenario: Scenario) -> None:
+        # lovelace-lang owns numeric promotion, not the Rat representation. A whole-crate numeric
+        # owner exemption let this pass; abstraction-specific ownership must reject it.
+        scenario.append("lovelace-lang/src/lib.rs", rat_representation)
+
+    def duplicate_rat_in_owner_crate(scenario: Scenario) -> None:
+        # lovelace-real owns the Real abstraction, not the Rat representation.
+        scenario.append("lovelace-real/src/lib.rs", rat_representation)
+
+    def duplicate_real_in_owner_crate(scenario: Scenario) -> None:
+        # Even the owning crate may declare a reserved name once: a second Real declaration is a
+        # duplicate representation of the same abstraction.
+        scenario.append(
+            "lovelace-real/src/lib.rs",
+            "\npub struct Real { pub value: u64 }\n",
+        )
+
+    def split_impl(scenario: Scenario) -> None:
+        # Four arithmetic methods on a renamed representation, two per impl block. The per-block
+        # maximum is 2; the summed count is 4 and must reach the arithmetic-impl rule.
+        scenario.append(
+            "lovelace-systems/src/lib.rs",
+            "\nuse lovelace_int::Int;\nuse lovelace_nat::Nat;\n\n"
+            "pub struct SplitPair { pub num: Int, pub den: Nat }\n\n"
+            "impl SplitPair {\n"
+            "    pub fn add(&self, other: &SplitPair) -> SplitPair { other.clone() }\n"
+            "    pub fn sub(&self, other: &SplitPair) -> SplitPair { other.clone() }\n"
+            "}\n\n"
+            "impl SplitPair {\n"
+            "    pub fn mul(&self, other: &SplitPair) -> SplitPair { other.clone() }\n"
+            "    pub fn div(&self, other: &SplitPair) -> SplitPair { other.clone() }\n"
+            "}\n",
+        )
+
+    def generic_arithmetic_trait(scenario: Scenario) -> None:
+        # `impl<T> std::ops::Add for Wrapper<T>` and `... for &Wrapper<T>`: the parser must strip
+        # the leading generics and resolve both targets to Wrapper, not to T.
+        scenario.append(
+            "lovelace-systems/src/lib.rs",
+            "\npub struct Wrapper<T>(pub T);\n\n"
+            "impl<T> std::ops::Add for Wrapper<T> {\n"
+            "    type Output = Wrapper<T>;\n"
+            "    fn add(self, other: Self) -> Self { other }\n"
+            "}\n\n"
+            "impl<T> std::ops::Add for &Wrapper<T> {\n"
+            "    type Output = Wrapper<T>;\n"
+            "    fn add(self, other: Self) -> Self { other }\n"
+            "}\n",
+        )
+
+    def free_function_kernel(scenario: Scenario) -> None:
+        # A competing rational kernel expressed as free functions instead of inherent methods.
+        scenario.append(
+            "lovelace-systems/src/lib.rs",
+            "\npub fn rat_add(left: u64, right: u64) -> u64 { left + right }\n"
+            "pub fn fraction_mul(left: u64, right: u64) -> u64 { left * right }\n"
+            "pub fn rational_div(left: u64, right: u64) -> u64 { left / right }\n"
+            "pub fn q_gcd(left: u64, right: u64) -> u64 { left }\n",
+        )
+
+    def renamed_representation(scenario: Scenario) -> None:
+        # Quantity is not a reserved name, left/right is not a numeric field pair, and each impl
+        # block holds two arithmetic methods: only the summed method count can see this shape.
+        scenario.append(
+            "lovelace-systems/src/lib.rs",
+            "\nuse lovelace_int::Int;\nuse lovelace_nat::Nat;\n\n"
+            "pub struct Quantity { pub left: Int, pub right: Nat }\n\n"
+            "impl Quantity {\n"
+            "    pub fn add(&self, other: &Quantity) -> Quantity { other.clone() }\n"
+            "    pub fn sub(&self, other: &Quantity) -> Quantity { other.clone() }\n"
+            "}\n\n"
+            "impl Quantity {\n"
+            "    pub fn mul(&self, other: &Quantity) -> Quantity { other.clone() }\n"
+            "    pub fn div(&self, other: &Quantity) -> Quantity { other.clone() }\n"
+            "}\n",
+        )
+
+    def broad_exception_scope(scenario: Scenario) -> None:
+        # A complete, otherwise-valid exception whose scope is `lovelace-*`. The old checker only
+        # rejected the literal "*", so this waived a real violation and the gate exited 0.
+        scenario.write(
+            "docs/adr/999-exception-scope-probe.md",
+            "# 999 - exception scope probe\n\n"
+            "Fixture-only decision record used to prove that a broad architecture-exception scope\n"
+            "is rejected even when every required field is present.\n",
+        )
+        scenario.append("lovelace-systems/src/lib.rs", "\npub struct Rat;\n")
+        policy = scenario.policy()
+        policy["exceptions"] = [
+            {
+                "id": "EX-BROAD-1",
+                "rule": "duplicate-numeric-type",
+                "adr": "docs/adr/999-exception-scope-probe.md",
+                "rationale": "Temporary probe of exception scope matching in the review fixture.",
+                "reviewer": "review-rnl-001",
+                "removalPlan": "Remove this exception and the probe type after review.",
+                "scope": ["lovelace-*"],
+            }
+        ]
+        scenario.write_policy(policy)
+
+    def unresolved_arithmetic_impl(scenario: Scenario) -> None:
+        # The arithmetic trait name is present but the impl target is the generic parameter T, so
+        # the analysis cannot decide whose representation this is. That must be review-required,
+        # never a silent pass.
+        scenario.append(
+            "lovelace-systems/src/lib.rs",
+            "\npub struct Placeholder<T>(pub T);\n\n"
+            "impl<T> Add for T {\n"
+            "    type Output = T;\n"
+            "    fn add(self, other: Self) -> Self { other }\n"
+            "}\n",
+        )
+
     expect("valid", 0, "violations=0", valid)
     expect("duplicate-rational", 1, "duplicate-numeric-type", duplicate_rational)
     expect("duplicate-trait", 1, "duplicate-arithmetic-trait", duplicate_trait)
@@ -207,8 +332,49 @@ def main() -> int:
         "specialization-not-delegating",
         non_delegating_specialization,
     )
+    expect(
+        "duplicate-in-owner-crate",
+        1,
+        "duplicate-numeric-type",
+        duplicate_in_owner_crate,
+    )
+    expect(
+        "duplicate-rat-in-owner-crate",
+        1,
+        "duplicate-numeric-type",
+        duplicate_rat_in_owner_crate,
+    )
+    expect(
+        "duplicate-real-in-owner-crate",
+        1,
+        "duplicate-numeric-type",
+        duplicate_real_in_owner_crate,
+    )
+    expect("split-impl", 1, "duplicate-arithmetic-impl", split_impl)
+    expect(
+        "generic-arithmetic-trait",
+        1,
+        "duplicate-arithmetic-trait",
+        generic_arithmetic_trait,
+    )
+    expect("free-function-kernel", 1, "free-function-kernel", free_function_kernel)
+    expect(
+        "renamed-representation",
+        1,
+        "duplicate-numeric-representation",
+        renamed_representation,
+    )
+    expect(
+        "broad-exception-scope", 1, "unauthorized-exception", broad_exception_scope
+    )
+    expect(
+        "unresolved-arithmetic-impl",
+        1,
+        "review-required",
+        unresolved_arithmetic_impl,
+    )
 
-    if executed < 11:
+    if executed < 20:
         print(f"FAIL: only {executed} mutation scenarios executed", file=sys.stderr)
         return 1
     if failures:

@@ -4,8 +4,9 @@ This document is normative. It defines which crate owns each foundational numeri
 may consume it, which dependency directions are legal, and how an exception is granted. The
 machine-readable form is [`tools/architecture-policy.json`](../tools/architecture-policy.json); the
 checker [`tools/check-architecture.py`](../tools/check-architecture.py) interprets that policy and
-runs in CI as the `architecture-policy` job. A statement here that the checker cannot decide is a
-review criterion, not a suggestion.
+runs in CI as the `architecture-policy` job. Ownership is abstraction-specific: the policy names each
+reserved type and the crate that owns it, not a list of crates exempt from the rule. A statement here
+that the checker cannot decide is a review criterion, not a suggestion.
 
 ## 1. Ownership matrix
 
@@ -20,8 +21,15 @@ review criterion, not a suggestion.
 | Language numeric promotion and dispatch | `lovelace-lang` | execution hosts |
 | Generic arrays | `lovelace-array` | `lovelace-lang` |
 
-Exactly one crate owns each abstraction. A domain crate may define a formula, a model, a unit or an
-algorithm; it may not define a second general-purpose arithmetic type.
+Exactly one crate owns each abstraction, and the policy expresses that per type, not per crate.
+`reservedTypeNames` maps every foundational type name to its owner — `Nat`, `Int`, the rational names
+(`Rat`, `Rational`, `Fraction`, `BigRational`, `BigFraction`, `Frac`, `Q`), `Real` and `NdArray`.
+`permittedRepresentations` names the only local representations a crate may declare: `Complex` in
+`lovelace-lang` and `Fixed` in `lovelace-real`. The retired `duplicateDetection.ownerCrates` key is
+rejected, so no crate is exempt as a whole: `lovelace-rational` may declare the canonical `Rat` once
+and still fails on a second `Rat`, and a numeric owner such as `lovelace-real` fails on a `Rat` or a
+duplicate `Real`. A domain crate may define a formula, a model, a unit or an algorithm; it may not
+define a second general-purpose arithmetic type.
 
 ## 2. Permitted dependency direction
 
@@ -61,7 +69,8 @@ intermediate crate. The rules the checker enforces are:
 
 The following are violations even when every test passes and the arithmetic is correct:
 
-- a second numerator/denominator type outside an owner crate;
+- a second numerator/denominator type for an abstraction whose reserved name is owned elsewhere,
+  including a second copy inside the owning crate;
 - a `type` alias that renames a competing numeric type;
 - a general-purpose `add`/`sub`/`mul`/`div`/`neg` implementation on a numeric representation
   outside the owning crate;
@@ -71,8 +80,17 @@ The following are violations even when every test passes and the arithmetic is c
 - a silent fallback (`unwrap_or_else(...::zero)`, an empty result, a fabricated success) after a
   failed fundamental arithmetic operation.
 
-The checker inspects declarations, field shapes, inherent methods and trait implementations. It
-does not reject arithmetic expressions, formulas or typed units.
+Three declaration shapes need care. A numeric implementation split across two `impl` blocks is
+counted as one implementation: method counts are summed, not measured per block. An arithmetic trait
+implemented for a generic wrapper is resolved to the wrapper type, and an impl whose target is empty
+or one of its own generic parameters cannot be classified; that header is reported as
+`review-required` rather than silently passing. A free function that implements a kernel operation
+(`rat_add`, `fraction_mul`, `rational_div`, `q_gcd`-style names) is checked against
+`freeFunctionPatterns` and may only appear in a crate listed in `freeFunctionOwners`
+(`lovelace-rational`).
+
+The checker inspects declarations, field shapes, inherent methods, free functions and trait
+implementations. It does not reject arithmetic expressions, formulas or typed units.
 
 ## 4. Legitimate domain types
 
@@ -108,13 +126,15 @@ An architecture exception is an architectural change, not a way to make a check 
    cannot be improved instead;
 2. a `rationale` of at least reviewable length;
 3. a named `reviewer`;
-4. a `scope` that is a narrow list of paths or crates — never `"*"`;
+4. a `scope` that is a narrow list of exact paths or crate names; the checker rejects every entry
+   containing `*`, `?`, `[` or `]`, so a wildcard waiver cannot be granted;
 5. a `removalPlan` describing when and how the temporary duplication disappears;
 6. a corresponding entry in `exceptions` in `tools/architecture-policy.json`.
 
-The checker rejects an exception missing any of those (`unauthorized-exception`). Suppressing a
-failing rule, deleting a test, weakening an assertion, or editing an owner list without an ADR is
-not an exception; it is the failure the policy exists to prevent.
+The checker rejects an exception missing any of those (`unauthorized-exception`), and it rejects a
+wildcard scope even when the rest of the entry is valid. Suppressing a failing rule, deleting a test,
+weakening an assertion, or editing an owner list without an ADR is not an exception; it is the failure
+the policy exists to prevent.
 
 ## 6. New-crate declaration
 
@@ -140,17 +160,34 @@ python tools/test-architecture-gates.py
 
 The checker exits `2` when it cannot perform the scan (missing policy, unparsable policy, no
 workspace, no source files, missing required crate or file). It exits `1` on a violation. It never
-reports an empty scan as success.
+reports an empty scan as success. On the real workspace it reports `crates=14 files=332 violations=0`,
+and the valid fixture reports `crates=7 files=7 violations=0`.
 
-The mutation suite (`tools/test-architecture-gates.py`) injects each required forbidden change into
-an isolated fixture and requires the checker to fail, and runs a valid fixture containing domain
-formulas, typed units, a canonical alias and legal edges. A mutation that stops failing fails the
-suite.
+The mutation suite (`tools/test-architecture-gates.py`) has **20 scenarios**: the 11 original rules
+plus nine added for the review remediation — a duplicate `Rat` in a numeric-owner crate
+(`lovelace-lang` and `lovelace-real`), a second `Real` in `lovelace-real`, a split `impl`, a generic
+arithmetic trait, a free-function kernel, a renamed representation, a broad exception scope, and an
+unclassifiable arithmetic impl. Each scenario injects the forbidden change into an isolated fixture
+and requires the checker to fail with the named rule; the valid fixture contains domain formulas,
+typed units, a canonical alias, a delegating specialization and the permitted `Complex`
+representation. A scenario that stops failing fails the suite, and the suite minimum is 20 so
+deleting one is itself a failure.
 
-Required status checks for `main` are the CI jobs `architecture-policy`, `numerical-kernel`,
-`windows` (workspace tests and corpus) and `docs` (both OS variants). The repository workflow
-defines them; branch protection must require them. A failing architecture check blocks the merge
-even when every application test passes.
+`main` protection requires the seven PR checks: both `architecture-policy` matrix legs,
+`numerical-kernel`, `windows` (workspace tests and corpus), `linux`, and both `docs` matrix legs.
+Protection also requires branches to be up to date before merging, applies to administrators
+(`enforce_admins`), and disables force pushes and branch deletion. A negative-probe PR #10 carrying a
+deliberately forbidden Systems rational failed both architecture checks, and `gh pr merge` was refused
+by the base-branch policy; a failing architecture check therefore blocks the merge even when every
+application test passes.
+
+`.github/CODEOWNERS` declares the owner for `tools/architecture-policy.json`,
+`tools/check-architecture.py`, `tools/test-architecture-gates.py`, the architecture fixtures, this
+document, ADR-011, `lovelace-rational/`, the rational and systems parity oracles, and
+`.github/workflows/ci.yml`. Required code-owner review is **not** enabled: the repository has one
+collaborator, who is the PR author, and GitHub does not allow self-approval. That is the user-approved
+limitation DEC-002; the status checks above are enforced independently, so the ownership declaration
+does not make the author's PR unmergeable.
 
 ## 8. Agent and contributor obligations
 

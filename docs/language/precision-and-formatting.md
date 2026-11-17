@@ -315,6 +315,13 @@ returned by `pi(30)` is a bounded computation; converting its stored digits back
 an exact representation of those digits, not of π. Passing `pi(30)` to a `sys_*` builtin is refused
 with `InvalidArgument`/`TypeMismatch` rather than silently promoting it to an exact model input.
 
+Exact model construction is transported the same way. `sys_station` and `sys_open`/`sys_closed`
+carry `exact_values` for their numerical parameters (`service_time`, `visits`, `service_demand`,
+and `arrival_rate` or `think_time`); the decimal field is only their projection for display. The
+systems adapter reads `exact_values` first and falls back to the decimal field only when the whole
+sidecar is absent, so `sys_station("cpu", 1/97, 1)` reaches `sys_analyze` with denominator 97
+instead of its truncated decimal projection.
+
 The same distinction is why `evalf(1/3, 10)` renders ten digits but is not the exact `1/3`:
 
 ```lovelace

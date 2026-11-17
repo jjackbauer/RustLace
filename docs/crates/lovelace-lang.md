@@ -104,6 +104,6 @@ builtin family is compiled in, so `Engine::new()` is the one entry point.
 
 ### Tests
 
-1737 `#[test]` functions in `src/`, organised as parity rounds (`suite_parity_batch.rs`,
+1742 `#[test]` functions in `src/`, organised as parity rounds (`suite_parity_batch.rs`,
 `roundNN_*.rs`), the falsification harness (`falsification_round46/`) and focused suites for
 printing, cancellation, complex arithmetic, DSP, MathIR and the panic sweep.

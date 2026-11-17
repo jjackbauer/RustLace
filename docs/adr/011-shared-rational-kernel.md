@@ -166,3 +166,33 @@ silently rounded into exact rationals.
   `cargo metadata` for the dependency graph and with mutation fixtures that prove each rule can
   fail; it is not a proof assistant. `docs/architecture-ownership.md` defines the review procedure
   for a case the syntax scan cannot decide.
+
+## Post-review correction (2026-11-17)
+
+The independent review of PR #9 confirmed the decision above and required three corrections that do
+not change it. They are recorded here rather than by rewriting the original decision.
+
+- **Model transport is exact, not projected.** `sys_station` returns a `Station`, and `sys_open` and
+  `sys_closed` return a `QueueNetwork`; both now carry an additive `exact_values` record for their
+  numerical parameters (service time, visits and service demand; or arrival rate and think time).
+  The language adapter's `parse_station` and `parse_network` read `exact_values` first and fall back
+  to the decimal field only when the whole sidecar is absent. A present but malformed sidecar is
+  refused instead of falling back. `1/97` therefore survives `sys_station → sys_open → sys_analyze`
+  and `sys_station → sys_closed → sys_mva` with denominator 97; both end-to-end regressions are in
+  `lovelace-lang`.
+- **Ownership is abstraction-specific.** `duplicateDetection.ownerCrates` is retired and rejected
+  by the checker. `reservedTypeNames` names the owner of each foundational type, and
+  `permittedRepresentations` allows only `Complex` in `lovelace-lang` and `Fixed` in
+  `lovelace-real`. An owner crate may declare its canonical type once; a second `Rat` in
+  `lovelace-lang` or `lovelace-real`, or a second `Real` in `lovelace-real`, is a violation. The
+  mutation suite has 20 scenarios (11 original + 9 new), including split `impl`, generic arithmetic
+  trait, free-function kernel, renamed representation and broad exception scope; an arithmetic impl
+  whose target is empty or a generic parameter is reported as `review-required`.
+- **Code-owner review is declared, not enforced.** `.github/CODEOWNERS` declares ownership of the
+  policy, checker, mutation fixtures, this ADR, the ownership document and the rational kernel.
+  Required code-owner review is not enabled because the repository has one collaborator, the author
+  of PR #9, and GitHub does not allow self-approval; that is the user-approved limitation DEC-002.
+  Required status checks are enforced independently: all seven PR checks are required on `main`,
+  with strict up-to-date branches, `enforce_admins`, and force pushes and deletions disabled.
+
+The original decision, its alternatives and its consequences stand unchanged.

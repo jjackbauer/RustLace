@@ -41,10 +41,14 @@ stack is cross-platform and is not scoped to Windows: non-Windows targets add ef
 
 Exactly one general-purpose rational implementation exists. `lovelace-rational` owns it;
 `lovelace-symbolics::Rat`, `lovelace-systems::Q` and `lovelace-know::ExactNumber` are the same type or
-facades that own no arithmetic. `docs/architecture-ownership.md` is normative and
-`tools/architecture-policy.json` is its machine-readable form; `python tools/check-architecture.py`
-verifies the real `cargo metadata` graph and the source declarations, and the `architecture-policy`
-CI job is a required check.
+facades that own no arithmetic. Ownership is abstraction-specific: `reservedTypeNames` names each
+reserved type and its owner, `permittedRepresentations` allows only `Complex` in `lovelace-lang` and
+`Fixed` in `lovelace-real`, and the retired whole-crate `ownerCrates` key is rejected.
+`docs/architecture-ownership.md` is normative and `tools/architecture-policy.json` is its
+machine-readable form; `python tools/check-architecture.py` verifies the real `cargo metadata` graph
+and the source declarations, and the `architecture-policy` CI job is a required check. The
+architecture gate's mutation suite (`tools/test-architecture-gates.py`) has 20 scenarios, and an
+arithmetic impl whose target is empty or a generic parameter is reported as `review-required`.
 
 ## Fixed APIs
 
@@ -138,6 +142,14 @@ alone is never treated as proof of exact preservation. This is additive: the env
 version remains 2 and a record consumer ignores fields it does not read. A precision-limited `Real`
 is refused as a `sys_*` input (`InvalidArgument`/`TypeMismatch`) rather than promoted to an exact
 rational.
+
+The model-construction records carry the same sidecar. A `Station` has `exact_values` with
+`service_time`, `visits` and `service_demand`; a `QueueNetwork` has `arrival_rate` for an open
+workload or `think_time` for a closed one. `parse_station` and `parse_network` read those
+authoritative exact values and fall back to the decimal field only when the whole sidecar is absent;
+a present but malformed sidecar is refused rather than silently replaced by the projection. A `1/97`
+service time or think time therefore survives `sys_station → sys_open → sys_analyze` and
+`sys_station → sys_closed → sys_mva` with denominator 97.
 
 ## Rendering rules (from the corpus — these are the contract)
 

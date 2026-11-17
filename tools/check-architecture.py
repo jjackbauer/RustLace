@@ -77,6 +77,15 @@ class ImplBlock:
     delegates: bool
     path: str
     line: int
+    trait_text: str = ""
+    generic_parameters: list[str] = field(default_factory=list)
+
+
+@dataclass
+class FreeFunction:
+    name: str
+    path: str
+    line: int
 
 
 # ---------------------------------------------------------------------------------------------
@@ -225,9 +234,67 @@ def check_policy_shape(policy: dict) -> None:
             if edge not in crates:
                 raise ConfigError(f"allowedEdges for '{name}' names undeclared crate '{edge}'")
     detection = policy["duplicateDetection"]
-    for key in ("ownerCrates", "forbiddenTypeNames", "numericFieldPairs", "arithmeticMethods"):
+    for key in (
+        "reservedTypeNames",
+        "permittedRepresentations",
+        "forbiddenTypeNames",
+        "numericFieldPairs",
+        "arithmeticMethods",
+        "arithmeticTraits",
+        "freeFunctionPatterns",
+        "freeFunctionOwners",
+    ):
         if key not in detection:
             raise ConfigError(f"duplicateDetection is missing '{key}'")
+    if "ownerCrates" in detection:
+        raise ConfigError(
+            "duplicateDetection.ownerCrates is retired; a whole-crate exemption is not allowed. "
+            "Declare per-type ownership in 'reservedTypeNames' and explicit local exceptions in "
+            "'permittedRepresentations'."
+        )
+    reserved = detection["reservedTypeNames"]
+    if not isinstance(reserved, dict) or not reserved:
+        raise ConfigError("duplicateDetection.reservedTypeNames must be a non-empty object")
+    for name, owner in reserved.items():
+        if not isinstance(name, str) or not isinstance(owner, str) or not name or not owner:
+            raise ConfigError(
+                "duplicateDetection.reservedTypeNames must map type-name strings to crate-name strings"
+            )
+    forbidden = detection["forbiddenTypeNames"]
+    if not isinstance(forbidden, list) or not all(isinstance(name, str) for name in forbidden):
+        raise ConfigError("duplicateDetection.forbiddenTypeNames must be a list of type names")
+    for name in forbidden:
+        if name not in reserved:
+            raise ConfigError(
+                f"forbidden type name '{name}' has no owner in duplicateDetection.reservedTypeNames"
+            )
+    permitted = detection["permittedRepresentations"]
+    if not isinstance(permitted, dict):
+        raise ConfigError(
+            "duplicateDetection.permittedRepresentations must map a crate name to a list of type names"
+        )
+    for crate, names in permitted.items():
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise ConfigError(
+                f"duplicateDetection.permittedRepresentations['{crate}'] must be a list of type names"
+            )
+    patterns = detection["freeFunctionPatterns"]
+    if not isinstance(patterns, list) or not all(isinstance(pattern, str) for pattern in patterns):
+        raise ConfigError(
+            "duplicateDetection.freeFunctionPatterns must be a list of regular expressions"
+        )
+    for pattern in patterns:
+        try:
+            re.compile(pattern)
+        except re.error as error:
+            raise ConfigError(f"freeFunctionPatterns contains an invalid regular expression {pattern!r}: {error}")
+    owners = detection["freeFunctionOwners"]
+    if not isinstance(owners, list) or not all(isinstance(owner, str) for owner in owners):
+        raise ConfigError("duplicateDetection.freeFunctionOwners must be a list of crate names")
+    if patterns and not owners:
+        raise ConfigError(
+            "duplicateDetection.freeFunctionPatterns is non-empty but freeFunctionOwners names no owner"
+        )
 
 
 def check_graph(
@@ -527,8 +594,52 @@ def tuple_field_types(body: str) -> list[str]:
     return types
 
 
+def split_top_level(text: str, separator: str) -> list[str]:
+    """Split on `separator` outside any `<>`, `()`, `[]` or `{}` group."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in text:
+        if char in "<([{":
+            depth += 1
+        elif char in ">)]}":
+            depth = max(0, depth - 1)
+        if char == separator and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    return parts
+
+
+def split_impl_generics(header: str) -> tuple[list[str], str]:
+    """Strip a leading `impl<...>` parameter list and return (parameter names, rest)."""
+    text = header.lstrip()
+    if not text.startswith("<"):
+        return [], text
+    depth = 0
+    for index, char in enumerate(text):
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            # An arrow such as `Fn() -> u8` inside a bound is not the end of the generics.
+            if index > 0 and text[index - 1] == "-":
+                continue
+            depth -= 1
+            if depth == 0:
+                group = text[1:index]
+                names: list[str] = []
+                for part in split_top_level(group, ","):
+                    match = re.match(r"\s*(?:const\s+)?([A-Za-z_]\w*)", part)
+                    if match:
+                        names.append(match.group(1))
+                return names, text[index + 1 :].strip()
+    return [], text
+
+
 def split_impl_header(header: str) -> tuple[str | None, str]:
-    """Split `impl` header text into (trait, type). `for<'a>` bounds are not separators."""
+    """Split `impl` header text into (trait, type). A `for<'a>` binder is not a separator."""
     depth = 0
     for_index = -1
     index = 0
@@ -542,6 +653,10 @@ def split_impl_header(header: str) -> tuple[str | None, str]:
             before = header[index - 1] if index > 0 else " "
             after = header[index + 3] if index + 3 < len(header) else " "
             if not (before.isalnum() or before == "_") and not (after.isalnum() or after == "_"):
+                # `for<'a> Trait for Type`: the first `for` is a higher-ranked binder.
+                if after.strip().startswith("<"):
+                    index += 3
+                    continue
                 for_index = index
                 break
         index += 1
@@ -553,11 +668,18 @@ def split_impl_header(header: str) -> tuple[str | None, str]:
 
 
 def type_name_of(text: str) -> str:
-    identifiers = re.findall(r"[A-Za-z_]\w*", text)
+    """Resolve an impl self type to its principal name: `&Wrapper<T>` and `Wrapper<T>` -> Wrapper."""
+    cleaned = text.strip()
+    cleaned = re.sub(r"^[&(\s]+", "", cleaned)
+    cleaned = re.sub(r"^'\w+\s+", "", cleaned)
+    cleaned = re.sub(r"^(?:mut\s+)+", "", cleaned)
+    head = re.split(r"[<\s]", cleaned, maxsplit=1)[0]
+    identifiers = re.findall(r"[A-Za-z_]\w*", head)
     return identifiers[-1] if identifiers else ""
 
 
 def trait_name_of(text: str) -> str:
+    text = re.sub(r"^for\s*<[^>]*>\s*", "", text.strip())
     text = text.split("<", 1)[0]
     identifiers = re.findall(r"[A-Za-z_]\w*", text)
     return identifiers[-1] if identifiers else ""
@@ -586,7 +708,56 @@ def method_names(body: str) -> list[str]:
     return names
 
 
-def analyze_file(path: Path, relative: str, text: str) -> tuple[list[Declaration], list[ImplBlock]]:
+def free_functions(cleaned: str, relative: str) -> list[FreeFunction]:
+    """Collect `fn` items that are not methods inside an `impl` or `trait` body."""
+    found: list[FreeFunction] = []
+    stack: list[str] = []
+    pending: str | None = None
+    index = 0
+    while index < len(cleaned):
+        char = cleaned[index]
+        if char == "{":
+            stack.append(pending or "block")
+            pending = None
+            index += 1
+            continue
+        if char == "}":
+            if stack:
+                stack.pop()
+            pending = None
+            index += 1
+            continue
+        if char == ";":
+            pending = None
+            index += 1
+            continue
+        if char.isalpha() or char == "_":
+            match = re.match(r"[A-Za-z_]\w*", cleaned[index:])
+            if match is None:  # pragma: no cover - a letter always starts an identifier
+                index += 1
+                continue
+            word = match.group(0)
+            if word in ("impl", "trait"):
+                pending = word
+            elif word == "fn":
+                name_match = re.match(r"fn\s+([A-Za-z_]\w*)", cleaned[index:])
+                if name_match and "impl" not in stack and "trait" not in stack:
+                    found.append(
+                        FreeFunction(
+                            name=name_match.group(1),
+                            path=relative,
+                            line=line_of(cleaned, index),
+                        )
+                    )
+            index += len(word)
+            continue
+        index += 1
+    return found
+
+
+def analyze_file(
+    path: Path, relative: str, text: str
+) -> tuple[list[Declaration], list[ImplBlock], list[FreeFunction]]:
     cleaned = clean_rust_source(text)
     declarations: list[Declaration] = []
     impls: list[ImplBlock] = []
@@ -659,10 +830,9 @@ def analyze_file(path: Path, relative: str, text: str) -> tuple[list[Declaration
         header = cleaned[match.end() : brace].strip()
         body_close = match_delimiter(cleaned, brace, "{", "}")
         body = cleaned[brace + 1 : body_close]
+        generic_parameters, header = split_impl_generics(header)
         trait, type_part = split_impl_header(header)
         type_name = type_name_of(type_part)
-        if not type_name:
-            continue
         methods = method_names(body)
         # A permitted specialization must delegate a numerical operation to the canonical field,
         # not merely clone it. Require a canonical arithmetic method call on the wrapped value.
@@ -681,9 +851,11 @@ def analyze_file(path: Path, relative: str, text: str) -> tuple[list[Declaration
                 delegates=delegates,
                 path=relative,
                 line=line_of(cleaned, match.start()),
+                trait_text=trait or "",
+                generic_parameters=generic_parameters,
             )
         )
-    return declarations, impls
+    return declarations, impls, free_functions(cleaned, relative)
 
 
 def scan_crate_sources(
@@ -691,10 +863,11 @@ def scan_crate_sources(
     directory: Path,
     root: Path,
     violations: list[Violation],
-) -> int:
+) -> tuple[int, list[Declaration], list[ImplBlock], list[FreeFunction]]:
     files = 0
     declarations: list[Declaration] = []
     impls: list[ImplBlock] = []
+    functions: list[FreeFunction] = []
     for path in sorted(directory.rglob("*.rs")):
         if any(part in SKIP_DIRS for part in path.relative_to(directory).parts):
             continue
@@ -703,13 +876,13 @@ def scan_crate_sources(
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
             raise ConfigError(f"cannot read source file {relative}: {error}")
-        file_declarations, file_impls = analyze_file(path, relative, text)
+        file_declarations, file_impls, file_functions = analyze_file(path, relative, text)
         declarations.extend(file_declarations)
         impls.extend(file_impls)
+        functions.extend(file_functions)
         files += 1
 
-    detection = None
-    return files, declarations, impls
+    return files, declarations, impls, functions
 
 
 # ---------------------------------------------------------------------------------------------
@@ -739,6 +912,23 @@ def numeric_field_match(
     return len(typed) >= 2 and arithmetic_method_count >= minimum
 
 
+def unresolved_arithmetic_impl(impl: ImplBlock, arithmetic_traits: set[str]) -> str | None:
+    """Return why an arithmetic impl cannot be attributed, or None when it is decidable.
+
+    A conservative review gate: when the header names an arithmetic trait but the parsed target is
+    empty or is one of the impl's own generic parameters, the checker cannot tell whose
+    representation the impl belongs to. That must be a named violation, never a silent pass.
+    """
+    mentioned = set(re.findall(r"[A-Za-z_]\w*", impl.trait_text)) & arithmetic_traits
+    if not mentioned:
+        return None
+    if not impl.type_name:
+        return "the impl target type could not be resolved"
+    if impl.type_name in impl.generic_parameters:
+        return f"the impl target '{impl.type_name}' is one of the impl's generic parameters"
+    return None
+
+
 def check_duplicates(
     policy: dict,
     declarations: dict[str, list[Declaration]],
@@ -746,46 +936,103 @@ def check_duplicates(
     violations: list[Violation],
 ) -> None:
     detection = policy["duplicateDetection"]
-    owners = set(detection["ownerCrates"])
-    forbidden_names = set(detection["forbiddenTypeNames"])
+    reserved = dict(detection["reservedTypeNames"])
     arithmetic_methods = set(detection["arithmeticMethods"])
     arithmetic_traits = set(detection["arithmeticTraits"])
     minimum = int(detection.get("minimumArithmeticMethods", 4))
+    permitted = {
+        crate: set(names)
+        for crate, names in detection.get("permittedRepresentations", {}).items()
+    }
     specializations = {
         (entry["crate"], entry["type"])
         for entry in detection.get("permittedSpecializations", [])
         if "crate" in entry and "type" in entry
     }
-    aliases = {
-        (entry["crate"], entry["name"], entry.get("target", ""))
-        for entry in detection.get("permittedAliases", [])
-    }
 
+    # A reserved name has exactly one owning crate, and the owner may declare the canonical type
+    # once. Anything else is a competing representation even when the declared crate is a numeric
+    # owner for a different abstraction: there is no whole-crate exemption.
+    reserved_declarations: dict[str, list[tuple[str, Declaration]]] = {}
     for crate, crate_declarations in declarations.items():
-        if not crate_declarations or crate in owners:
-            continue
-        by_name = {declaration.name: declaration for declaration in crate_declarations}
-        crate_impls = impls.get(crate, [])
-
-        method_counts: dict[str, int] = {}
-        for impl in crate_impls:
-            if impl.type_name in by_name:
-                count = len(set(impl.methods) & arithmetic_methods)
-                method_counts[impl.type_name] = max(method_counts.get(impl.type_name, 0), count)
-
         for declaration in crate_declarations:
-            if declaration.name in forbidden_names:
+            reserved_declarations.setdefault(declaration.name, []).append((crate, declaration))
+    canonical: set[tuple[str, str, int]] = set()
+    for name, owner in reserved.items():
+        owner_declarations = [
+            (crate, declaration)
+            for crate, declaration in reserved_declarations.get(name, [])
+            if crate == owner
+        ]
+        if owner_declarations:
+            crate, declaration = owner_declarations[0]
+            canonical.add((crate, declaration.path, declaration.line))
+        for crate, declaration in reserved_declarations.get(name, []):
+            if (crate, declaration.path, declaration.line) in canonical:
+                continue
+            if name in permitted.get(crate, set()):
+                continue
+            if crate == owner:
+                message = (
+                    f"crate '{crate}' declares reserved numeric type '{name}' more than once; "
+                    "abstraction-specific ownership allows the canonical declaration once"
+                )
+            else:
+                message = (
+                    f"crate '{crate}' declares reserved numeric type '{name}'; "
+                    f"the canonical implementation belongs to {owner}"
+                )
+            violations.append(
+                Violation(
+                    "duplicate-numeric-type",
+                    declaration.path,
+                    declaration.line,
+                    message,
+                    crate,
+                )
+            )
+
+    # An arithmetic impl the syntax analysis cannot attribute is a mandatory review, not a pass.
+    for crate, crate_impls in impls.items():
+        for impl in crate_impls:
+            reason = unresolved_arithmetic_impl(impl, arithmetic_traits)
+            if reason:
                 violations.append(
                     Violation(
-                        "duplicate-numeric-type",
-                        declaration.path,
-                        declaration.line,
-                        f"crate '{crate}' declares numeric type '{declaration.name}'; the canonical implementation belongs to {policy['numericOwners'].get('rational', 'lovelace-rational')}",
+                        "review-required",
+                        impl.path,
+                        impl.line,
+                        f"crate '{crate}' has an arithmetic impl that the checker cannot "
+                        f"attribute: {reason}",
                         crate,
                     )
                 )
+
+    for crate, crate_declarations in declarations.items():
+        if not crate_declarations:
+            continue
+        by_name = {declaration.name: declaration for declaration in crate_declarations}
+        crate_impls = impls.get(crate, [])
+        approved_names = permitted.get(crate, set())
+        canonical_names = {
+            declaration.name
+            for declaration in crate_declarations
+            if (crate, declaration.path, declaration.line) in canonical
+        }
+
+        # Method counts are summed over every impl block for the type: splitting the same methods
+        # across blocks must not lower the count below the minimum.
+        method_totals: dict[str, int] = {}
+        for impl in crate_impls:
+            if impl.type_name in by_name:
+                count = len(set(impl.methods) & arithmetic_methods)
+                method_totals[impl.type_name] = method_totals.get(impl.type_name, 0) + count
+
+        for declaration in crate_declarations:
+            if declaration.name in canonical_names or declaration.name in approved_names:
+                continue
             if numeric_field_match(
-                declaration, detection, method_counts.get(declaration.name, 0)
+                declaration, detection, method_totals.get(declaration.name, 0)
             ):
                 violations.append(
                     Violation(
@@ -800,9 +1047,15 @@ def check_duplicates(
         for impl in crate_impls:
             if impl.type_name not in by_name:
                 continue
-            permitted = (crate, impl.type_name) in specializations
+            declaration = by_name[impl.type_name]
+            approved = (
+                impl.type_name in canonical_names or impl.type_name in approved_names
+            )
+            specialization = (crate, impl.type_name) in specializations
             if impl.trait_name in arithmetic_traits:
-                if permitted:
+                if approved:
+                    pass
+                elif specialization:
                     if not impl.delegates:
                         violations.append(
                             Violation(
@@ -823,22 +1076,50 @@ def check_duplicates(
                             crate,
                         )
                     )
-            count = len(set(impl.methods) & arithmetic_methods)
-            declaration = by_name[impl.type_name]
-            if count >= minimum and (
-                numeric_field_match(declaration, detection, count)
-                or declaration.name in forbidden_names
+            total = method_totals.get(impl.type_name, 0)
+            if total >= minimum and (
+                numeric_field_match(declaration, detection, total)
+                or declaration.name in reserved
             ):
-                if not permitted:
+                if not approved and not specialization:
                     violations.append(
                         Violation(
                             "duplicate-arithmetic-impl",
                             impl.path,
                             impl.line,
-                            f"crate '{crate}' implements {count} scalar arithmetic methods on '{impl.type_name}' outside the canonical owners",
+                            f"crate '{crate}' implements {total} scalar arithmetic methods on '{impl.type_name}' outside the canonical owners",
                             crate,
                         )
                     )
+
+
+def check_free_functions(
+    policy: dict,
+    functions: dict[str, list[FreeFunction]],
+    violations: list[Violation],
+) -> None:
+    """Reject canonical numeric-kernel logic implemented as a free function outside its owner."""
+    detection = policy["duplicateDetection"]
+    patterns = [re.compile(pattern) for pattern in detection.get("freeFunctionPatterns", [])]
+    owners = set(detection.get("freeFunctionOwners", []))
+    if not patterns:
+        return
+    for crate in sorted(functions):
+        if crate in owners:
+            continue
+        for function in functions[crate]:
+            for pattern in patterns:
+                if pattern.search(function.name):
+                    violations.append(
+                        Violation(
+                            "free-function-kernel",
+                            function.path,
+                            function.line,
+                            f"crate '{crate}' defines free function '{function.name}' matching a canonical numeric-kernel name; free-function kernels belong to {', '.join(sorted(owners))}",
+                            crate,
+                        )
+                    )
+                    break
 
 
 # ---------------------------------------------------------------------------------------------
@@ -859,8 +1140,19 @@ def validate_exceptions(policy: dict, root: Path, violations: list[Violation]) -
         if missing:
             reasons.append("missing " + ", ".join(missing))
         scope = exception.get("scope")
-        if not isinstance(scope, list) or not scope or "*" in scope:
-            reasons.append("scope must be a non-empty list of narrow paths/crates (not '*')")
+        if not isinstance(scope, list) or not scope:
+            reasons.append("scope must be a non-empty list of narrow paths/crates")
+        else:
+            broad = [
+                str(entry)
+                for entry in scope
+                if not isinstance(entry, str) or any(character in entry for character in "*?[]")
+            ]
+            if broad:
+                reasons.append(
+                    "scope entries must be exact paths or crate names, not wildcard patterns "
+                    "('*', '?', '[' or ']'): " + ", ".join(broad)
+                )
         adr = exception.get("adr")
         if adr:
             adr_path = root / adr
@@ -1003,6 +1295,7 @@ def run(root: Path, metadata_path: str | None) -> tuple[int, dict]:
 
     declarations: dict[str, list[Declaration]] = {}
     impls: dict[str, list[ImplBlock]] = {}
+    functions: dict[str, list[FreeFunction]] = {}
     files_scanned = 0
     packages_by_name = {package["name"]: package for package in metadata["packages"]}
     for crate in sorted(workspace_names):
@@ -1012,12 +1305,13 @@ def run(root: Path, metadata_path: str | None) -> tuple[int, dict]:
         directory = package_manifest_dir(root, package)
         if not directory.is_dir():
             raise ConfigError(f"cannot locate the source directory for crate '{crate}': {directory}")
-        count, crate_declarations, crate_impls = scan_crate_sources(
+        count, crate_declarations, crate_impls, crate_functions = scan_crate_sources(
             crate, directory, root, violations
         )
         files_scanned += count
         declarations[crate] = crate_declarations
         impls[crate] = crate_impls
+        functions[crate] = crate_functions
 
     minimum_files = int(required.get("minimumSourceFiles", 1))
     if files_scanned < minimum_files:
@@ -1033,6 +1327,7 @@ def run(root: Path, metadata_path: str | None) -> tuple[int, dict]:
         )
 
     check_duplicates(policy, declarations, impls, violations)
+    check_free_functions(policy, functions, violations)
 
     # Forbidden locations: a file may re-export a canonical type, but it may not declare or
     # implement a numeric representation.

@@ -65,11 +65,13 @@ semantically comparable: it reduced with `Nat::gcd` after every operation.
 
 Against `systems::Q`, the consolidated kernel is:
 
-- about 2× faster for multiplication and division (cross-cancellation replaces the unreduced product;
-  the post-cancel GCD is no longer repeated),
-- about 6× faster for `pow(17)` (exponentiation by squaring replaces seventeen multiplications),
-- about the same for normalize and addition (within run-to-run variance; addition pays one extra
-  denominator GCD to use the least common multiple).
+- about 2× faster for multiplication (0.007 ms vs 0.003 ms; cross-cancellation replaces the unreduced
+  product and the post-cancel GCD is no longer repeated),
+- essentially unchanged for division by a negative divisor (0.116 ms vs 0.109 ms),
+- slower for addition (0.192 ms vs 0.239 ms), because it pays one extra denominator GCD to use the
+  least common multiple,
+- about 6× faster for `pow(17)` (exponentiation by squaring replaces seventeen multiplications), and
+- also about 2× faster for normalize (0.007 ms vs 0.003 ms).
 
 These measurements are from one host and one date. They are evidence for a review, not a CI timing
 gate: the repository has no wall-clock threshold, and a regression must be investigated with a new
