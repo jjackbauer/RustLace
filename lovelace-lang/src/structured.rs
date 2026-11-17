@@ -254,10 +254,8 @@ pub fn descriptor_json(info: &crate::registry::BuiltinInfo) -> Json {
         ),
         ("variadic", Json::Bool(info.variadic)),
         ("builtin", Json::Bool(true)),
+        ("module", Json::Str(info.module.to_string())),
     ];
-    if let Some(plugin) = info.plugin {
-        fields.push(("plugin", Json::Str(plugin.to_string())));
-    }
     fields.push(("category", Json::Str(info.category.to_string())));
     if let Some(summary) = info.summary {
         fields.push(("summary", Json::Str(summary.to_string())));

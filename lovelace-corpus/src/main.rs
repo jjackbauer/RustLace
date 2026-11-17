@@ -26,6 +26,7 @@ fn main() -> ExitCode {
     let files = [
         root.join("parity").join("corpus").join("lang.json"),
         root.join("parity").join("corpus").join("symbolics.json"),
+        root.join("parity").join("corpus").join("systems.json"),
     ];
 
     let mut examples = Vec::new();

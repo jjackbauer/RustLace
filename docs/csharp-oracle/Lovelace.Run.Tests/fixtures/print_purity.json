@@ -1,37 +1,37 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
-  "result": {
-    "kind": "Natural",
-    "display": "2",
-    "typed": "2 (Natural)",
-    "structured": {
-      "kind": "Natural",
-      "value": "2",
-      "exact": true
-    }
-  },
   "output": [
     "hello from the script"
   ],
+  "protocolVersion": 2,
+  "result": {
+    "display": "2",
+    "kind": "Natural",
+    "structured": {
+      "exact": true,
+      "kind": "Natural",
+      "value": "2"
+    },
+    "typed": "2 (Natural)"
+  },
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Natural",
       "display": "2",
+      "kind": "Natural",
+      "name": "_",
       "structured": {
+        "exact": true,
         "kind": "Natural",
-        "value": "2",
-        "exact": true
+        "value": "2"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

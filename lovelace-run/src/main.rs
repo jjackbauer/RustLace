@@ -14,7 +14,7 @@ use lovelace_lang::{Engine, registry, structured};
 
 use script_source::{ScriptSource, SourceIdentity, SourceOrigin};
 
-const PROTOCOL_VERSION: &str = "1";
+const PROTOCOL_VERSION: &str = "2";
 const SYMBOLIC_FORMAT_VERSION: &str = "#!lovelace-sym 1";
 const MATH_IR_VERSION: &str = "2";
 // A test-only clock hook: the cancellation rows that assert the ledger's verdict need the

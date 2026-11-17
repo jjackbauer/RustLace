@@ -6,7 +6,7 @@
 //! - `keywords`: [`crate::language::KEYWORDS`], the same table the syntax highlighter paints;
 //! - `functions`: every function the active engine's own snapshot reports. The real engine's
 //!   `Engine::capture_state` publishes its whole registry (builtins with their declared
-//!   parameter names, host/plugin registrations and the user's `func` definitions), and the
+//!   parameter names and static module labels, and the user's `func` definitions), and the
 //!   desktop adapter copies it verbatim. Completion never re-implements that registry;
 //! - `variables`: the active document's variables from its last committed workspace
 //!   snapshot, with the kind the engine reported (`Natural`, `Text`, `Record`, ...);
@@ -27,8 +27,7 @@ use crate::engine::{EngineFunction, EngineVariable};
 pub enum CompletionKind {
     /// A variable from the active document's last committed snapshot.
     Variable,
-    /// A function the engine resolves that is not a builtin (a user `func`, a host or a
-    /// plugin registration).
+    /// A function the engine resolves that is not a builtin (a user `func` definition).
     Function,
     /// A builtin from the engine's registry.
     Builtin,
@@ -393,7 +392,7 @@ mod tests {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin: true,
-            plugin: None,
+            module: "Core".to_string(),
             summary: None,
         }
     }
@@ -403,7 +402,7 @@ mod tests {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin: false,
-            plugin: None,
+            module: "User".to_string(),
             summary: None,
         }
     }

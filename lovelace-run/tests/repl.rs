@@ -27,6 +27,7 @@ fn help_overview() -> String {
         "  Compilation      5 function(s)",
         "  DSP              16 function(s)",
         "  Introspection    5 function(s)",
+        "  Systems          10 function(s)",
         "",
         "help <category>       list a category's functions",
         "help <function>       signature, summary, examples",
@@ -52,12 +53,12 @@ fn help_solve() -> String {
         "",
         "Returns: SolveResult",
         "See also: solve_full, solve_system, linsolve",
-        "Plugin: Lovelace.Symbolics",
+        "Module: Symbolics",
     ]
     .join("\n")
 }
 
-const KNOWN_CATEGORIES: &str = "Language, Arrays, Numerics, Symbolics, Calculus, Solving, Linear Algebra, Optimization, Compilation, DSP, Introspection, Core";
+const KNOWN_CATEGORIES: &str = "Language, Arrays, Numerics, Symbolics, Calculus, Solving, Linear Algebra, Optimization, Compilation, DSP, Introspection, Systems, Core";
 
 /// Runs the REPL with `stdin` piped in and returns the transcript with every scaled elapsed
 /// suffix replaced by `[T]`.

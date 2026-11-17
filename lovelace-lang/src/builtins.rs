@@ -3727,6 +3727,7 @@ pub fn call(
                 other => Err(shape_failure("trace", 1, "a square matrix", other)),
             }
         }
+        name if name.starts_with("sys_") => crate::systems_family::call(engine, name, args, pos),
         _ => Err(unknown_function(name, pos)),
     }
 }

@@ -12,8 +12,8 @@
 | **Kind** | The type name a value reports, used in typed rendering `<display> (<Kind>)`. | `Value::kind_name` |
 | **Display precision** | The fractional-digit cap applied when a `Real` is *rendered*, separate from the computation budget. | `Engine::display_precision` |
 | **Precision** | The computation digit budget used by division, `sqrt`, `pi`, etc. Desktop default 30, engine default 1000. | `Engine::new`, `DEFAULT_PRECISION` |
-| **Modus / ModusHost** | The plugin seam: registration, descriptors, arity enforcement, typed payload channel, field kernels, load/lifecycle refusals. | `lovelace-lang/src/modus.rs` |
-| **ModusPlugin** | The trait a plugin implements: `name()`, `register(host)`, optional assumption context. | `ModusPlugin` |
+| **Library family** | A statically compiled group of builtins sharing the registry `module` label (`Core`, `DSP`, `Symbolics`, `MathIR`, `Systems`). A browsing label only; every family is available on `Engine::new()`. | `lovelace-lang/src/registry.rs` |
+| **Systems model** | A typed `QueueNetwork` in `lovelace-systems`: stations with a service discipline, visit ratio and service time, plus one open or closed workload. | `lovelace-systems/src/model.rs` |
 | **MathIR** | The intermediate representation the engine publishes for the runner and inspection (`--math-ir` version 2). | `lovelace-lang/src/mathir.rs` |
 | **IncrementalRunner / DocumentCache** | The desktop's per-document cache of statement results, keyed on normalized source, precision, dependency values and function revisions. | `lovelace-desktop/src/incremental.rs` |
 | **Statement prefix** | The committed prefix of a run: the statements that completed, in order. Panes and cache are consistent with exactly this prefix. | `WorkspaceSnapshot::committed_steps` |

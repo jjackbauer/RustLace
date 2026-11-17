@@ -12,6 +12,7 @@ lovelace-real = { path = "../lovelace-real" }
 lovelace-array = { path = "../lovelace-array" }
 lovelace-json = { path = "../lovelace-json" }
 lovelace-symbolics = { path = "../lovelace-symbolics" }
+lovelace-systems = { path = "../lovelace-systems" }
 
 [lints]
 workspace = true

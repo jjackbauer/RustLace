@@ -77,7 +77,7 @@ the host's tool — `grep -rn '<old text>' docs` in bash, or
 
 6. **Record the evidence in the change.** State the command, the observed output and the documents
    updated. "Docs updated" is not evidence; "the page's `sqrt(2)` example prints `1.414...` at 30
-   places and `cargo run --release -p lovelace-corpus` prints 214 passed" is.
+   places and `cargo run --release -p lovelace-corpus` prints 231 passed" is.
 
 ## Verify
 
@@ -117,6 +117,6 @@ add or rename a docs-sync test, and update this count with the test change.
 
 Observable success: every command exits 0; every filtered run reports its nonzero passed count with
 `0 failed`; the runners report their full example counts with no drift; the corpus reports
-`214 passed, 0 failed, 214 total`; and the output of the documented example, pasted beside the page,
+`231 passed, 0 failed, 231 total`; and the output of the documented example, pasted beside the page,
 is identical to the block the page shows. A page that was edited while its example still prints the
 old output has not been synced.

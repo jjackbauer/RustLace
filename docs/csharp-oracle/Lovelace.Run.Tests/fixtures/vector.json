@@ -1,125 +1,125 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Vector",
     "display": "[x, x, x]",
-    "typed": "[x, x, x] (Vector)",
+    "kind": "Vector",
     "structured": {
+      "elements": [
+        {
+          "canonical": "(sym x)",
+          "domain": "complex",
+          "exact": true,
+          "freeSymbols": [
+            "x"
+          ],
+          "kind": "Symbolic",
+          "nodeCount": 1,
+          "pretty": "x"
+        },
+        {
+          "canonical": "(sym x)",
+          "domain": "complex",
+          "exact": true,
+          "freeSymbols": [
+            "x"
+          ],
+          "kind": "Symbolic",
+          "nodeCount": 1,
+          "pretty": "x"
+        },
+        {
+          "canonical": "(sym x)",
+          "domain": "complex",
+          "exact": true,
+          "freeSymbols": [
+            "x"
+          ],
+          "kind": "Symbolic",
+          "nodeCount": 1,
+          "pretty": "x"
+        }
+      ],
       "kind": "Array",
-      "type": "Vector",
       "shape": [
         3
       ],
-      "elements": [
-        {
-          "kind": "Symbolic",
-          "pretty": "x",
-          "canonical": "(sym x)",
-          "domain": "complex",
-          "exact": true,
-          "nodeCount": 1,
-          "freeSymbols": [
-            "x"
-          ]
-        },
-        {
-          "kind": "Symbolic",
-          "pretty": "x",
-          "canonical": "(sym x)",
-          "domain": "complex",
-          "exact": true,
-          "nodeCount": 1,
-          "freeSymbols": [
-            "x"
-          ]
-        },
-        {
-          "kind": "Symbolic",
-          "pretty": "x",
-          "canonical": "(sym x)",
-          "domain": "complex",
-          "exact": true,
-          "nodeCount": 1,
-          "freeSymbols": [
-            "x"
-          ]
-        }
-      ]
-    }
+      "type": "Vector"
+    },
+    "typed": "[x, x, x] (Vector)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Vector",
       "display": "[x, x, x]",
+      "kind": "Vector",
+      "name": "_",
       "structured": {
+        "elements": [
+          {
+            "canonical": "(sym x)",
+            "domain": "complex",
+            "exact": true,
+            "freeSymbols": [
+              "x"
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
+          },
+          {
+            "canonical": "(sym x)",
+            "domain": "complex",
+            "exact": true,
+            "freeSymbols": [
+              "x"
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
+          },
+          {
+            "canonical": "(sym x)",
+            "domain": "complex",
+            "exact": true,
+            "freeSymbols": [
+              "x"
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 1,
+            "pretty": "x"
+          }
+        ],
         "kind": "Array",
-        "type": "Vector",
         "shape": [
           3
         ],
-        "elements": [
-          {
-            "kind": "Symbolic",
-            "pretty": "x",
-            "canonical": "(sym x)",
-            "domain": "complex",
-            "exact": true,
-            "nodeCount": 1,
-            "freeSymbols": [
-              "x"
-            ]
-          },
-          {
-            "kind": "Symbolic",
-            "pretty": "x",
-            "canonical": "(sym x)",
-            "domain": "complex",
-            "exact": true,
-            "nodeCount": 1,
-            "freeSymbols": [
-              "x"
-            ]
-          },
-          {
-            "kind": "Symbolic",
-            "pretty": "x",
-            "canonical": "(sym x)",
-            "domain": "complex",
-            "exact": true,
-            "nodeCount": 1,
-            "freeSymbols": [
-              "x"
-            ]
-          }
-        ]
+        "type": "Vector"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

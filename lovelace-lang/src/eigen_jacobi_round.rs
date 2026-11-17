@@ -103,7 +103,7 @@ fn registry_descriptor_pins_the_declared_surface() {
     assert_eq!(info.min_arity, 1);
     assert_eq!(info.parameter_count, 1);
     assert!(!info.variadic);
-    assert_eq!(info.plugin, None);
+    assert_eq!(info.module, "Core");
     assert_eq!(info.category, "Linear Algebra");
     assert_eq!(
         info.summary,

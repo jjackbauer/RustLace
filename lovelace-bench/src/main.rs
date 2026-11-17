@@ -3,6 +3,7 @@
 //!
 //! Usage: lovelace-bench <op> <digits> [reps]
 //!   op: add | sub | mul | div | factorial | tostring | parse | pi | sqrt | eig_sym_5 | eig_sym_8
+//!       | systems_mmc | systems_jackson | systems_mva
 //! Output: "RESULT <op> <digits> <mean_ms> <median_ms>" plus a DIGEST line so two runs can be
 //! compared byte for byte (used to prove that changing the thread budget changes nothing).
 
@@ -11,6 +12,9 @@ use std::time::Instant;
 use lovelace_lang::{Engine, Value};
 use lovelace_nat::Nat;
 use lovelace_real::Real;
+use lovelace_systems::{
+    NeverCancel, Q, QueueNetwork, ServiceDiscipline, SolverOptions, Station, Workload, analyze, mmc,
+};
 
 fn random_digits(n: usize, seed: u64) -> String {
     let mut state = seed | 1;
@@ -42,6 +46,9 @@ enum Work {
     Sqrt,
     EigSym5,
     EigSym8,
+    SystemsMmc,
+    SystemsJackson,
+    SystemsMva,
 }
 
 impl Work {
@@ -59,6 +66,9 @@ impl Work {
             "sqrt" => Work::Sqrt,
             "eig_sym_5" => Work::EigSym5,
             "eig_sym_8" => Work::EigSym8,
+            "systems_mmc" => Work::SystemsMmc,
+            "systems_jackson" => Work::SystemsJackson,
+            "systems_mva" => Work::SystemsMva,
             _ => return None,
         })
     }
@@ -159,7 +169,135 @@ impl Work {
                     None
                 }
             }
+            Work::SystemsMmc => {
+                let options = systems_options(digits);
+                let result = std::hint::black_box(
+                    mmc(&Q::from_i64(8), &Q::from_i64(5), 2, &options, &NeverCancel)
+                        .expect("stable M/M/2"),
+                );
+                if want_digest {
+                    let station = &result.stations[0];
+                    Some(format!(
+                        "{}|{}|{}",
+                        station
+                            .probability_waiting
+                            .as_ref()
+                            .map(|value| value.to_decimal(digits))
+                            .unwrap_or_default(),
+                        station.utilization.to_decimal(digits),
+                        station.response_time.to_decimal(digits)
+                    ))
+                } else {
+                    None
+                }
+            }
+            Work::SystemsJackson => {
+                let options = systems_options(digits);
+                let network = QueueNetwork::new(
+                    "bench",
+                    Workload::Open(lovelace_systems::OpenWorkload {
+                        arrival_rate: Q::from_i64(20),
+                    }),
+                    vec![
+                        Station::new(
+                            "api",
+                            ServiceDiscipline::FcfsSingleServer,
+                            ratio(1, 50),
+                            Q::one(),
+                        )
+                        .expect("station"),
+                        Station::new(
+                            "db",
+                            ServiceDiscipline::FcfsSingleServer,
+                            ratio(1, 100),
+                            Q::from_i64(2),
+                        )
+                        .expect("station"),
+                        Station::new(
+                            "search",
+                            ServiceDiscipline::FcfsSingleServer,
+                            ratio(1, 200),
+                            Q::from_i64(3),
+                        )
+                        .expect("station"),
+                        Station::new("cache", ServiceDiscipline::Delay, ratio(1, 20), Q::one())
+                            .expect("station"),
+                    ],
+                )
+                .expect("valid open network");
+                let result = std::hint::black_box(
+                    analyze(&network, &options, &NeverCancel).expect("solved"),
+                );
+                if want_digest {
+                    Some(format!(
+                        "{}|{}|{}",
+                        result.aggregate.response_time.to_decimal(digits),
+                        result.aggregate.occupancy.to_decimal(digits),
+                        result.stations[1].utilization.to_decimal(digits)
+                    ))
+                } else {
+                    None
+                }
+            }
+            Work::SystemsMva => {
+                let options = systems_options(digits);
+                let network = QueueNetwork::new(
+                    "bench",
+                    Workload::Closed(lovelace_systems::ClosedWorkload {
+                        population: 20,
+                        think_time: ratio(1, 10),
+                    }),
+                    vec![
+                        Station::new(
+                            "cpu",
+                            ServiceDiscipline::FcfsSingleServer,
+                            ratio(1, 100),
+                            Q::one(),
+                        )
+                        .expect("station"),
+                        Station::new(
+                            "disk",
+                            ServiceDiscipline::FcfsSingleServer,
+                            ratio(1, 50),
+                            Q::from_i64(2),
+                        )
+                        .expect("station"),
+                        Station::new("net", ServiceDiscipline::Delay, ratio(1, 500), Q::one())
+                            .expect("station"),
+                    ],
+                )
+                .expect("valid closed network");
+                let result = std::hint::black_box(
+                    analyze(&network, &options, &NeverCancel).expect("solved"),
+                );
+                if want_digest {
+                    Some(format!(
+                        "{}|{}|{}",
+                        result.aggregate.throughput.to_decimal(digits),
+                        result.aggregate.response_time.to_decimal(digits),
+                        result.aggregate.occupancy.to_decimal(digits)
+                    ))
+                } else {
+                    None
+                }
+            }
         }
+    }
+}
+
+/// A rational `numerator / denominator` for a benchmark model.
+fn ratio(numerator: i64, denominator: i64) -> Q {
+    Q::from_i64(numerator)
+        .div(&Q::from_i64(denominator))
+        .expect("a nonzero denominator")
+}
+
+/// The solver options a systems benchmark runs under: the digit argument is the rendering
+/// precision; the math is exact either way.
+fn systems_options(digits: usize) -> SolverOptions {
+    SolverOptions {
+        precision: digits.max(1),
+        ..SolverOptions::default()
     }
 }
 

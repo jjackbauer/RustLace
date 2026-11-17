@@ -112,6 +112,7 @@ pages=(
     dsp.md
     mathir.md
     symbolics.md
+    systems.md
 )
 
 page_listed() {

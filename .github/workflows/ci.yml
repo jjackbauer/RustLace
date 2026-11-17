@@ -108,10 +108,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy engine crates
-        run: cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics --all-targets
+        run: cargo clippy -p lovelace-lang -p lovelace-real -p lovelace-nat -p lovelace-symbolics -p lovelace-systems --all-targets
 
       - name: Test engine crates
-        run: cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics
+        run: cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics -p lovelace-systems
 
       # The desktop builds as the product on Linux: the same workbench, editor, panes, plot
       # rasteriser and journeys the Windows binary carries, rendered through glow.

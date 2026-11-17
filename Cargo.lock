@@ -1863,6 +1863,7 @@ dependencies = [
  "lovelace-lang",
  "lovelace-nat",
  "lovelace-real",
+ "lovelace-systems",
 ]
 
 [[package]]
@@ -1917,6 +1918,7 @@ dependencies = [
  "lovelace-nat",
  "lovelace-real",
  "lovelace-symbolics",
+ "lovelace-systems",
 ]
 
 [[package]]
@@ -1948,6 +1950,15 @@ version = "0.5.0"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
+]
+
+[[package]]
+name = "lovelace-systems"
+version = "0.5.0"
+dependencies = [
+ "lovelace-int",
+ "lovelace-nat",
+ "lovelace-real",
 ]
 
 [[package]]

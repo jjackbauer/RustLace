@@ -28,7 +28,8 @@ stack is cross-platform and is not scoped to Windows: non-Windows targets add ef
 | `lovelace-real` | nat, int | reals with exact periodic decimals |
 | `lovelace-array` | — | generic `NdArray<T>` + `Field` |
 | `lovelace-symbolics` | nat, int | expressions, rationals, cancellation token |
-| `lovelace-lang` | all of the above | lexer, parser, interpreter, builtins, Modus, MathIR |
+| `lovelace-systems` | nat, int, real | exact queueing/operations research: rational arithmetic, M/M/1, M/M/c, M/M/∞, laws, open Jackson networks, exact MVA, capacity, sweeps |
+| `lovelace-lang` | all of the above + systems | lexer, parser, interpreter, builtins, the static library families, MathIR |
 | `lovelace-run` | json, lang, int, real | the runner and wire envelope |
 | `lovelace-know` | json, nat, int | the behavioural graph |
 | `lovelace-corpus` | json, lang, symbolics | the parity gate and the property corpora |
@@ -76,8 +77,7 @@ stack is cross-platform and is not scoped to Windows: non-Windows targets add ef
 
     pub struct Engine;
     impl Engine {
-        pub fn new() -> Engine;                       // every builtin
-        pub fn new_bare() -> Engine;                  // core builtins only; plugins load explicitly
+        pub fn new() -> Engine;                       // every builtin; no loader, no gating
         pub fn set_precision(&mut self, decimals: usize);
         pub fn precision(&self) -> usize;
         pub fn set_display_precision(&mut self, decimals: usize);
@@ -135,8 +135,13 @@ it is never an empty pass.
 
 - **Runner** (`lovelace-run`): one JSON document on stdout and nothing else; three exit codes
   (0 success, 1 script/diagnostic failure, 2 usage); `--text` for human output; positions are UTF-16
-  code units. The envelope carries `protocolVersion` 1, `mathIrVersion` 2 and
+  code units. The envelope carries `protocolVersion` 2, `mathIrVersion` 2 and
   `symbolicFormatVersion "#!lovelace-sym 1"`.
+  **Protocol 2 migration:** `functions[].plugin` (a load family name such as
+  `"Lovelace.Symbolics"`) is removed; `functions[].module` is added with the static family label
+  (`"Core"`, `"DSP"`, `"Symbolics"`, `"MathIR"`, `"Systems"`). Every other field and every other
+  envelope key is unchanged. There is no plugin field anywhere in the v2 wire, and no field enables
+  or disables a builtin.
 - **Desktop** (`lovelace-desktop`): one active run per document; the run's final state (snapshot and
   incremental cache) settles before the terminal event; events from a stale source revision are
   ignored; a cache hit is reported as reused only after the cached typed value was applied.

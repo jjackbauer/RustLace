@@ -6542,9 +6542,14 @@ impl WorkbenchApp {
                                                     .color(theme::text()),
                                                 &parameters,
                                             );
-                                            let origin_hover = match &row.plugin {
-                                                Some(plugin) => format!("plugin: {plugin}"),
-                                                None => row.origin_label().to_string(),
+                                            let origin_hover = if row.origin == FunctionOrigin::Builtin {
+                                                format!(
+                                                    "{} · module: {}",
+                                                    row.origin_label(),
+                                                    row.module
+                                                )
+                                            } else {
+                                                row.origin_label().to_string()
                                             };
                                             table_cell(
                                                 ui,
@@ -6593,7 +6598,7 @@ impl WorkbenchApp {
                                             "functions",
                                             "Engine state was reset",
                                             "The functions table lists the engine builtins, \
-                                             plugins and your own func definitions.",
+                                             built-in families and your own func definitions.",
                                             note.clone(),
                                             "Run this document (Ctrl+Enter) to recompute its \
                                              variables and functions.",
@@ -6605,7 +6610,7 @@ impl WorkbenchApp {
                                     empty::EmptyState::new(
                                         "functions",
                                         "No functions committed",
-                                        "The functions table lists the engine builtins, plugins \
+                                        "The functions table lists the engine builtins, built-in families \
                                          and your own func definitions.",
                                         "The last run published no functions.",
                                         "Define one (for example func f(x) = x) and run again.",
@@ -6614,7 +6619,7 @@ impl WorkbenchApp {
                                 } else {
                                     empty::filtered(
                                         "functions",
-                                        "The functions table lists the engine builtins, plugins \
+                                        "The functions table lists the engine builtins, built-in families \
                                          and your own func definitions.",
                                         "No function name matches the filter.",
                                     )
@@ -9462,12 +9467,11 @@ fn table_cell(ui: &mut Ui, width: f32, text: RichText, full: &str) {
     );
 }
 
-/// The visible origin colour: core builtins are quiet, plugin builtins warn-coloured and user
-/// definitions take the accent so the three rows are distinguishable at a glance.
+/// The visible origin colour: builtins are quiet and user definitions take the accent so the two
+/// rows are distinguishable at a glance.
 fn origin_color(origin: FunctionOrigin) -> Color32 {
     match origin {
         FunctionOrigin::Builtin => theme::dim(),
-        FunctionOrigin::Plugin => theme::warning(),
         FunctionOrigin::User => theme::accent(),
     }
 }
@@ -11569,7 +11573,7 @@ mod tests {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin: true,
-            plugin: None,
+            module: "Core".to_string(),
             summary: None,
         }
     }
@@ -16627,14 +16631,14 @@ mod tests {
                         name: "my_func".to_string(),
                         parameters: vec!["a".to_string()],
                         is_builtin: false,
-                        plugin: None,
+                        module: "User".to_string(),
                         summary: Some("A user function.".to_string()),
                     },
                     EngineFunction {
                         name: "sqrt".to_string(),
                         parameters: vec!["x".to_string()],
                         is_builtin: true,
-                        plugin: None,
+                        module: "Core".to_string(),
                         summary: Some("Principal square root.".to_string()),
                     },
                 ],

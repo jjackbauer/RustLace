@@ -90,7 +90,7 @@ script).
    `-`/`+`/`not`, range `..`, power `^`, `* / %`, `+ -`, comparisons, assignment.
 8. `1..5` is an inclusive range with step 1; `1..2..7` uses step 2. Ranges and list literals are
    vectors; `[[1,2],[3,4]]` is a rank-2 array.
-9. The engine ships 124 builtins in 11 categories, from `abs` and `sum` to `diff`, `solve`,
+9. The engine ships 134 builtins in 12 categories, from `abs` and `sum` to `diff`, `solve`,
    `fft`, `compile` and `plot`. See [builtins.md](builtins.md).
 10. Failures are a typed envelope with a stable `code`, a frozen `category`, a sentence, and a
     1-based `line`/`column`; precision is session state, and the default differs between the CLI
@@ -139,7 +139,7 @@ func fib(n) { if (n < 2) { n } else { fib(n - 1) + fib(n - 2) } }; fib(10)
 | [Expressions and operators](expressions-and-operators.md) | The full prefix/infix/postfix operator set, the precedence table derived from the parser, associativity, indexing, slicing, calls, and member access. |
 | [Statements and control flow](statements-and-control-flow.md) | Assignment versus definition, blocks, `if`/`else`, `while`, `for`, `return`, `break`, `continue`, `print`, `plot`, `setprecision`, and what the last expression means. |
 | [Functions and scope](functions-and-scope.md) | User functions, parameters, recursion, lexical scopes, shadowing, arity errors, and how a user function differs from a builtin. |
-| [Builtins](builtins.md) | The complete 124-entry catalogue in 11 categories, with arity and parameter names, plus prose for each family. |
+| [Builtins](builtins.md) | The complete 134-entry catalogue in 12 categories, with arity and parameter names, plus prose for each family. |
 | [Errors and diagnostics](errors-and-diagnostics.md) | The error envelope, the seven frozen categories, stable codes, positions, exit statuses, and five fully quoted failures. |
 | [Precision and formatting](precision-and-formatting.md) | Computation versus display precision, `setprecision`, `pi(n)`/`e(n)`, truncation, periodic rendering, and number formatting. |
 | [Plots](plots.md) | `plot(x, y, title)`, the SVG contract, the returned path, and the plot artifact in the JSON envelope. |

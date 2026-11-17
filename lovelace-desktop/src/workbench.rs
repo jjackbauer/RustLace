@@ -3687,7 +3687,7 @@ mod tests {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin: true,
-            plugin: None,
+            module: "Core".to_string(),
             summary: None,
         }
     }
@@ -3782,9 +3782,9 @@ mod tests {
 
     /// WKS-001/WKS-002 with the shipped engine: after a run that defines a user `func` and a
     /// variable, the committed snapshot publishes `_` with its kind and display, the function
-    /// table is built from the registry capture (builtins + plugin builtins + the user
-    /// definition), and the table's count agrees with the snapshot and with a fresh engine's
-    /// registry plus that one user definition.
+    /// table is built from the registry capture (every builtin plus the user definition), and the
+    /// table's count agrees with the snapshot and with a fresh engine's registry plus that one
+    /// user definition.
     #[test]
     #[cfg(feature = "real-engine")]
     fn the_real_snapshot_publishes_underscore_and_the_registry_count_for_the_tables() {
@@ -3843,8 +3843,9 @@ mod tests {
         assert_eq!(user.parameters_text(), "x");
         let builtin = table.rows.iter().find(|row| row.name == "abs").unwrap();
         assert_eq!(builtin.origin, crate::engine::FunctionOrigin::Builtin);
-        let plugin = table.rows.iter().find(|row| row.name == "acos").unwrap();
-        assert_eq!(plugin.origin, crate::engine::FunctionOrigin::Plugin);
+        let symbolic = table.rows.iter().find(|row| row.name == "acos").unwrap();
+        assert_eq!(symbolic.origin, crate::engine::FunctionOrigin::Builtin);
+        assert_eq!(symbolic.module, "Symbolics");
     }
 
     /// RES-001 end to end with the shipped engine: one run publishes the structured projection

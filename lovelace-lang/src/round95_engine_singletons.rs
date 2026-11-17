@@ -15,7 +15,7 @@
 //!   — a 100-term body chain at ten call levels is a typed depth refusal.
 //! * `Lovelace.Run.Tests.RecursionDepthEnvelopeTests/NestedBlocksInsideARecursiveBody_AreRefused_InsteadOfDying#0`
 //!   — 120 nested `if`s walked at every one of five call levels is a typed depth refusal.
-//! * `Lovelace.Run.Tests.ArityPropertyTests/DeclaredArity_TravelsWithEveryPluginBuiltin#0` — the
+//! * `Lovelace.Run.Tests.ArityPropertyTests/DeclaredArity_TravelsWithEveryBuiltin#0` — the
 //!   descriptor's `MinArity`/`Variadic` travel with the function definition.
 //! * `Lovelace.Suite.Tests.DspIntegerArgumentContractTests/TheExactlyIntegralRealRefusal_IsStillTheContractsContract#0`
 //!   — the contract's wrong-kind refusal names the integer to write and stays
@@ -265,11 +265,11 @@ fn recursiondepthenvelope_nested_blocks_inside_a_recursive_body_are_refused() {
 // Declared arity
 // ---------------------------------------------------------------------------
 
-/// `ArityPropertyTests.DeclaredArity_TravelsWithEveryPluginBuiltin`: the registry descriptor's
+/// `ArityPropertyTests.DeclaredArity_TravelsWithEveryBuiltin`: the registry descriptor's
 /// `MinArity` and `Variadic` are carried by the function definition itself, so the one call-site
 /// validator can enforce what the descriptor declares.
 #[test]
-fn arityproperty_declared_arity_travels_with_every_plugin_builtin() {
+fn arityproperty_declared_arity_travels_with_every_builtin() {
     let engine = Engine::new();
     let snapshot = engine.capture_state();
     let mut checked = 0;
@@ -280,9 +280,6 @@ fn arityproperty_declared_arity_travels_with_every_plugin_builtin() {
         }
         let declared = crate::registry::find(name)
             .unwrap_or_else(|| panic!("{name}: a registered builtin has a descriptor"));
-        if declared.plugin.is_none() {
-            continue;
-        }
         checked += 1;
         assert_eq!(
             function.min_arity, declared.min_arity,
@@ -299,41 +296,15 @@ fn arityproperty_declared_arity_travels_with_every_plugin_builtin() {
             declared.parameter_count,
             "{name}: the declared parameter count travels too"
         );
+        assert_eq!(
+            function.module, declared.module,
+            "{name}: the static family label travels with the definition"
+        );
     }
 
-    assert!(
-        checked >= 40,
-        "expected the plugin descriptors to cover the registry, saw {checked}"
-    );
-}
-
-/// The same declaration travels through a HOST registration: a descriptor registered with a
-/// shorter minimum and a variadic tail is what the definition publishes.
-#[test]
-fn arityproperty_a_host_descriptor_carries_its_declaration() {
-    let mut engine = Engine::new();
-    let descriptor = crate::modus::BuiltinDescriptor::new(
-        "host_shape",
-        &["a", "rest"],
-        "Tests",
-        "A host builtin whose declaration is not its parameter count.",
-        "Natural",
-    )
-    .with_min_arity(1)
-    .with_variadic(true);
-    engine
-        .register_builtin_descriptor(descriptor, |_args| {
-            Ok(crate::modus::Payload::Natural(Nat::from_u64(1)))
-        })
-        .expect("the host registration succeeds");
-
-    let snapshot = engine.capture_state();
-    let function = &snapshot.functions["host_shape"];
-    assert_eq!(function.min_arity, 1);
-    assert!(function.variadic);
     assert_eq!(
-        function.parameters,
-        vec!["a".to_string(), "rest".to_string()]
+        checked, 134,
+        "every one of the 134 published builtins carries its declaration"
     );
 }
 

@@ -3042,7 +3042,7 @@ mod tests {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin: true,
-            plugin: None,
+            module: "Core".to_string(),
             summary: None,
         }
     }
@@ -4074,7 +4074,7 @@ mod tests {
             name: name.to_string(),
             parameters: parameters.iter().map(|p| p.to_string()).collect(),
             is_builtin: true,
-            plugin: None,
+            module: "Core".to_string(),
             summary: Some(format!("{name} is described by the engine registry.")),
         }
     }

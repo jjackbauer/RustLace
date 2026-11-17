@@ -11,8 +11,8 @@ what is preserved, what deliberately differs, and which fixtures pin either clai
 | Value semantics | Exact arbitrary-precision arithmetic; `1/3` is `0.(3)`, never a rounding; no floating point in a value path | `lovelace-real`, corpus records |
 | Rendering | `<display> (<Kind>)`, period notation, `True`/`False`, `[a, b, c]`, record field order, error sentences | `CONTRACT.md` rendering rules, `parity/corpus/lang.json` |
 | Engine API | `SuiteEngine` → `Engine`: eval, typed formatting, variables, functions, output, plot capture, precision, revision | `Engine`, `CONTRACT.md` |
-| Plugin model | `ModusHost` → `modus::ModusHost`: descriptors, arity enforcement, typed payloads, field kernels, bare engines | `lovelace-lang/src/modus.rs` |
-| Builtin catalogue | The same names, parameter names, categories and arities in one registry table | `lovelace-lang/src/registry.rs`; the envelope advertises 124 functions |
+| Builtin registry | One static table; the reference's plugin grouping is kept only as the non-executable `module` label | `lovelace-lang/src/registry.rs`; the envelope advertises 134 functions |
+| Builtin catalogue | The same names, parameter names, categories and arities in one registry table | `lovelace-lang/src/registry.rs`; the envelope advertises 134 functions |
 | Symbolics + MathIR | Canonical forms, printing, differentiation, solving, series, compilation | `lovelace-symbolics`, `lovelace-lang/src/mathir.rs` |
 | Plot bytes | The engine writes the SVG; a host renders it, never regenerates it | `lovelace-lang/src/plot_surface.rs`, `plot_file.rs` |
 | Runner envelope | One JSON document, stable fields, three exit codes, UTF-16 positions | `lovelace-run/src/main.rs` |

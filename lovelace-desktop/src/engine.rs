@@ -44,9 +44,9 @@ pub use real::RealEngine;
 
 /// Default display precision, in decimal places.
 ///
-/// DEV-009 (user-directed, see `docs/goal-desktop-v4/deviations.md`): 30, matching the C#
-/// extension host's 30 computation / 15 display default (`Lovelace.Suite/ModusHost.cs:50,53`)
-/// and staying inside the shared `<= 37` fixed-width gate
+/// DEV-009 (user-directed, see `docs/goal-desktop-v4/deviations.md`): 30, matching the legacy
+/// C# extension host's 30 computation / 15 display default and staying inside the shared
+/// `<= 37` fixed-width gate
 /// (`lovelace_lang::complex::FAST_PATH_MAX_DIGITS`, the Rust port of
 /// `Lovelace.Complex/Complex.cs:109`/`Lovelace.Suite/NumericOps.cs:113`, and
 /// `rust/lovelace-lang/src/builtins.rs:5748`). A persisted `active_precision` keeps its stored
@@ -155,29 +155,27 @@ impl CachedValue {
 
 /// Where a function in the engine's snapshot came from.
 ///
-/// The engine publishes a builtin flag and, for a builtin, the plugin that registered it, so
-/// the three origins are distinguishable without the desktop keeping a list of its own:
+/// The engine publishes a builtin flag, so the two origins are distinguishable without the
+/// desktop keeping a list of its own:
 ///
-/// - [`FunctionOrigin::Builtin`] — a core builtin (`is_builtin == true`, no plugin);
-/// - [`FunctionOrigin::Plugin`] — a builtin registered by a plugin (`is_builtin == true` and a
-///   plugin name);
+/// - [`FunctionOrigin::Builtin`] — a registry builtin (`is_builtin == true`);
 /// - [`FunctionOrigin::User`] — a script `func` definition (`is_builtin == false`).
+///
+/// The registry's static `module` label (`Core`, `DSP`, `Symbolics`, `MathIR`, `Systems`) is
+/// carried beside the origin for display; it is not an origin and it gates nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FunctionOrigin {
-    /// A core builtin from the engine registry.
+    /// A builtin from the static engine registry.
     Builtin,
-    /// A builtin registered by a plugin.
-    Plugin,
     /// A function defined by the script.
     User,
 }
 
 impl FunctionOrigin {
-    /// The visible origin wording (`builtin` / `plugin` / `user`).
+    /// The visible origin wording (`builtin` / `user`).
     pub fn label(self) -> &'static str {
         match self {
             FunctionOrigin::Builtin => "builtin",
-            FunctionOrigin::Plugin => "plugin",
             FunctionOrigin::User => "user",
         }
     }
@@ -187,35 +185,34 @@ impl FunctionOrigin {
 ///
 /// The completion catalogue consumes these entries verbatim; the desktop never carries a
 /// builtin list of its own. The real engine fills them from its own snapshot
-/// (`Engine::capture_state`), which publishes every builtin in the registry, every host or
-/// plugin registration, and every user `func` definition.
+/// (`Engine::capture_state`), which publishes every builtin in the registry and every user
+/// `func` definition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineFunction {
     /// The registered name.
     pub name: String,
     /// The declared parameter names, in declaration order.
     pub parameters: Vec<String>,
-    /// True for a builtin, false for a user definition or a host/plugin registration.
+    /// True for a builtin, false for a user definition.
     pub is_builtin: bool,
-    /// The plugin that registered the builtin, when one did.
-    pub plugin: Option<String>,
+    /// The static family label for a builtin (`Core`, `DSP`, `Symbolics`, `MathIR`, `Systems`),
+    /// or `User` for a script definition.
+    pub module: String,
     /// The engine's one-line summary, when the registry publishes one.
     ///
     /// `capture_state` does not carry the field, so the real adapter reads the engine's own
     /// `lovelace_lang::registry` entry (the same data the capture is built from); a user
-    /// definition or a host registration has no registry entry and therefore no summary.
+    /// definition has no registry entry and therefore no summary.
     pub summary: Option<String>,
 }
 
 impl EngineFunction {
     /// The origin classification the Workspace table shows.
     pub fn origin(&self) -> FunctionOrigin {
-        if !self.is_builtin {
-            FunctionOrigin::User
-        } else if self.plugin.is_some() {
-            FunctionOrigin::Plugin
-        } else {
+        if self.is_builtin {
             FunctionOrigin::Builtin
+        } else {
+            FunctionOrigin::User
         }
     }
 }
@@ -286,7 +283,7 @@ impl EngineState {
                     name: name.clone(),
                     parameters: parameters.clone(),
                     is_builtin: false,
-                    plugin: None,
+                    module: "User".to_string(),
                     summary: None,
                 })
                 .collect(),
@@ -745,7 +742,7 @@ mod tests {
         assert!(!state.functions[0].is_builtin);
         assert_eq!(state.functions[0].origin(), FunctionOrigin::User);
         assert_eq!(state.functions[0].parameters, vec!["a".to_string()]);
-        assert_eq!(state.functions[0].plugin, None);
+        assert_eq!(state.functions[0].module, "User");
         assert_eq!(state.functions[0].summary, None);
     }
 
@@ -891,13 +888,13 @@ mod tests {
         assert_eq!(x.kind, "Natural");
     }
 
-    /// WKS-002: the three origins are read from the engine's own snapshot (builtin flag plus
-    /// the registering plugin), never guessed by the desktop. `abs` is a core builtin, `acos`
-    /// is a builtin registered by the symbolics plugin, and a script's `func` is a user
-    /// definition. The registry summaries come from the same engine registry.
+    /// WKS-002: the origins are read from the engine's own snapshot (the builtin flag), never
+    /// guessed by the desktop. `abs` is a core builtin, `acos` is a builtin published by the
+    /// Symbolics family, and a script's `func` is a user definition. The registry summaries come
+    /// from the same engine registry.
     #[test]
     #[cfg(feature = "real-engine")]
-    fn the_real_registry_classifies_builtin_plugin_and_user_functions() {
+    fn the_real_registry_classifies_builtin_and_user_functions() {
         let mut engine = RealEngine::new();
         engine
             .eval("func aaa(x) = x * 2")
@@ -926,25 +923,25 @@ mod tests {
             .expect("abs is in the registry");
         assert_eq!(builtin.origin(), FunctionOrigin::Builtin);
         assert_eq!(builtin.origin().label(), "builtin");
-        assert_eq!(builtin.plugin, None);
+        assert_eq!(builtin.module, "Core");
         assert!(
             builtin.summary.as_deref().is_some_and(|s| !s.is_empty()),
             "the registry publishes a summary for abs: {:?}",
             builtin.summary
         );
 
-        let plugin = state
+        let symbolic = state
             .functions
             .iter()
             .find(|function| function.name == "acos")
             .expect("acos is in the registry");
-        assert_eq!(plugin.origin(), FunctionOrigin::Plugin);
-        assert_eq!(plugin.origin().label(), "plugin");
-        assert_eq!(plugin.plugin.as_deref(), Some("Lovelace.Symbolics"));
+        assert_eq!(symbolic.origin(), FunctionOrigin::Builtin);
+        assert_eq!(symbolic.origin().label(), "builtin");
+        assert_eq!(symbolic.module, "Symbolics");
         assert!(
-            plugin.summary.as_deref().is_some_and(|s| !s.is_empty()),
+            symbolic.summary.as_deref().is_some_and(|s| !s.is_empty()),
             "the registry publishes a summary for acos: {:?}",
-            plugin.summary
+            symbolic.summary
         );
     }
 }

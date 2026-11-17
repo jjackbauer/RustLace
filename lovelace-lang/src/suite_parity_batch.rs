@@ -5670,21 +5670,23 @@ fn r15_descriptor_examples_that_now_execute() {
     }
 }
 
-/// C# DescriptorExampleTests.cs:85 — Corpus_ReachesCoreMetadataAndEveryPlugin.
+/// C# DescriptorExampleTests.cs:85 — Corpus_ReachesCoreMetadataAndEveryFamily.
 #[test]
-fn r15_descriptor_corpus_covers_core_and_every_plugin() {
+fn r15_descriptor_corpus_covers_core_and_every_family() {
     let builtins = crate::registry::BUILTINS;
     assert!(!builtins.is_empty(), "the descriptor catalogue is empty");
     assert!(
-        builtins.iter().any(|b| b.plugin.is_none()),
+        builtins
+            .iter()
+            .any(|b| b.module == "Core" && !b.examples.is_empty()),
         "no core metadata examples were discovered"
     );
-    for plugin in ["Lovelace.Dsp", "Lovelace.Symbolics", "Lovelace.MathIR"] {
+    for module in ["DSP", "Symbolics", "MathIR"] {
         assert!(
             builtins
                 .iter()
-                .any(|b| b.plugin == Some(plugin) && !b.examples.is_empty()),
-            "no examples discovered from {plugin}"
+                .any(|b| b.module == module && !b.examples.is_empty()),
+            "no examples discovered from {module}"
         );
     }
 }

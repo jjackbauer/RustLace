@@ -641,7 +641,7 @@ mod tests {
                     name: (*name).to_string(),
                     parameters: vec!["x".to_string()],
                     is_builtin: true,
-                    plugin: None,
+                    module: "Core".to_string(),
                     summary: None,
                 })
                 .collect(),
@@ -852,7 +852,7 @@ mod tests {
                 name: "myfunc".to_string(),
                 parameters: vec!["a".to_string()],
                 is_builtin: false,
-                plugin: None,
+                module: "User".to_string(),
                 summary: None,
             }],
         };

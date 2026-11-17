@@ -80,7 +80,7 @@ pub struct WorkspaceSnapshot {
     /// Functions visible after the committed statements.
     ///
     /// WKS-002: this is rebuilt from [`Self::state`] at every commit, so the list and its count
-    /// are the engine's current registry (builtins, plugin builtins and user definitions), not
+    /// are the engine's current registry (builtins, built-in families and user definitions), not
     /// the legacy [`Evaluator::functions`] pair list that names user definitions only.
     pub functions: Vec<(String, Vec<String>)>,
     /// The richer capture the completion catalogue reads: variables with their kinds and
@@ -1118,7 +1118,7 @@ impl RunWorker {
             engine.set_kernel_progress_sink(Some(self.kernel_progress_sink()));
         }));
         // INC-001: the run's source-level dependency tables are built once, and the engine's own
-        // registry (a fresh engine, so builtins/plugins only) supplies the pure-callable set the
+        // registry (a fresh engine, so builtins only) supplies the pure-callable set the
         // effect classification consults.
         let builtins = self.engine_builtins(&engine);
         let analysis = ProgramAnalysis::new(&self.statements, builtins);

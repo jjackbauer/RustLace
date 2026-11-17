@@ -80,7 +80,7 @@ time and returns the partial result; neither changes a value that was already pr
   output travels in `output`, and a consumer that expects a stream gets a single envelope.
 - **One script per invocation.** Apart from `--repl`, a run takes exactly one source and ends. The
   REPL is interactive and does not produce the envelope.
-- **No plugin or family selection.** The engine always loads all 124 builtins; there is no flag that
+- **No plugin or family selection.** The engine always loads all 134 builtins; there is no flag that
   removes a family, and `--functions` reports all of them.
 - **UTF-16 positions.** A consumer must slice by UTF-16 code units, not bytes or Unicode scalar
   values.

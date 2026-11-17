@@ -1,85 +1,80 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "OptimizationResult(original: x^2 + 2*x + 1, optimized: 1 + x*(x + 2), estimated_cost_before: 8, estimated_cost_after: 7, shared_subtrees: 2, horner_rewrites: 1, transformations: [cse, horner], target: mathir, policy: cse+horner+precision-aware, diagnostics: [])",
-    "typed": "OptimizationResult(original: x^2 + 2*x + 1, optimized: 1 + x*(x + 2), estimated_cost_before: 8, estimated_cost_after: 7, shared_subtrees: 2, horner_rewrites: 1, transformations: [cse, horner], target: mathir, policy: cse+horner+precision-aware, diagnostics: []) (OptimizationResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "OptimizationResult",
       "fields": [
         {
           "name": "original",
           "value": {
-            "kind": "Symbolic",
-            "pretty": "x^2 + 2*x + 1",
             "canonical": "(add (rat 1 1) (pow (sym x) (rat 2 1)) (mul (rat 2 1) (sym x)))",
             "domain": "complex",
             "exact": true,
-            "nodeCount": 8,
             "freeSymbols": [
               "x"
-            ]
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 8,
+            "pretty": "x^2 + 2*x + 1"
           }
         },
         {
           "name": "optimized",
           "value": {
-            "kind": "Symbolic",
-            "pretty": "1 + x*(x + 2)",
             "canonical": "(add (rat 1 1) (mul (sym x) (add (rat 2 1) (sym x))))",
             "domain": "complex",
             "exact": true,
-            "nodeCount": 7,
             "freeSymbols": [
               "x"
-            ]
+            ],
+            "kind": "Symbolic",
+            "nodeCount": 7,
+            "pretty": "1 + x*(x + 2)"
           }
         },
         {
           "name": "estimated_cost_before",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "8",
-            "exact": true
+            "value": "8"
           }
         },
         {
           "name": "estimated_cost_after",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "7",
-            "exact": true
+            "value": "7"
           }
         },
         {
           "name": "shared_subtrees",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "2",
-            "exact": true
+            "value": "2"
           }
         },
         {
           "name": "horner_rewrites",
           "value": {
+            "exact": true,
             "kind": "Integer",
-            "value": "1",
-            "exact": true
+            "value": "1"
           }
         },
         {
           "name": "transformations",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              2
-            ],
             "elements": [
               {
                 "kind": "Text",
@@ -89,7 +84,12 @@
                 "kind": "Text",
                 "value": "horner"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              2
+            ],
+            "type": "Vector"
           }
         },
         {
@@ -109,95 +109,93 @@
         {
           "name": "diagnostics",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "OptimizationResult"
+    },
+    "typed": "OptimizationResult(original: x^2 + 2*x + 1, optimized: 1 + x*(x + 2), estimated_cost_before: 8, estimated_cost_after: 7, shared_subtrees: 2, horner_rewrites: 1, transformations: [cse, horner], target: mathir, policy: cse+horner+precision-aware, diagnostics: []) (OptimizationResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "OptimizationResult(original: x^2 + 2*x + 1, optimized: 1 + x*(x + 2), estimated_cost_before: 8, estimated_cost_after: 7, shared_subtrees: 2, horner_rewrites: 1, transformations: [cse, horner], target: mathir, policy: cse+horner+precision-aware, diagnostics: [])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "OptimizationResult",
         "fields": [
           {
             "name": "original",
             "value": {
-              "kind": "Symbolic",
-              "pretty": "x^2 + 2*x + 1",
               "canonical": "(add (rat 1 1) (pow (sym x) (rat 2 1)) (mul (rat 2 1) (sym x)))",
               "domain": "complex",
               "exact": true,
-              "nodeCount": 8,
               "freeSymbols": [
                 "x"
-              ]
+              ],
+              "kind": "Symbolic",
+              "nodeCount": 8,
+              "pretty": "x^2 + 2*x + 1"
             }
           },
           {
             "name": "optimized",
             "value": {
-              "kind": "Symbolic",
-              "pretty": "1 + x*(x + 2)",
               "canonical": "(add (rat 1 1) (mul (sym x) (add (rat 2 1) (sym x))))",
               "domain": "complex",
               "exact": true,
-              "nodeCount": 7,
               "freeSymbols": [
                 "x"
-              ]
+              ],
+              "kind": "Symbolic",
+              "nodeCount": 7,
+              "pretty": "1 + x*(x + 2)"
             }
           },
           {
             "name": "estimated_cost_before",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "8",
-              "exact": true
+              "value": "8"
             }
           },
           {
             "name": "estimated_cost_after",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "7",
-              "exact": true
+              "value": "7"
             }
           },
           {
             "name": "shared_subtrees",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "2",
-              "exact": true
+              "value": "2"
             }
           },
           {
             "name": "horner_rewrites",
             "value": {
+              "exact": true,
               "kind": "Integer",
-              "value": "1",
-              "exact": true
+              "value": "1"
             }
           },
           {
             "name": "transformations",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                2
-              ],
               "elements": [
                 {
                   "kind": "Text",
@@ -207,7 +205,12 @@
                   "kind": "Text",
                   "value": "horner"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                2
+              ],
+              "type": "Vector"
             }
           },
           {
@@ -227,37 +230,34 @@
           {
             "name": "diagnostics",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "OptimizationResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

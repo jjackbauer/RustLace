@@ -1,16 +1,16 @@
 {
-  "protocolVersion": 1,
-  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "artifacts": [],
+  "elapsed": "<volatile>",
+  "elapsedTime": "<volatile>",
+  "functions": [],
   "mathIrVersion": 2,
   "ok": true,
-  "revision": "<volatile>",
+  "output": [],
+  "protocolVersion": 2,
   "result": {
-    "kind": "Record",
     "display": "SystemSolveResult(status: Solved, domain: complex, complete: True, completeness: Complete, solutions: [SystemSolution(bindings: [Binding(name: x, value: 2), Binding(name: y, value: -1)], conditions: [], exactness: Exact)], diagnostics: [])",
-    "typed": "SystemSolveResult(status: Solved, domain: complex, complete: True, completeness: Complete, solutions: [SystemSolution(bindings: [Binding(name: x, value: 2), Binding(name: y, value: -1)], conditions: [], exactness: Exact)], diagnostics: []) (SystemSolveResult)",
+    "kind": "Record",
     "structured": {
-      "kind": "Record",
-      "type": "SystemSolveResult",
       "fields": [
         {
           "name": "status",
@@ -23,8 +23,8 @@
         {
           "name": "domain",
           "value": {
-            "kind": "Domain",
-            "domain": "complex"
+            "domain": "complex",
+            "kind": "Domain"
           }
         },
         {
@@ -45,101 +45,94 @@
         {
           "name": "solutions",
           "value": {
-            "kind": "Array",
-            "type": "Vector",
-            "shape": [
-              1
-            ],
             "elements": [
               {
-                "kind": "Record",
-                "type": "SystemSolution",
                 "fields": [
                   {
                     "name": "bindings",
                     "value": {
-                      "kind": "Array",
-                      "type": "Vector",
-                      "shape": [
-                        2
-                      ],
                       "elements": [
                         {
-                          "kind": "Record",
-                          "type": "Binding",
                           "fields": [
                             {
                               "name": "name",
                               "value": {
-                                "kind": "Symbolic",
-                                "pretty": "x",
                                 "canonical": "(sym x)",
                                 "domain": "complex",
                                 "exact": true,
-                                "nodeCount": 1,
                                 "freeSymbols": [
                                   "x"
-                                ]
+                                ],
+                                "kind": "Symbolic",
+                                "nodeCount": 1,
+                                "pretty": "x"
                               }
                             },
                             {
                               "name": "value",
                               "value": {
-                                "kind": "Symbolic",
-                                "pretty": "2",
                                 "canonical": "(rat 2 1)",
                                 "domain": "rational",
                                 "exact": true,
+                                "freeSymbols": [],
+                                "kind": "Symbolic",
                                 "nodeCount": 1,
-                                "freeSymbols": []
+                                "pretty": "2"
                               }
                             }
-                          ]
+                          ],
+                          "kind": "Record",
+                          "type": "Binding"
                         },
                         {
-                          "kind": "Record",
-                          "type": "Binding",
                           "fields": [
                             {
                               "name": "name",
                               "value": {
-                                "kind": "Symbolic",
-                                "pretty": "y",
                                 "canonical": "(sym y)",
                                 "domain": "complex",
                                 "exact": true,
-                                "nodeCount": 1,
                                 "freeSymbols": [
                                   "y"
-                                ]
+                                ],
+                                "kind": "Symbolic",
+                                "nodeCount": 1,
+                                "pretty": "y"
                               }
                             },
                             {
                               "name": "value",
                               "value": {
-                                "kind": "Symbolic",
-                                "pretty": "-1",
                                 "canonical": "(rat -1 1)",
                                 "domain": "rational",
                                 "exact": true,
+                                "freeSymbols": [],
+                                "kind": "Symbolic",
                                 "nodeCount": 1,
-                                "freeSymbols": []
+                                "pretty": "-1"
                               }
                             }
-                          ]
+                          ],
+                          "kind": "Record",
+                          "type": "Binding"
                         }
-                      ]
+                      ],
+                      "kind": "Array",
+                      "shape": [
+                        2
+                      ],
+                      "type": "Vector"
                     }
                   },
                   {
                     "name": "conditions",
                     "value": {
+                      "elements": [],
                       "kind": "Array",
-                      "type": "Vector",
                       "shape": [
                         0
                       ],
-                      "elements": []
+                      "type": "Vector"
                     }
                   },
                   {
@@ -150,34 +143,44 @@
                       "value": "Exact"
                     }
                   }
-                ]
+                ],
+                "kind": "Record",
+                "type": "SystemSolution"
               }
-            ]
+            ],
+            "kind": "Array",
+            "shape": [
+              1
+            ],
+            "type": "Vector"
           }
         },
         {
           "name": "diagnostics",
           "value": {
+            "elements": [],
             "kind": "Array",
-            "type": "Vector",
             "shape": [
               0
             ],
-            "elements": []
+            "type": "Vector"
           }
         }
-      ]
-    }
+      ],
+      "kind": "Record",
+      "type": "SystemSolveResult"
+    },
+    "typed": "SystemSolveResult(status: Solved, domain: complex, complete: True, completeness: Complete, solutions: [SystemSolution(bindings: [Binding(name: x, value: 2), Binding(name: y, value: -1)], conditions: [], exactness: Exact)], diagnostics: []) (SystemSolveResult)"
   },
-  "output": [],
+  "revision": "<volatile>",
+  "symbolicFormatVersion": "#!lovelace-sym 1",
+  "timings": "<volatile>",
   "variables": [
     {
-      "name": "_",
-      "kind": "Record",
       "display": "SystemSolveResult(status: Solved, domain: complex, complete: True, completeness: Complete, solutions: [SystemSolution(bindings: [Binding(name: x, value: 2), Binding(name: y, value: -1)], conditions: [], exactness: Exact)], diagnostics: [])",
+      "kind": "Record",
+      "name": "_",
       "structured": {
-        "kind": "Record",
-        "type": "SystemSolveResult",
         "fields": [
           {
             "name": "status",
@@ -190,8 +193,8 @@
           {
             "name": "domain",
             "value": {
-              "kind": "Domain",
-              "domain": "complex"
+              "domain": "complex",
+              "kind": "Domain"
             }
           },
           {
@@ -212,101 +215,94 @@
           {
             "name": "solutions",
             "value": {
-              "kind": "Array",
-              "type": "Vector",
-              "shape": [
-                1
-              ],
               "elements": [
                 {
-                  "kind": "Record",
-                  "type": "SystemSolution",
                   "fields": [
                     {
                       "name": "bindings",
                       "value": {
-                        "kind": "Array",
-                        "type": "Vector",
-                        "shape": [
-                          2
-                        ],
                         "elements": [
                           {
-                            "kind": "Record",
-                            "type": "Binding",
                             "fields": [
                               {
                                 "name": "name",
                                 "value": {
-                                  "kind": "Symbolic",
-                                  "pretty": "x",
                                   "canonical": "(sym x)",
                                   "domain": "complex",
                                   "exact": true,
-                                  "nodeCount": 1,
                                   "freeSymbols": [
                                     "x"
-                                  ]
+                                  ],
+                                  "kind": "Symbolic",
+                                  "nodeCount": 1,
+                                  "pretty": "x"
                                 }
                               },
                               {
                                 "name": "value",
                                 "value": {
-                                  "kind": "Symbolic",
-                                  "pretty": "2",
                                   "canonical": "(rat 2 1)",
                                   "domain": "rational",
                                   "exact": true,
+                                  "freeSymbols": [],
+                                  "kind": "Symbolic",
                                   "nodeCount": 1,
-                                  "freeSymbols": []
+                                  "pretty": "2"
                                 }
                               }
-                            ]
+                            ],
+                            "kind": "Record",
+                            "type": "Binding"
                           },
                           {
-                            "kind": "Record",
-                            "type": "Binding",
                             "fields": [
                               {
                                 "name": "name",
                                 "value": {
-                                  "kind": "Symbolic",
-                                  "pretty": "y",
                                   "canonical": "(sym y)",
                                   "domain": "complex",
                                   "exact": true,
-                                  "nodeCount": 1,
                                   "freeSymbols": [
                                     "y"
-                                  ]
+                                  ],
+                                  "kind": "Symbolic",
+                                  "nodeCount": 1,
+                                  "pretty": "y"
                                 }
                               },
                               {
                                 "name": "value",
                                 "value": {
-                                  "kind": "Symbolic",
-                                  "pretty": "-1",
                                   "canonical": "(rat -1 1)",
                                   "domain": "rational",
                                   "exact": true,
+                                  "freeSymbols": [],
+                                  "kind": "Symbolic",
                                   "nodeCount": 1,
-                                  "freeSymbols": []
+                                  "pretty": "-1"
                                 }
                               }
-                            ]
+                            ],
+                            "kind": "Record",
+                            "type": "Binding"
                           }
-                        ]
+                        ],
+                        "kind": "Array",
+                        "shape": [
+                          2
+                        ],
+                        "type": "Vector"
                       }
                     },
                     {
                       "name": "conditions",
                       "value": {
+                        "elements": [],
                         "kind": "Array",
-                        "type": "Vector",
                         "shape": [
                           0
                         ],
-                        "elements": []
+                        "type": "Vector"
                       }
                     },
                     {
@@ -317,61 +313,65 @@
                         "value": "Exact"
                       }
                     }
-                  ]
+                  ],
+                  "kind": "Record",
+                  "type": "SystemSolution"
                 }
-              ]
+              ],
+              "kind": "Array",
+              "shape": [
+                1
+              ],
+              "type": "Vector"
             }
           },
           {
             "name": "diagnostics",
             "value": {
+              "elements": [],
               "kind": "Array",
-              "type": "Vector",
               "shape": [
                 0
               ],
-              "elements": []
+              "type": "Vector"
             }
           }
-        ]
+        ],
+        "kind": "Record",
+        "type": "SystemSolveResult"
       }
     },
     {
-      "name": "x",
-      "kind": "Symbolic",
       "display": "x",
+      "kind": "Symbolic",
+      "name": "x",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "x",
         "canonical": "(sym x)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "x"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "x"
       }
     },
     {
-      "name": "y",
-      "kind": "Symbolic",
       "display": "y",
+      "kind": "Symbolic",
+      "name": "y",
       "structured": {
-        "kind": "Symbolic",
-        "pretty": "y",
         "canonical": "(sym y)",
         "domain": "complex",
         "exact": true,
-        "nodeCount": 1,
         "freeSymbols": [
           "y"
-        ]
+        ],
+        "kind": "Symbolic",
+        "nodeCount": 1,
+        "pretty": "y"
       }
     }
-  ],
-  "functions": [],
-  "elapsed": "<volatile>",
-  "elapsedTime": "<volatile>",
-  "timings": "<volatile>",
-  "artifacts": []
+  ]
 }

@@ -14,6 +14,7 @@ lovelace-nat = { path = "../lovelace-nat" }
 lovelace-int = { path = "../lovelace-int" }
 lovelace-real = { path = "../lovelace-real" }
 lovelace-lang = { path = "../lovelace-lang" }
+lovelace-systems = { path = "../lovelace-systems" }
 
 [lints]
 workspace = true

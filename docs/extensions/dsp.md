@@ -15,10 +15,9 @@ difference-equation filtering (`conv`, `filter`, `movingavg`, `delay`), signal g
 (`impulse`, `step`, `cosine`, `exponential`, `powerseries`, `noise`), and complex accessors
 (`re`, `im`, `conj`, `scale`).
 
-It is declared by the `plugin` field of 16 descriptors in
-[`lovelace-lang/src/registry.rs`](../../lovelace-lang/src/registry.rs) — the first
-`plugin: Some("Lovelace.Dsp")` tag is at line 407 (on `conj`'s descriptor) and the last at line
-1595. The implementations are the `dsp_*` functions in
+It is declared by the `module` field of 16 descriptors in
+[`lovelace-lang/src/registry.rs`](../../lovelace-lang/src/registry.rs) (`module: "DSP"`). The
+implementations are the `dsp_*` functions in
 [`lovelace-lang/src/builtins.rs`](../../lovelace-lang/src/builtins.rs)
 (`dsp_filter` at line 5996, `dsp_noise` at 6108, `dsp_cosine` at 5915, and so on) plus the exact
 complex helpers beside them.
@@ -67,9 +66,9 @@ transform of `[1, 2]`).
 
 | Path | What is there |
 | --- | --- |
-| `lovelace-lang/src/registry.rs` | the 16 descriptors; plugin tags at lines 408-1611 |
+| `lovelace-lang/src/registry.rs` | the 16 descriptors, `module: "DSP"` |
 | `lovelace-lang/src/builtins.rs` | `dsp_*` implementations and the exact complex helpers, ~line 5336-6700 |
-| `lovelace-lang/src/lib.rs` | `dsp_precision()` (2168), the gate (990), `load_plugin` (883) |
+| `lovelace-lang/src/lib.rs` | `dsp_precision()` (the 30-place DSP default) |
 | `lovelace-lang/src/fixed_dsp.rs` | the fixed-width whole-array tier (`Cplx<W>`, `to_complex`) |
 | `lovelace-lang/src/signals.rs` | `Sequence`, `Sum`, `Product` value types |
 | `lovelace-lang/src/complex.rs` | exact complex arithmetic and fixed-width conversion |
@@ -85,61 +84,21 @@ Tests that cover it (module names, `cargo test -p lovelace-lang`):
 | `suite_engine_batch` (DSP rows) | part of 42 |
 | `round28_batch` (DSP rows) | part of 22 |
 
-`lovelace-run` also carries `dsp_round21` (5 C# `DspPluginTests` rows) as an integration-level batch.
+`lovelace-run` also carries `dsp_round21` (5 C# DSP test rows) as an integration-level batch.
 
 ## Inputs
 
-### How it is enabled
+### How it is available
 
-`lovelace-run` always builds `Engine::new()`, which leaves `enabled_plugins` as `None`; the gate
-`Engine::plugin_enabled` then answers `true` for every registered name
-([`lovelace-lang/src/lib.rs`](../../lovelace-lang/src/lib.rs), lines 990-998). There is no CLI flag
-that removes a family: the usage block lists no plugin option, and `--functions` reports all 124
-builtins in every run.
+`Engine::new()` exposes every registered builtin, so `fft` is callable in every engine,
+`lovelace-run` invocation and desktop session; there is no flag that removes a family and no
+enabled-family set. The `module: "DSP"` label only groups the 16 descriptors for discovery:
+`lovelace-run --functions` reports all 134 builtins, and `--function fft` prints
+`Module: DSP`.
 
-The opt-out is the library seam. `Engine::new_bare()` sets `enabled_plugins = Some(empty)`, so only
-`plugin: None` descriptors resolve. The demo
-[`bare_engine.rs`](../../lovelace-lang/examples/bare_engine.rs) shows both sides (run it with `cargo run -p lovelace-lang --example bare_engine`); these are its observed lines
-for this family:
-
-```text
-bare       fft([0, 1, 0, 0])        => [UnknownFunction] Unknown function 'fft'.
-bare+dsp   fft([0, 1, 0, 0])        => [1, -1i, -1, 1i]
-bare+dsp   det([[1, 2], [3, 4]])    => -2
-bare+dsp   symbol("x")              => [UnknownFunction] Unknown function 'symbol'.
-second load: [InvalidOperation] Plugin 'Lovelace.Dsp' is already loaded.
-```
-
-`det` keeps working on the bare engine because it is core; `symbol` stays unknown because it belongs
-to a different family. The full three-family transcript is in the [extensions README](README.md#the-plugin-model).
-
-Calling a builtin from an unloaded family answers the ordinary vocabulary failure, not a special
-"plugin missing" error: `[UnknownFunction] Unknown function 'fft'.` — code `UnknownFunction`,
-category `UnsupportedOperation` (`unknown_function_among`), raised at the gate in `Engine::call`.
-
-To re-enable the family on a bare engine, load a plugin whose `name()` is exactly the registry
-string. The gate keys on that name, so the demo's `EnableDsp` registers nothing and the engine's own
-16 DSP builtins become callable again:
-
-```rust
-use lovelace_lang::modus::{ModusHost, ModusPlugin};
-use lovelace_lang::{Engine, LangError};
-
-struct EnableDsp;
-impl ModusPlugin for EnableDsp {
-    fn name(&self) -> &str { "Lovelace.Dsp" }
-    fn register(&mut self, _host: &mut ModusHost) -> Result<(), LangError> { Ok(()) }
-}
-
-let mut engine = Engine::new_bare();
-engine.load_plugin(&mut EnableDsp).unwrap();
-assert_eq!(engine.eval("fft([0, 1, 0, 0])").unwrap().display(), "[1, -1i, -1, 1i]");
-```
-
-`Engine::load_plugin` is in `lovelace-lang/src/lib.rs`; a second load is refused with
-`[InvalidOperation] Plugin 'Lovelace.Dsp' is already loaded.` `Engine::register_builtin`
-(`lovelace-lang/src/lib.rs`) is the other install path: a dynamically registered name is dispatched in
-`Engine::call` *before* the gate, so it is callable even on a bare engine.
+The family stays independently testable without the interpreter because the DSP kernels are ordinary
+Rust functions; the tests in the table above and the runner's `dsp_round21` batch call the same
+engine entry point every host uses.
 
 ## Outputs
 
@@ -212,7 +171,7 @@ registry's declared metadata. All 16 were executed; the call and its exact typed
 ## Errors
 
 Every refusal is an ordinary `LangError` with a stable code and category; there is no special
-"plugin" error type.
+family-specific error type.
 
 | Failure | Code / category |
 |---|---|
@@ -220,8 +179,6 @@ Every refusal is an ordinary `LangError` with a stable code and category; there 
 | `fft` of a non-power-of-two length | `InvalidArgument` / `TypeMismatch`, naming the length and `(Parameter 'x')` |
 | Negative count, or a non-positive `movingavg` window | `InvalidArgument` / `TypeMismatch`, with the declared bound |
 | A signal element that is neither numeric nor complex (for example a `SymbolExpr`) | `InvalidOperation` / `DomainError`, message `DSP builtins expect numeric/complex elements, but got '<kind>'.` |
-| A name from an unloaded family | `UnknownFunction` / `UnsupportedOperation`, the ordinary unknown-name failure |
-| Loading the same plugin twice | `InvalidOperation` / `DomainError`, message `Plugin 'Lovelace.Dsp' is already loaded.` |
 
 An out-of-range index such as `fft([0, 1, 0, 0])[9]` is the language's index failure, not a DSP
 one, and `delay(x, k)` with `k` past the end is not an error at all: it answers zeros because the
@@ -339,8 +296,8 @@ movingavg([1, 2, 3, 4], 2)
 = [0.5, 1.5, 2.5, 3.5] (Vector)
 ```
 
-Precision follows the plugin knob. Untouched, a DSP builtin computes at 30 places; `setprecision`
-promotes it. Both runs below are real:
+Precision follows the DSP knob (ADR-004). Untouched, a DSP builtin computes at 30 places;
+`setprecision` promotes it. Both runs below are real:
 
 ```lovelace
 im(dft([1, 2, 3])[1])

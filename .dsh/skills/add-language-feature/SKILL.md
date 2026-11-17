@@ -99,6 +99,6 @@ cargo run -p lovelace-run -- --eval "1 != 2" --text
 
 Observable success: `suite_lex_parse_batch` and the focused feature test each report a nonzero passed
 count with `0 failed`; `golden_batch` reports its nonzero count (8 tests today) with the environment
-variable unset; the corpus filter reports `1 passed, 0 failed, 214 total (filter lang/112)`; the CLI
+variable unset; the corpus filter reports `1 passed, 0 failed, 231 total (filter lang/112)`; the CLI
 prints the exact typed value (`True (Boolean)` in the example) or the exact coded error with its
 UTF-16 position.

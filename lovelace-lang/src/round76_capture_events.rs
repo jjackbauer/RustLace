@@ -190,7 +190,7 @@ fn capture_state_records_variables_and_user_functions() {
     let f = snapshot.functions.get("f").expect("f captured");
     assert_eq!(f.parameters, vec!["y".to_string()]);
     assert!(!f.is_builtin);
-    assert_eq!(f.plugin, None);
+    assert_eq!(f.module, "User");
 
     let abs = snapshot
         .functions

@@ -199,19 +199,13 @@ fn dxstructuredresultstests_linsolvefull_singularsystem_reportsstatusnotthrow() 
 #[test]
 fn hyperbolicbuiltinsandnegativeintegerpowerstests_builtincount_includesthethreehyperbolicfunctions()
  {
-    // C#: a SuiteEngine with SymbolicsPlugin + MathIRPlugin publishes 107 builtins. The RustLace
-    // registry adds one core builtin the reference does not have (eig_sym, the Jacobi symmetric
-    // eigensolver), so the same plugin set now publishes 108; the plugin delta is unchanged.
-    assert_eq!(
-        108,
-        crate::registry::builtin_count_for_plugins(&["Lovelace.Symbolics", "Lovelace.MathIR"])
-    );
-    // The runner loads the DSP plugin too, and its count is what the --functions surface reports;
-    // the difference is still exactly the 16 DSP descriptors, not a drift in the core set.
-    assert_eq!(124, crate::registry::BUILTINS.len());
+    // The one static registry publishes every family at once: the reference's Symbolics + MathIR
+    // count plus the RustLace-only `eig_sym` core builtin and the DSP descriptors. There is no
+    // loaded-plugin set to subtract, so the total is the registry length.
+    assert_eq!(134, crate::registry::BUILTINS.len());
     for name in ["asinh", "acosh", "atanh"] {
         let info = crate::registry::find(name).unwrap_or_else(|| panic!("{name} is registered"));
-        assert_eq!(Some("Lovelace.Symbolics"), info.plugin);
+        assert_eq!("Symbolics", info.module);
     }
 }
 
