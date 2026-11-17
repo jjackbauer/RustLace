@@ -240,8 +240,7 @@ without a kind suffix, which is why a result line for a Text value is just the t
 ```
 
 `type("hi")` is `Text`. Interpolation embeds the **display** rendering of an expression, so no
-`(Kind)` suffix leaks into the text. A `Text` value can be indexed and measured with `len`, but it
-is not a `Vector`; use `len`, not array indexing, for its length.
+`(Kind)` suffix leaks into the text. A `Text` value can be measured with `len`, but is not indexable with brackets and is not a `Vector`.
 
 ## Vector and Array
 
