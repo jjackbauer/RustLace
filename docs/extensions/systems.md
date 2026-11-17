@@ -18,21 +18,29 @@ In the desktop workbench, open the window, type or paste a call into the editor 
 (or `Ctrl+Enter`); results appear in the Logs pane and the workspace:
 
 ```console
-$ cargo run -p lovelace-desktop
-$ cargo run -p lovelace-desktop -- model.ls   # open a saved script
+$ cargo run -p lovelace-desktop                 # an empty document
+$ cargo run -p lovelace-desktop -- examples/systems.ls
 ```
 
-From the command line, evaluate a call directly or a saved `.ls` script:
+From the command line, evaluate a call directly or run the checked-in example script:
 
 ```console
 $ cargo run -p lovelace-run -- --eval "sys_mm1(8, 10).utilization" --text
 = 0.8 (Real)
-$ cargo run -p lovelace-run -- --file model.ls --text
+$ cargo run -p lovelace-run -- examples/systems.ls --text --omit-variables
+= 20 (Real)
 ```
 
-Discovery reads the same registry the editor completes from: `lovelace-run --functions sys` lists
-the ten `Systems` builtins, and `lovelace-run --function sys_mm1` prints one builtin's declared
-parameters, return kind, summary and examples.
+Discovery reads the same registry the editor completes from: `cargo run -p lovelace-run --
+--functions sys` lists the `Systems` builtins, and `cargo run -p lovelace-run -- --function
+sys_mm1` prints one builtin's declared parameters, return kind, summary and examples.
+
+**Version note.** The `exact_values` member on these records, and the exact model transport behind
+it (a `1/97` service time surviving `sys_station` → `sys_open` → `sys_analyze`), were added after
+v0.7.1. On the v0.7.1 desktop, `sys_mm1(8, 10).exact_values.utilization` fails with
+`record 'StationAnalysis' has no member 'exact_values'`; the builtins themselves and the examples
+that do not read `exact_values` are unaffected. Use a build of this tree until a release contains
+the change.
 
 It contributes **10** of the engine's 134 builtins, all in the `Systems` category, and is declared
 by ten `module: "Systems"` descriptors in
@@ -198,8 +206,8 @@ refused rather than converted, because a systems parameter must be exact.
 ## Examples
 
 Every example below is a complete call with the output the runner prints for it
-(`lovelace-run --file <script> --text --omit-variables`), so it can be pasted into the editor as
-is. Each builtin's block gives its arguments, return record, the fields it defines, its precision
+(`cargo run -p lovelace-run -- <script> --text --omit-variables`), so it can be pasted into the
+editor as is. Each builtin's block gives its arguments, return record, the fields it defines, its precision
 behaviour and the refusals it can produce.
 
 ### Per-builtin reference

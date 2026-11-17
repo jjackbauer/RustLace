@@ -25,10 +25,16 @@ ordinary Lovelace calls.
   values in the workspace pane (`Ctrl+4`; `Ctrl+Alt+1` selects its Result view). `F8` jumps to the
   last failed run's diagnostic and `F1` lists the keyboard map.
 - **Command-line runner.** `cargo run -p lovelace-run -- --eval "sys_mm1(8, 10).utilization" --text`
-  prints `= 0.8 (Real)`; `--file model.ls` runs a saved script, and `--json` gives the wire envelope.
-- **Discovery.** `lovelace-run --functions sys` lists the ten `Systems` builtins with their declared
-  parameters, and `lovelace-run --function sys_mm1` prints one entry (parameters, return kind,
+  prints `= 0.8 (Real)`; `cargo run -p lovelace-run -- examples/systems.ls --text --omit-variables`
+  runs the checked-in script, and `--json` gives the wire envelope.
+- **Discovery.** `cargo run -p lovelace-run -- --functions sys` lists the matching builtins (the ten
+  `Systems` ones; the pattern also matches `solve_system` and `solve_system_full`), and
+  `cargo run -p lovelace-run -- --function sys_mm1` prints one entry (parameters, return kind,
   summary, examples).
+
+**Build caveat.** The `exact_values` sidecar used by some examples on this page was added after
+v0.7.1: a v0.7.1 desktop answers `record 'StationAnalysis' has no member 'exact_values'`. The metric
+fields are unchanged, and a build of this tree has the sidecar; the v0.7.1 artifact predates it.
 
 Each builtin is documented function by function — arguments and accepted kinds, the record it
 returns and that record's fields, precision behaviour and refusals, with an executed example — in
@@ -677,7 +683,7 @@ at a checkout. The crate is not published to crates.io yet.
 | `is_empty_traffic(network)` | `bool` | true when no station has a positive visit ratio |
 | `station_utilization(service_time, throughput, servers)` | `Option<Q>` | `U = X * S / c`, `None` for a delay center |
 | `check_stable(id, service_time, throughput, servers)` | `Result<(), SystemsError>` | the stability refusal on its own |
-| `check_same_dimension(left, right)` | `Result<(), SystemsError>` | the dimension refusal on its own |
+| `check_same_dimension(left, right)` | `Result<(), SystemsError>` | the dimension refusal on its own (**`units::check_same_dimension`**, not the crate root) |
 
 ### Types
 
@@ -730,7 +736,8 @@ at a checkout. The crate is not published to crates.io yet.
 
 The public modules are `capacity`, `errors`, `model`, `mva`, `networks`, `operational_laws`,
 `queueing`, `results`, `sweep`, `units` and `validation`; the root re-exports everything above, and
-the two module-only items are `queueing::QUEUEING_ASSUMPTIONS` and `validation::is_empty_traffic`.
+the three module-only items are `queueing::QUEUEING_ASSUMPTIONS`, `units::check_same_dimension` and
+`validation::is_empty_traffic`.
 
 `lovelace-systems/examples/mmc_and_mva.rs` is a complete program for the two models on this page's
 first examples; run it from the repository root:
@@ -774,8 +781,8 @@ modelled:
 ## How the numbers here were checked
 
 The Lovelace outputs above were produced from this tree with the built runner and its `--text`
-format (`lovelace-run --file <script> --text --omit-variables`), one expression per script, and the
-error lines are the runner's own. The Rust outputs are the two statements in
+format (`cargo run -p lovelace-run -- <script> --text --omit-variables`), one expression per
+script, and the error lines are the runner's own. The Rust outputs are the two statements in
 `lovelace-systems/examples/mmc_and_mva.rs`, which asserts the same exact strings before printing
 them. The underlying mathematics is pinned by three independent gates: the crate's unit and golden
 tests, the Python `fractions.Fraction` oracle, and the documentation corpus that runs the language
