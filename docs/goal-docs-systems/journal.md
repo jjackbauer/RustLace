@@ -212,3 +212,49 @@
 - **Conclusion**: The committed tree (without the concurrent goal's uncommitted edits) compiles and
   delivers the same observable results: exact `sys_mm1` output and a 231/0 corpus.
 - **Related**: EVD-029, RISK-003
+### OQ-003: The goal's accepted baseline scope excludes a delivered documentation file
+
+- **Question**: Should `.github/copilot-instructions.md` be part of the accepted baseline scope, or
+  should its two-line correction (corpus count and the systems-library pointer) be dropped?
+- **Needed evidence**: a user decision.
+- **Priority**: P1 blocking the goal record only
+- **Raised by**: Round 15 completion attempt
+- **Resolution**: User chose to keep the correction and close the goal (`1, but close it...`). The
+  correction is committed in `24d89fb`; the completion gate still rejected the goal for a different
+  reason (OQ-004).
+- **Related**: EVD-018, EVD-021
+
+### OQ-004: A concurrent goal is editing crates outside this goal's accepted scope
+
+- **Question**: When can this goal's completion be recorded while `lovelace-nat`, `lovelace-real`,
+  `lovelace-symbolics` and `lovelace-json` carry another goal's uncommitted edits?
+- **Needed evidence**: the concurrent goal commits/stashes/reverts those paths, or the accepted scope
+  is widened to cover them.
+- **Priority**: P0 blocking the goal record (not the delivery)
+- **Raised by**: Round 15 second completion attempt
+- **Related**: RISK-004, EVD-028
+
+### RISK-004: External working-tree edits make the goal uncompletable
+
+- **Risk**: `update_goal action=complete` computes changed paths against the accepted baseline and
+  rejects any path outside it. Another active goal is concurrently editing
+  `lovelace-nat/src/lib.rs`, `lovelace-real/src/lib.rs`, `lovelace-real/src/round29_real_batch.rs`,
+  `lovelace-symbolics/src/lib.rs` and `lovelace-json/src/lib.rs` in the same working tree, so the
+  check can never pass while those edits exist.
+- **Likelihood**: High
+- **Impact**: Medium (delivery is complete and committed; only the goal record is blocked)
+- **Evidence**: EVD-028; `git status --short` at the second completion attempt
+- **Mitigation**: leave the goal active and report the concrete condition; retry once the concurrent
+  goal commits/stashes its work or once the user widens the accepted scope. Do not revert another
+  goal's in-flight work to force a bookkeeping pass.
+- **Gate**: G4
+
+### VAL-006: User decision on the documentation scope
+
+- **Target**: OQ-003
+- **Method**: asked the user directly; answer "1, but close it..."
+- **Evidence examined**: the answer above; commit `24d89fb` keeps the correction
+- **Result**: Supported
+- **Conclusion**: Keep the `.github/copilot-instructions.md` correction; the completion blocker is
+  now exclusively the concurrent goal's edits (OQ-004), not this file.
+- **Related**: OQ-003, OQ-004
