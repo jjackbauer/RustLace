@@ -12241,3 +12241,36 @@ fn eig_sym(engine: &Engine, array: &NdArray<Value>, pos: usize) -> Result<Value,
         ],
     ))
 }
+
+#[cfg(test)]
+mod matrix_rank_exact_regressions {
+    use crate::Engine;
+
+    #[test]
+    fn rank_uses_exact_elimination_not_a_determinant_heuristic() {
+        let cases = [
+            ("matrix_rank([[0,0],[0,0]])", "0 (Integer)"),
+            ("matrix_rank([[1,2],[2,4]])", "1 (Integer)"),
+            ("matrix_rank([[1,2,3],[2,4,6],[3,6,9]])", "1 (Integer)"),
+            ("matrix_rank([[1,2,3],[2,4,6]])", "1 (Integer)"),
+            ("matrix_rank([[1,0,0],[0,1,0]])", "2 (Integer)"),
+            ("matrix_rank([[1,2],[3,4]])", "2 (Integer)"),
+            ("matrix_rank([[0,1],[0,0]])", "1 (Integer)"),
+            ("matrix_rank([[1/2,1],[1,2]])", "1 (Integer)"),
+        ];
+        for (source, expected) in cases {
+            let mut engine = Engine::new();
+            let value = engine.eval(source).expect(source);
+            assert_eq!(engine.format_typed(&value), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn rank_refuses_precision_limited_numbers_as_exact_evidence() {
+        let mut engine = Engine::new();
+        let error = engine
+            .eval("matrix_rank([[sqrt(2),0],[0,1]])")
+            .expect_err("inexact rank input must not be certified");
+        assert!(error.to_string().contains("precision-limited Real"));
+    }
+}
