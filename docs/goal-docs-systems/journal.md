@@ -202,3 +202,13 @@
 - **Depends on**: this P0 delivery
 - **Status**: Open
 - **Related**: DEC-003
+### VAL-005: The committed tree is the verified tree
+
+- **Target**: delivery commit `2d9565e`
+- **Method**: checked the commit out into an isolated `git worktree` and re-ran the systems suite,
+  the adapter suite, a CLI evaluation and the release corpus there
+- **Evidence examined**: EVD-029
+- **Result**: Supported
+- **Conclusion**: The committed tree (without the concurrent goal's uncommitted edits) compiles and
+  delivers the same observable results: exact `sys_mm1` output and a 231/0 corpus.
+- **Related**: EVD-029, RISK-003

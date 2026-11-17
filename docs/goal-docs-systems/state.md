@@ -17,7 +17,7 @@
 | G1 Evidence | PASS | 28 appended EVD rows, each re-run or read by the orchestrator |
 | G2 Falsification | PASS | 0 Falsified claims; VAL-001..004 all Supported |
 | G3 Coverage | PASS | D1–D10 covered; D10's CTMC enumerator was replaced by the documented direct-Erlang-C oracle + randomized conservation tests (recorded in VAL-003) |
-| G4 Reproduction | PASS | workspace tests exit 0, corpus 231/0, docs gates pass for this tree, desktop modes green |
+| G4 Reproduction | PASS | workspace tests exit 0, corpus 231/0, docs gates pass for this tree, desktop modes green; commit `2d9565e` re-verified in an isolated worktree (EVD-029) |
 | G5 Honesty | PASS | OQ-002 (CRLF positions), RISK-003 (concurrent goal), DEC-005 (orchestrator implementation) recorded |
 
 ## Objective ledger
