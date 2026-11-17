@@ -146,3 +146,18 @@ net = sys_open(8, [sys_station("api", 1/20, 1), sys_station("db", 1/50, 2)]); sy
 ```text
 = 0.14(2156862745098039) (Real)
 ```
+
+### In the desktop IDE
+
+The workbench runs the same engine as the runner, so the calls above need no IDE-specific form.
+Start the window, paste a call into the editor, and press **Run** or `Ctrl+Enter`:
+
+```console
+$ cargo run -p lovelace-desktop                 # an empty document
+$ cargo run -p lovelace-desktop -- systems.ls   # or open a saved script
+```
+
+The run's typed result line appears in the Logs pane and the committed values in the workspace pane
+(`Ctrl+4` focuses it; `Ctrl+Alt+1` selects its Result view). `F8` jumps to the last failed run's
+diagnostic, `Ctrl+S` saves, `Ctrl+O` opens a script, and `F1` lists the whole keyboard map. The
+panes and screenshots are on [the desktop crate page](../crates/lovelace-desktop.md).

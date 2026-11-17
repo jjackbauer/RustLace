@@ -110,6 +110,24 @@ input rather than promoted to an exact rational.
 
 ## Examples
 
+`lovelace-systems` is a workspace crate and is not published to crates.io yet, so it is consumed by
+path: another crate in this repository depends on it with
+`lovelace-systems = { path = "../lovelace-systems" }`, and a crate outside the repository points
+that same line at its checkout.
+
+`lovelace-systems/examples/mmc_and_mva.rs` is the complete, runnable program for the two models
+below. From the repository root it prints the two exact values:
+
+```console
+$ cargo run -p lovelace-systems --example mmc_and_mva
+mmc(8, 5, 2) probability_waiting=32/45
+mva throughput=2000/101
+```
+
+The fence below is the model code from that program, not a source file on its own: the example
+wraps it in `fn main` and adds the two `println!` lines. The documentation gate compiles and runs
+the fence as written, so both assertions are executed rather than merely displayed.
+
 ```rust
 use lovelace_systems::{
     analyze, mmc, ClosedWorkload, NeverCancel, Q, QueueNetwork, ServiceDiscipline, SolverOptions,
@@ -149,6 +167,10 @@ let closed = QueueNetwork::new(
 let mva = analyze(&closed, &SolverOptions::default(), &NeverCancel).expect("solved");
 assert_eq!(mva.aggregate.throughput.to_string(), "2000/101");
 ```
+
+The same models are reachable from the Lovelace language as the ten `sys_*` builtins, documented
+with their records and refusals in [the systems extension page](../extensions/systems.md); that
+page also covers [running them in the desktop IDE](../extensions/systems.md#in-the-desktop-ide).
 
 ### Tests
 
