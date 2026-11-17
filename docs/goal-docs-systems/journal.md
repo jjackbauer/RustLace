@@ -258,3 +258,28 @@
 - **Conclusion**: Keep the `.github/copilot-instructions.md` correction; the completion blocker is
   now exclusively the concurrent goal's edits (OQ-004), not this file.
 - **Related**: OQ-003, OQ-004
+### VAL-007: Delivery survives the concurrent goal's hardening edits
+
+- **Target**: the delivery under the current mixed working tree (goal round 2)
+- **Method**: re-ran the systems suite, the adapter suite, the release corpus and a CLI evaluation
+  while the concurrent goal's edits (`#![forbid(unsafe_code)]`, corpus stack worker, JSON limits)
+  were present
+- **Evidence examined**: `cargo test -p lovelace-systems` exit 0; `cargo test -p lovelace-lang
+  systems_family` exit 0 (8 passed); release corpus `231 passed, 0 failed`; `sys_mm1(8, 10).response_time`
+  = `0.5 (Real)`
+- **Result**: Supported
+- **Conclusion**: the delivery is not broken by the concurrent edits; the only outstanding item is
+  the goal-record scope check (OQ-004), which is now in its second consecutive round.
+- **Related**: OQ-004, RISK-004
+
+### RISK-005: Third consecutive completion attempt would force a blocked verdict
+
+- **Risk**: if the concurrent goal's edits (`lovelace-nat`, `lovelace-real`, `lovelace-symbolics`,
+  `lovelace-json`, plus its hardening edits inside `lovelace-lang`/`lovelace-corpus`/`lovelace-bench`)
+  still exist at the next round, the goal-tool policy permits `blocked` with this concrete condition,
+  even though the delivery itself is complete.
+- **Likelihood**: High
+- **Impact**: Low for the code, Medium for the goal record
+- **Evidence**: `git status --short` at goal rounds 1 and 2; EVD-028
+- **Mitigation**: report the condition; do not revert another goal's in-flight work.
+- **Gate**: G4

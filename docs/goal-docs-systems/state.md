@@ -1,6 +1,6 @@
 # Harness State — `systems`
 
-- **Round**: 15 of 20 (delivery converged; goal record blocked externally, OQ-004)
+- **Round**: goal round 2/30 (delivery converged; same external goal-record blocker for the second consecutive round, OQ-004)
 - **Goal**: RustLace ships `lovelace-systems` as a first-class statically integrated exact
   queueing/operations-research crate through the one static builtin registry, with the Modus plugin
   mechanism completely deleted and all pre-existing builtins still available.
