@@ -1,10 +1,11 @@
 # RNL-001 release evidence
 
 **Status:** RNL-001 implemented in commit `32ea6cd0f185e4e8f28d53369837085933ec6e65` (`32ea6cd`).
-PR #9's review remediation is commit `c26f909cabaeab6d5f664974ae1c06eb8ceeb9de` (`c26f909`),
-merged with `main` in `55a8a421f3599eacfd8300948f09183169e56e36` (`55a8a42`). All seven required
-PR checks passed in run 44125853308; §6 maps the review findings to the fix. A second review followed;
-§7 records its corrections. This page records the commands, the observed results and the remaining
+PR #9's first review remediation is commit `c26f909cabaeab6d5f664974ae1c06eb8ceeb9de` (`c26f909`),
+merged with `main` in `55a8a421f3599eacfd8300948f09183169e56e36` (`55a8a42`). The second-review
+fix is commit `1729ef5`, with the evidence/docs head at `93fbf38`; all seven required PR checks
+passed in run 44140509356. §6 maps the first review findings to the fix; §7 records the second
+review corrections. This page records the commands, the observed results and the remaining
 limitations so a reader does not have to trust a summary.
 
 ## 1. What changed
@@ -90,11 +91,12 @@ before merge, regardless of passing unit tests. It is demonstrated twice:
 
 ## 5. Remaining limitations
 
-- **CI has run on PR #9.** At head `55a8a42`, all seven checks passed: architecture-policy
-  (Ubuntu and Windows), numerical-kernel, Windows full workspace, Linux/Xvfb desktop and
-  documentation examples (Ubuntu and Windows), in run
-  [44125853308](https://github.com/jjackbauer/RustLace/actions/runs/44125853308). The local
-  observations above are Windows-only; the CI run is the Linux and Windows reproduction.
+- **CI has run on PR #9.** At the second-review head `93fbf38`, all seven checks passed:
+  architecture-policy (Ubuntu and Windows), numerical-kernel, Windows full workspace, Linux/Xvfb
+  desktop and documentation examples (Ubuntu and Windows), in run
+  [44140509356](https://github.com/jjackbauer/RustLace/actions/runs/44140509356). The earlier
+  review-remediation head `55a8a42` also passed all seven in run 44125853308. The local observations
+  above are Windows-only; the CI runs are the Linux and Windows reproduction.
 - **Branch protection is configured.** `main` requires the seven PR checks: both
   `architecture-policy` matrix legs, `numerical-kernel`, `windows`, `linux` and both `docs` matrix
   legs. Protection also requires strict up-to-date branches, applies to administrators
@@ -138,7 +140,8 @@ records under `docs/goal-docs-rnl-001-review/round-2/`.
 
 ## 7. Second review (2026-11-17)
 
-The second review of PR #9 raised two further gaps. Both are fixed in commit `1729ef5`
+The second review of PR #9 raised two further gaps. Both are fixed in commit `1729ef5` (final
+docs head `93fbf38`, all seven checks green in run 44140509356)
 on top of `428f3ba`; the source records are
 `docs/goal-docs-rnl-001-review-2/round-1/bit-budget.md` and
 `docs/goal-docs-rnl-001-review-2/round-1/partial-duplicate.md`.

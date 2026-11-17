@@ -9,3 +9,4 @@
 | EVD-005 | Partial duplicate kernel is rejected after the fix | python tools/test-architecture-gates.py | 21/21 scenarios pass; partial-duplicate-kernel exits 1 with duplicate-numeric-representation | High | 1 | OBS-002 |
 | EVD-006 | Real workspace and valid fixture stay clean | python tools/check-architecture.py; valid fixture command | 14 crates/332 files/0 violations; valid fixture 7/7/0 | High | 1 | OBS-002 |
 | EVD-007 | Final local suite is 6280/0/0 | cargo test --workspace --no-fail-fast; per-crate loop | 45 targets, 6280 passed, 0 failed, 0 ignored; rational 34 | High | 1 | OBS-003 |
+| EVD-008 | Second-review head passes all seven PR checks | gh pr checks 9; run 44140509356 | All seven checks pass at 93fbf38; mergeStateStatus CLEAN | High | 2 | OBS-003 |

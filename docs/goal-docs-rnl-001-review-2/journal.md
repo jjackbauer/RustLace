@@ -45,3 +45,19 @@
 - **Evidence examined**: the round-1 reports and the commands above.
 - **Result**: Supported
 - **Conclusion**: Both second-review findings are fixed. No existing test or scenario was removed; the mutation count increased from 20 to 21.
+
+### OBS-004: Second-review head is green and merge-clean
+
+- **Source**: `gh pr checks 9` and `gh pr view 9` at `93fbf38`; GitHub Actions run 44140509356
+- **Fact**: All seven required checks pass; `mergeStateStatus` is `CLEAN` and `mergeable` is `MERGEABLE`.
+- **Implications**: D5 is met; PR #9 is ready for the approval decision.
+- **Confidence**: High
+- **Related**: EVD-008
+
+### VAL-002: Second-review delivery
+
+- **Target**: HYP-001, HYP-002
+- **Method**: Re-ran the full workspace (6280), rational suite (34), checker (14/332/0), mutation suite (21/21), docs gates and examples; pushed commits 1729ef5/93fbf38 and waited for all seven PR checks.
+- **Evidence examined**: EVD-001..EVD-008; CI run 44140509356.
+- **Result**: Supported
+- **Conclusion**: Both second-review findings are fixed and verified locally and in CI.
