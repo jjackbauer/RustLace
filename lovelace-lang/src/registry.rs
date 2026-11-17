@@ -1096,7 +1096,7 @@ pub static BUILTINS: &[BuiltinInfo] = &[
         module: "Core",
         category: "Arrays",
         summary: Some("Mean of elements (optionally along an axis)."),
-        return_kind: Some("Real | Natural | Integer | Vector"),
+        return_kind: Some("Real | Natural | Integer | Vector | Symbolic"),
         related: &["sum"],
         examples: &["mean([1, 2, 3])"],
     },
