@@ -15,6 +15,26 @@ explicitly labelled **precision-limited**. The decimal and periodic renderings a
 displays an exact rational; a rendering that had to truncate a period is marked as such. No number
 on this page is error-bounded or parity-verified.
 
+## Using it from the IDE or the CLI
+
+The library's user-facing surface is the ten `sys_*` builtins, and they need no adapter: they are
+ordinary Lovelace calls.
+
+- **Desktop IDE.** Start `cargo run -p lovelace-desktop`, paste a call into the editor and press
+  **Run** or `Ctrl+Enter`. The run's typed result line lands in the Logs pane and the committed
+  values in the workspace pane (`Ctrl+4`; `Ctrl+Alt+1` selects its Result view). `F8` jumps to the
+  last failed run's diagnostic and `F1` lists the keyboard map.
+- **Command-line runner.** `cargo run -p lovelace-run -- --eval "sys_mm1(8, 10).utilization" --text`
+  prints `= 0.8 (Real)`; `--file model.ls` runs a saved script, and `--json` gives the wire envelope.
+- **Discovery.** `lovelace-run --functions sys` lists the ten `Systems` builtins with their declared
+  parameters, and `lovelace-run --function sys_mm1` prints one entry (parameters, return kind,
+  summary, examples).
+
+Each builtin is documented function by function — arguments and accepted kinds, the record it
+returns and that record's fields, precision behaviour and refusals, with an executed example — in
+[the systems reference](extensions/systems.md#per-builtin-reference). The rest of this page explains
+the models those functions compute.
+
 ## What the library computes
 
 | Area | Models | Language builtins |
@@ -523,7 +543,9 @@ long loops, with `NeverCancel` and the atomic `FlagCancel` as the two standard i
 ## The Lovelace surface
 
 The ten builtins are declared in the registry with the same stable names the desktop and the runner
-publish:
+publish. Each one's arguments, accepted kinds, return record, fields, precision behaviour and
+refusals are documented function by function in
+[the systems reference](extensions/systems.md#per-builtin-reference); this table is the index:
 
 | Builtin | Arguments | Returns |
 |---|---|---|
@@ -552,21 +574,9 @@ analysis and the wire unchanged.
 
 ### Records
 
-The language returns records, not display strings. Their fields:
-
-| Record | Fields |
-|---|---|
-| `Station` | `id`, `discipline`, `service_time`, `visits`, `service_demand`, `servers` (finite only), `exact_values` |
-| `QueueNetwork` | `name`, `workload`, `stations`, `precision`, `arrival_rate` (open) or `population` + `think_time` (closed), `exact_values` |
-| `StationAnalysis` | provenance fields, `laws`, then one station's metrics |
-| `Analysis` | provenance fields, `throughput`, `response_time`, `occupancy`, `queue_length`, `population` + `think_time` (closed), `exact_values`, `laws`, `stations` |
-| `StationMetrics` | `id`, `discipline`, `visits`, `service_time`, `service_demand`, `throughput`, `utilization`, `busy_servers`, `response_time`, `waiting_time`, `occupancy`, `queue_length`, `servers` (finite only), `probability_waiting` (where defined), `exact_values` |
-| `LawCheck` | `name`, `left`, `right`, `holds`, `exact_values` |
-| `Bottlenecks` | `basis`, `max_demand`, `stations` (`BottleneckStation`), `warnings`, `throughput_bound` (absent when unbounded), `exact_values` |
-| `Sweep` | `axis`, `points` (`SweepPoint`), `warnings` |
-| `SweepPoint` | `parameter`, `throughput`, `response_time`, `max_utilization`, `exact_values`, `analysis` |
-
-The provenance fields on `StationAnalysis` and `Analysis` are `model`, `solver`, `solver_version`,
+The language returns records, not display strings; [the systems
+reference](extensions/systems.md#outputs) lists every record and its full field list. The
+provenance fields on `StationAnalysis` and `Analysis` are `model`, `solver`, `solver_version`,
 `exact`, `exactness`, `precision`, `status`, `assumptions`, `approximation` and `warnings`. Every
 exact-valued field (as opposed to an integer count such as `population` or `servers`) has a matching
 entry in `exact_values`; compare exact values through their numerator and denominator, because an
@@ -623,7 +633,7 @@ Error [InvalidIdentifier/DomainError]: Station identifier 'has space' must be 1 
 The workbench runs the same engine, so the calls above work unchanged in the editor: **Run** or
 `Ctrl+Enter` evaluates the active document. The builtins are discoverable through the registry
 (`--functions`, `--function sys_mm1`) and through the editor's completion. The desktop path is
-described in [`docs/extensions/systems.md`](extensions/systems.md#in-the-desktop-ide); the runner
+described in [`docs/extensions/systems.md`](extensions/systems.md#run-it-in-the-ide-or-the-cli); the runner
 prints the same result lines as the examples above:
 
 ```console
