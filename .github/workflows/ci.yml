@@ -266,6 +266,19 @@ jobs:
           bash docs/extensions/examples/run-examples.sh || status=1
           exit "$status"
 
+      # Every ```lovelace snippet under docs/ is executed against the runner
+      # built above and compared with the ```text block that immediately
+      # follows it. The family runners above stay authoritative for their
+      # trees; this is the backstop that catches a guide page (for example
+      # docs/systems-analysis.md) documenting a call the current language no
+      # longer produces. The language pages run in their documented default
+      # mode (--text, with the variable line); every other page runs in the
+      # extension mode (--text --omit-variables). A snippet whose output is
+      # not recorded is a failure, not a skip.
+      - name: Run every documented Lovelace example
+        shell: bash
+        run: bash tools/check-doc-examples.sh
+
       # The documentation consistency gate has three implemented modes, and all
       # three run. check-docs.sh always performs the relative-link and
       # path-shaped-code-reference pass; each flag adds one audit on top of it:
