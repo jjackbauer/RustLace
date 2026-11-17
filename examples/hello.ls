@@ -1,6 +1,3 @@
-# A first Lovelace script.
-# Ctrl+Enter runs it; results land in the logs and workspace panes.
-
 v = 1..5
 print("squares:", v ^ 2)
 sum(v ^ 2)
