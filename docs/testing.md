@@ -21,8 +21,8 @@ is carried forward as a current total. The aggregate below was measured on **Win
 on **2026-11-17**, at review-remediation commit
 **`c26f909cabaeab6d5f664974ae1c06eb8ceeb9de`** (`c26f909`), merged with `main` in
 `55a8a42`, on top of RNL-001 commit
-**`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`), plus the uncommitted second-review
-corrections, with:
+**`32ea6cd0f185e4e8f28d53369837085933ec6e65`** (`32ea6cd`), plus second-review fix commit
+**`1729ef5`**, with:
 
 ```console
 $ cargo test --workspace --no-fail-fast
@@ -30,7 +30,7 @@ $ cargo test --workspace --no-fail-fast
 
 The run reports **45 test targets: 6280 passed, 0 failed, 0 ignored**. The per-crate rows below
 are the same commands grouped by crate (`cargo test -p <crate>`, with the desktop under its normal
-test path), measured in the same working tree; they sum to the same 6280 passed and 0 ignored.
+test path), measured at the same commit; they sum to the same 6280 passed and 0 ignored.
 
 | Crate | Test targets | Passed | Failed | Ignored |
 |---|---:|---:|---:|---:|

@@ -28,7 +28,7 @@ limitations so a reader does not have to trust a summary.
 
 ## 2. Commands and observed results
 
-Measured in the `fix/release-provenance` working tree (the second-review fixes are uncommitted) on
+Measured at second-review fix commit `1729ef5` on the `fix/release-provenance` branch on
 Windows 11 x86_64, 2026-11-17, rustc 1.100.0, release benchmarks with `opt-level = 3`:
 
 | Command | Observed result |
@@ -126,7 +126,7 @@ The independent review of PR #9 raised seven findings. This section maps each to
 commit `c26f909`, merged with `main` in `55a8a42`; the detailed command output is in the round-2
 records under `docs/goal-docs-rnl-001-review/round-2/`.
 
-| Finding | Correction now in the working tree | Evidence |
+| Finding | Correction now in the branch | Evidence |
 |---|---|---|
 | 1 — Exact model values are lost during construction (P0) | `Station` and `QueueNetwork` records carry additive `exact_values` for service time, visits and service demand, or arrival rate / think time; `parse_station` and `parse_network` consume the sidecar and use the decimal field only when the whole sidecar is absent. | `long_period_service_time_survives_station_and_open` and `long_period_think_time_survives_closed_and_mva`; `1/97` keeps denominator 97 through `sys_station → sys_open → sys_analyze` and `sys_station → sys_closed → sys_mva`. |
 | 2 — Checker detection gaps (P1) | Method counts are summed across split `impl` blocks; generic wrapper targets are resolved; empty or generic arithmetic-trait targets are reported as `review-required`; kernel-named free functions are restricted to their owner; a two-field/two-method partial representation is flagged below the four-method threshold. | Nine new mutation scenarios (`split-impl`, `generic-arithmetic-trait`, `free-function-kernel`, `unresolved-arithmetic-impl` and the owner-crate cases); the suite now has 21 scenarios including the second-review `partial-duplicate-kernel`. |
@@ -138,7 +138,7 @@ records under `docs/goal-docs-rnl-001-review/round-2/`.
 
 ## 7. Second review (2026-11-17)
 
-The second review of PR #9 raised two further gaps. Both are fixed in the uncommitted working tree
+The second review of PR #9 raised two further gaps. Both are fixed in commit `1729ef5`
 on top of `428f3ba`; the source records are
 `docs/goal-docs-rnl-001-review-2/round-1/bit-budget.md` and
 `docs/goal-docs-rnl-001-review-2/round-1/partial-duplicate.md`.
