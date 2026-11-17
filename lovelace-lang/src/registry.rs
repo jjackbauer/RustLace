@@ -1069,7 +1069,7 @@ pub static BUILTINS: &[BuiltinInfo] = &[
         variadic: false,
         module: "Core",
         category: "Linear Algebra",
-        summary: Some("Exact rank of a symbolic matrix."),
+        summary: Some("Exact rational matrix rank; symbolic matrices retain a legacy generic estimate."),
         return_kind: Some("Integer"),
         related: &["det", "linsolve"],
         examples: &["matrix_rank([[x, 1], [1, x]])"],
