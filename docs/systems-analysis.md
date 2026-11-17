@@ -647,20 +647,90 @@ From another crate in this repository the dependency is
 `lovelace-systems = { path = "../lovelace-systems" }`; from outside the repository, point that path
 at a checkout. The crate is not published to crates.io yet.
 
-| Function | Purpose |
+### Free functions
+
+| Signature | Returns | Purpose |
+|---|---|---|
+| `mm1(lambda, mu, options, cancel)` | `Result<AnalysisResult, SystemsError>` | M/M/1 single station |
+| `mmc(lambda, mu, servers, options, cancel)` | `Result<AnalysisResult, SystemsError>` | M/M/c through Erlang C |
+| `mm_infinity(lambda, mu, options, cancel)` | `Result<AnalysisResult, SystemsError>` | M/M/&infin; delay center |
+| `solve_station(id, arrival, service_time, visits, discipline, options, cancel)` | `Result<StationResult, SystemsError>` | one station from a known arrival rate |
+| `analyze(network, options, cancel)` | `Result<AnalysisResult, SystemsError>` | dispatch on the model's workload |
+| `analyze_open(network, options, cancel)` | `Result<AnalysisResult, SystemsError>` | open Jackson analysis |
+| `analyze_closed(network, options, cancel)` | `Result<AnalysisResult, SystemsError>` | exact single-class MVA |
+| `bottlenecks(network)` | `BottleneckAnalysis` | bottleneck stations and the throughput bound |
+| `changed_fields(network, scenario)` | `Vec<&'static str>` | the field names a scenario changes on this model |
+| `compare(network, scenario, options, cancel)` | `Result<Comparison, SystemsError>` | baseline and scenario through the same solver |
+| `closed_with(network, population, think_time)` | `Result<QueueNetwork, SystemsError>` | a copy with only the workload replaced |
+| `open_with(network, rate)` | `Result<QueueNetwork, SystemsError>` | the same for an open workload |
+| `sweep_population(network, from, to, step, options, cancel)` | `Result<SweepResult, SystemsError>` | closed population grid |
+| `sweep_arrival(network, from, to, step, options, cancel)` | `Result<SweepResult, SystemsError>` | open arrival-rate grid |
+| `little_law(throughput, response_time)` | `Q` | `L = X * R` |
+| `utilization_law(throughput, service_demand)` | `Q` | `U = X * D` |
+| `forced_flow(visits, throughput)` | `Q` | `X_i = V_i * X` |
+| `interactive_response(population, throughput, think_time)` | `Result<Q, SystemsError>` | `R = N / X - Z` |
+| `check_little(occupancy, throughput, response_time)` | `LawCheck` | exact check of Little's law |
+| `check_utilization(utilization, throughput, service_demand)` | `LawCheck` | exact check of the utilization law |
+| `check_forced_flow(station_throughput, visits, network_throughput)` | `LawCheck` | exact check of forced flow |
+| `check_interactive(population, throughput, response_time, think_time)` | `LawCheck` | exact check of the interactive law |
+| `validate(network)` | `Result<(), SystemsError>` | the construction rules on their own |
+| `is_empty_traffic(network)` | `bool` | true when no station has a positive visit ratio |
+| `station_utilization(service_time, throughput, servers)` | `Option<Q>` | `U = X * S / c`, `None` for a delay center |
+| `check_stable(id, service_time, throughput, servers)` | `Result<(), SystemsError>` | the stability refusal on its own |
+| `check_same_dimension(left, right)` | `Result<(), SystemsError>` | the dimension refusal on its own |
+
+### Types
+
+| Type | Methods and fields |
 |---|---|
-| `mm1`, `mmc`, `mm_infinity` | single-station M/M/1, M/M/c and M/M/&infin; |
-| `solve_station` | one station from a known arrival rate and service time |
-| `analyze` | dispatch on the model's workload |
-| `analyze_open` | open Jackson analysis |
-| `analyze_closed` | exact single-class MVA |
-| `bottlenecks` | bottleneck stations and the throughput bound |
-| `compare` | baseline and scenario through the same solver |
-| `closed_with`, `open_with` | copies with only the workload replaced |
-| `sweep_population`, `sweep_arrival` | bounded sweeps |
-| `little_law`, `utilization_law`, `forced_flow`, `interactive_response` | the laws |
-| `check_*` forms | exact `LawCheck`s for the same laws |
-| `validate` | the construction rules, callable on its own |
+| `Q` | the canonical rational (`lovelace_rational::Rat`, type-identical alias); this crate adds no methods to it |
+| `Station` | `new(id, discipline, service_time, visits)`, `service_demand`, `servers`; fields `id`, `discipline`, `service_time`, `visits` |
+| `StationId` | `new(value)`, `as_str` |
+| `ServiceDiscipline` | variants `FcfsSingleServer`, `Delay`, `MultiServer { servers }`; `servers`, `as_str` |
+| `OpenWorkload`, `ClosedWorkload` | public fields `arrival_rate` / `population` + `think_time` |
+| `Workload` | variants `Open`, `Closed`; `class` |
+| `QueueNetwork` | `new(name, workload, stations)`, `station(id)`, `station_mut(id)`, `total_demand`; fields `name`, `workload`, `stations` |
+| `SolverOptions` | `default`, `check_rational`, `check_iterations`; fields `precision`, `max_iterations`, `max_state_space`, `max_rational_digits`, `collect_populations` |
+| `Cancel` | trait method `is_cancelled`; implementations `NeverCancel` and `FlagCancel(Arc<AtomicBool>)` |
+| `AnalysisResult` | `station(id)`, `laws_hold`; fields `provenance`, `stations`, `aggregate`, `populations` |
+| `StationResult` | the station metric fields from the single-station table, plus `probability_waiting` |
+| `AggregateResult` | `throughput`, `response_time`, `occupancy`, `queue_length`, `population`, `think_time`, `law_checks` |
+| `PopulationPoint` | `population`, `throughput`, `response_time`, `occupancy`, `station_occupancy` |
+| `Provenance` | `exact(...)` constructor; the provenance fields listed above |
+| `LawCheck` | `exact(name, left, right)` constructor; fields `name`, `left`, `right`, `holds` |
+| `Exactness` | variants `Exact`, `PrecisionLimited { precision }`; `is_exact`, `as_str` |
+| `SolverStatus` | variants `Solved`, `Degenerate`; `as_str` |
+| `BottleneckAnalysis` | `bottlenecks`; fields `stations`, `max_demand`, `throughput_bound`, `basis`, `warnings` |
+| `BottleneckEntry` | fields `id`, `service_demand`, `servers`, `ceiling`, `bottleneck` |
+| `BoundBasis` | variants `AsymptoticSingleServer`, `CapacityAdjusted`, `Unbounded`; `as_str` |
+| `Scenario` | `apply(network)`; fields `arrival_rate`, `population`, `think_time`, `demand_scale`, `server_counts`; `Default` |
+| `Comparison` | fields `baseline`, `scenario`, `changed` |
+| `SweepResult` | `max_utilization`; fields `axis`, `points`, `warnings` |
+| `SweepPoint` | fields `parameter`, `result` |
+| `SweepAxis` | variants `Population`, `ArrivalRate`; `as_str` |
+| `Time` | `seconds`, `in_unit`, `as_seconds`, `into_seconds` |
+| `Rate` | `per_second`, `in_unit`, `as_per_second`, `into_per_second` |
+| `Demand` | `seconds_per_job`, `as_seconds_per_job`, `into_seconds_per_job` |
+| `TimeUnit`, `RateUnit` | `Second`/`Minute`/`Hour`, `PerSecond`/`PerMinute`/`PerHour` |
+| `Dimension` | `as_str` |
+| `SystemsError` | `code`, `category`, `message`, plus `new` and the named constructors that build the same categorized refusals (`invalid_identifier`, `unstable_station`, `rational_budget`, ...) |
+| `ErrorCategory` | `as_str` |
+
+### Constants and modules
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `SOLVER_VERSION` | `0.5.0` | the algorithm version published in every result's provenance |
+| `VERSION` | the crate version | available without a Cargo environment at run time |
+| `MAX_SERVERS` | `1_000_000` | the largest accepted server count |
+| `MAX_SWEEP_POINTS` | `10_000` | the largest accepted sweep |
+| `QUEUEING_ASSUMPTIONS` | 4 sentences | the M/M/1, M/M/c and M/M/&infin; assumptions |
+| `JACKSON_ASSUMPTIONS` | 5 sentences | the open-network assumptions |
+| `MVA_ASSUMPTIONS` | 5 sentences | the closed-network assumptions |
+
+The public modules are `capacity`, `errors`, `model`, `mva`, `networks`, `operational_laws`,
+`queueing`, `results`, `sweep`, `units` and `validation`; the root re-exports everything above, and
+the two module-only items are `queueing::QUEUEING_ASSUMPTIONS` and `validation::is_empty_traffic`.
 
 `lovelace-systems/examples/mmc_and_mva.rs` is a complete program for the two models on this page's
 first examples; run it from the repository root:
