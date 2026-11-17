@@ -6,9 +6,8 @@ whenToUse: Use when adding or changing a callable builtin in lovelace-lang, or w
 
 # Add a builtin
 
-A builtin is three things that must agree: a registry descriptor, a dispatch arm, and a test whose
-expected text is the documented rendering. The registry is the single source of arity and discovery,
-so the descriptor is not optional metadata.
+A builtin is three things that must agree: a registry descriptor, a dispatch arm, and independent behavior tests whose expected results cannot be inferred solely from the implementation. The registry is the single source of arity and discovery,
+so the descriptor is not optional metadata. The descriptor's return kinds must include every valid output branch.
 
 ## Files you will touch
 
@@ -25,14 +24,14 @@ so the descriptor is not optional metadata.
 
 1. **Read the table before writing.** Open `lovelace-lang/src/registry.rs` and read several
    `BuiltinInfo` entries. Note the fields: `name`, `parameters`, `min_arity`, `parameter_count`,
-   `variadic`, `plugin`, `category`, `summary`, `return_kind`, `related`, `examples`. `BUILTINS` is
+   `variadic`, `module`, `category`, `summary`, `return_kind`, `related`, `examples`. `BUILTINS` is
    kept in name order; `find` and `matching` rely on that order.
 
-2. **Add the descriptor in name order.** For a core builtin use `plugin: None`. For a builtin that
-   belongs to an advertised plugin use `plugin: Some("Lovelace.Symbolics")` (or `Lovelace.Dsp`,
-   `Lovelace.MathIR`) and keep the implementation reachable in `Engine::new()` as the DSP builtins
-   are. Declare the real parameter names and the exact or minimum arity; do not declare a wider
-   range than the body accepts.
+2. **Add the descriptor in name order.** Use `module: "Core"` for core builtins, or the correct
+   static family name (`"Symbolics"`, `"DSP"`, `"MathIR"`, or `"Systems"`). `module` is
+   discovery metadata, not a loader or dispatch gate. There is no `plugin` descriptor field.
+   Declare real positional parameter names, exact arity bounds and the union of every valid
+   runtime return kind; do not claim a wider accepted range or a narrower return union.
 
 3. **Implement the arm.** In `lovelace-lang/src/builtins.rs`, add an arm to the `match name` in
    `pub fn call`. Read the neighbouring arms for the argument-kind conventions. Call `arity(n)?`
@@ -62,13 +61,14 @@ so the descriptor is not optional metadata.
    assert_eq!(engine.format_typed(&value), "6 (Natural)");
    ```
 
-   Add a refusal test that asserts the exact message, code and category. If the test goes in a new
+   Add a refusal test that asserts the exact message, code and category. Include one test per
+   distinct valid return kind and an independent mathematical oracle or invariant for numeric
+   results where feasible. If the test goes in a new
    file, declare it as a `mod` in `lovelace-lang/src/lib.rs` (test modules are declared there, not
    auto-discovered).
 
 7. **Add the parity fixture.** Append a record to `parity/corpus/lang.json` (or
-   `parity/corpus/symbolics.json`) with the next sequential ID - `lang/112` is the next free ID
-   after the current `lang/111` - and the fields `id`, `doc`, `heading`, `script`, `kind`, `text`.
+   `parity/corpus/symbolics.json`) with the next free sequential ID determined from the current file, and the fields `id`, `doc`, `heading`, `script`, `kind`, `text`.
    `kind` is `value`, `error`, `prints` or `plot`; `text` is the exact typed rendering the engine
    must produce. The corpus is a gate, so a wrong `text` is a failure, not a snapshot update.
 
@@ -101,7 +101,7 @@ cargo test -p lovelace-lang --test cross_library
 python tools/check-architecture.py
 cargo run -p lovelace-run -- --function <name>
 cargo run -p lovelace-run -- --eval "<name>(X, Y)" --text
-cargo run --release -p lovelace-corpus -- lang/112
+cargo run --release -p lovelace-corpus -- <new-corpus-id>
 ```
 
 Observable success: the focused test names the builtin and reports at least one passed test with
