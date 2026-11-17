@@ -10,9 +10,9 @@
 //! published with their exact checks. Every finite-capacity station must be stable, or the analysis
 //! is refused with the offending station named.
 
+use crate::Q;
 use crate::errors::SystemsError;
 use crate::model::{Cancel, QueueNetwork, SolverOptions, Workload};
-use crate::numeric::Q;
 use crate::operational_laws::{check_forced_flow, check_little};
 use crate::queueing::solve_station;
 use crate::results::{

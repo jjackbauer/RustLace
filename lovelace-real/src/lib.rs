@@ -16,6 +16,7 @@ use std::cmp::Ordering;
 
 use lovelace_int::Int;
 use lovelace_nat::Nat;
+use lovelace_rational::{Conversion, Rat};
 
 // The DISPLAY digit cap (the reference's Real.DisplayDecimalPlaces, default 100): how many
 // fractional digits a non-periodic value publishes. Library code defaults to NO cap so internal
@@ -53,6 +54,8 @@ pub mod transcendental;
 mod fast_path_tests;
 #[cfg(test)]
 mod lreal_tests;
+#[cfg(test)]
+mod rational_conversion_tests;
 #[cfg(test)]
 mod round26_trig_parity;
 #[cfg(test)]
@@ -254,21 +257,54 @@ impl Real {
     ///
     /// A Real is a rational at heart (a terminating decimal or a detected period), so an exact
     /// value publishes as numerator/denominator rather than forcing a consumer to parse "0.(3)".
+    /// The reduction is the canonical [`Rat`] constructor's, not a second GCD implementation.
     pub fn to_rational(&self) -> (Int, Nat) {
         let (num, den) = self.to_fraction();
-        let mut a = num.magnitude().clone();
-        let mut b = den.clone();
-        while !b.is_zero() {
-            let remainder = a.div_rem(&b).map(|(_, r)| r).unwrap_or_else(Nat::zero);
-            a = b;
-            b = remainder;
+        let value = Rat::from_parts(num, den)
+            .expect("a real's stored digits always have a non-zero denominator");
+        (value.numerator().clone(), value.denominator().clone())
+    }
+
+    /// Converts an exact rational to a real under an explicit computation budget.
+    ///
+    /// The result is exact when the expansion terminates or its period closes inside
+    /// `max_digits`; otherwise the value is a truncated projection and the returned
+    /// [`Conversion`] records `representation: truncated` and `lossless: false`. The rational is
+    /// exact by construction, so no input-fidelity loss is ever reported here.
+    pub fn from_rational(value: &Rat, max_digits: usize) -> Conversion<Real> {
+        let real = Real::from_fraction(
+            value.numerator().magnitude(),
+            value.denominator(),
+            max_digits.max(1),
+        )
+        .expect("a canonical rational has a non-zero denominator");
+        let real = if value.is_negative() {
+            real.neg()
+        } else {
+            real
+        };
+        if real.is_exact() {
+            Conversion::exact(real)
+        } else {
+            Conversion::truncated(real, max_digits.max(1))
         }
-        if a.is_zero() || a.to_decimal() == "1" {
-            return (num, den);
+    }
+
+    /// The exact rational denoted by the stored digits, with the source fidelity preserved.
+    ///
+    /// The representation is always exact (the digits denote a rational), but a value carrying
+    /// `is_exact() == false` already lost digits before this conversion; the report says
+    /// `input: truncated` and `lossless: false` so the caller cannot mistake the round trip for a
+    /// restoration of precision.
+    pub fn to_rat(&self) -> Conversion<Rat> {
+        let (numerator, denominator) = self.to_rational();
+        let value = Rat::from_parts(numerator, denominator)
+            .expect("a real's stored digits always have a non-zero denominator");
+        if self.is_exact() {
+            Conversion::exact(value)
+        } else {
+            Conversion::from_truncated_input(value, self.frac_digits())
         }
-        let (n, _) = num.div_rem(&a).unwrap_or((num.clone(), Int::from_i64(0)));
-        let (d, _) = den.div_rem(&a).unwrap_or((den.clone(), Nat::zero()));
-        (n, d)
     }
 
     /// True when the value is zero.

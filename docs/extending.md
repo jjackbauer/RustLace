@@ -36,20 +36,33 @@ never by registering it at run time.
 A family is a workspace crate plus a thin language adapter. `lovelace-systems` is the reference
 example.
 
-1. **Build the crate** as a workspace member depending only on the numeric crates
-   (`lovelace-nat`, `lovelace-int`, `lovelace-real`), never on `lovelace-lang` or the desktop
-   (ADR-001). Typed models, validation, exact arithmetic and errors live there; the crate is usable
-   from ordinary Rust without the interpreter.
-2. **Write the adapter** in `lovelace-lang/src/<family>.rs`: convert `Value` records, vectors and
+1. **Build the crate** as a workspace member depending only on the canonical numeric kernel
+   (`lovelace-rational`, and `lovelace-nat`/`lovelace-int` when it manipulates limbs or signs), never
+   on `lovelace-lang` or the desktop (ADR-001). Typed models, validation, exact arithmetic through
+   `Rat`/`Q` and errors live there; the crate is usable from ordinary Rust without the interpreter.
+   A new scientific crate must explicitly identify its numerical-kernel dependency.
+2. **Declare ownership** in `tools/architecture-policy.json`: the crate's `layer`,
+   `responsibility`, `reuses` list and every permitted dependency edge in `allowedEdges`. Run
+   `python tools/check-architecture.py` before writing code; an undeclared crate is a CI failure.
+   If the family needs a new numerical type, stop: improve the owner or write an ADR (RNL-GOV-007).
+   A domain-specific wrapper such as `ArrivalRate`, `ServiceTime` or `Probability` is allowed when
+   it stores one canonical value and delegates arithmetic; add it to `permittedSpecializations` only
+   if it implements an arithmetic trait.
+3. **Write the adapter** in `lovelace-lang/src/<family>.rs`: convert `Value` records, vectors and
    scalars into the crate's types, call the crate, and build structured `Value::Record`/`Value::Vector`
    results. The adapter maps `SystemsError` to `LangError::coded` and passes the evaluation's
-   cancellation check through. It re-implements no formula.
-3. **Register the names** as ordinary `BuiltinInfo` descriptors with `module: "<Family>"` and one
+   cancellation check through. It re-implements no formula. A precision-limited `Real` is refused as
+   an exact input, not promoted; exact results expose an additive `exact_values`
+   numerator/denominator record beside the decimal projection.
+4. **Register the names** as ordinary `BuiltinInfo` descriptors with `module: "<Family>"` and one
    `match name` arm that delegates to the adapter. There is no loader, no trait object, no
    `Box<dyn Fn>` table and no run-time registration anywhere in this path.
-4. **Pin the surface** with language golden tests (`--eval` plus the structured JSON projection), a
+5. **Pin the surface** with language golden tests (`--eval` plus the structured JSON projection), a
    corpus record and a `docs/crates/<family>.md` page. Prove the CLI, engine and desktop observe the
-   same result because they all call `Engine`.
+   same result because they all call `Engine`. A family that returns exact numeric values also needs
+   a cross-library assertion in `lovelace-lang/tests/cross_library.rs`, an independent-oracle entry
+   where practical (`tools/<family>-oracle.py` plus a checked-in fixture), and a green
+   `architecture-policy` and `numerical-kernel` job.
 
 ## 3. Add a UI pane
 

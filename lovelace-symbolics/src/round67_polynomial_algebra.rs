@@ -13,7 +13,7 @@ use crate::polynomials::{content, discriminant, factor, gcd, lcm, primitive_part
 use crate::{Expr, Rat, poly_coeffs, square_free_univariate};
 
 fn rat(n: i64, d: u64) -> Rat {
-    Rat::new(Int::from_i64(n), Nat::from_u64(d))
+    Rat::from_parts(Int::from_i64(n), Nat::from_u64(d)).expect("a rational denominator is non-zero")
 }
 
 fn x() -> Expr {

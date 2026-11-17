@@ -45,10 +45,11 @@ means adding a row here in the same change.
 | `docs/crates/lovelace-know.md` | the `lovelace-know` binary and modules | A JSON-over-stdio command protocol plus the library modules a host embeds. |
 | `docs/crates/lovelace-lang.md` | `Engine`, `Value`, `LangError` | The engine API every host (runner, corpus, knowledge graph, desktop) calls instead of re-implementing the language. |
 | `docs/crates/lovelace-nat.md` | `Nat`, `Number`, `DigitStore` | The arbitrary-precision natural-number API at the base of the numeric stack. |
-| `docs/crates/lovelace-real.md` | `Real` | The arbitrary-precision real API, including the exact periodic-decimal representation. |
+| `docs/crates/lovelace-rational.md` | `Rat`, `RationalError`, `Limits`, `Conversion` | The canonical exact rational API: construction, checked arithmetic, budgets, provenance and conversions. |
+| `docs/crates/lovelace-real.md` | `Real` | The arbitrary-precision real API, including the exact periodic-decimal representation and the `Rat`↔`Real` projections. |
 | `docs/crates/lovelace-run.md` | the `lovelace-run` binary | The script runner and the stable JSON wire envelope an external harness depends on. |
-| `docs/crates/lovelace-symbolics.md` | `Expr`, `Rat`, `cancel` | The symbolic-algebra library API: canonical expressions, `Expr` construction and the cancellation token. |
-| `docs/crates/lovelace-systems.md` | `Q`, `QueueNetwork`, `AnalysisResult`, `SystemsError` | The standalone systems-modeling API: exact queueing, operational laws, Jackson networks, MVA, capacity and sweeps, with no interpreter dependency. |
+| `docs/crates/lovelace-symbolics.md` | `Expr`, `Rat` (re-export), `cancel` | The symbolic-algebra library API: canonical expressions, `Expr` construction and the cancellation token. |
+| `docs/crates/lovelace-systems.md` | `Q` (the canonical `Rat` alias), `QueueNetwork`, `AnalysisResult`, `SystemsError` | The standalone systems-modeling API: exact queueing, operational laws, Jackson networks, MVA, capacity and sweeps, with no interpreter dependency. |
 
 ## Not in scope
 

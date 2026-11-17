@@ -7,9 +7,9 @@
 //! at least two servers. Solver-specific assumptions (stability, discipline support) are checked by
 //! the solver that relies on them and name the failing assumption.
 
+use crate::Q;
 use crate::errors::SystemsError;
 use crate::model::{QueueNetwork, ServiceDiscipline, Workload};
-use crate::numeric::Q;
 
 /// The largest server count accepted for one station.
 pub const MAX_SERVERS: usize = 1_000_000;

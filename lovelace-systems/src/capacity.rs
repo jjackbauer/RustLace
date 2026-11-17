@@ -7,11 +7,11 @@
 //! utilization or risk threshold is a different object and is never presented as a stability
 //! threshold.
 
+use crate::Q;
 use crate::errors::SystemsError;
 use crate::model::{
     Cancel, ClosedWorkload, OpenWorkload, QueueNetwork, ServiceDiscipline, SolverOptions, Workload,
 };
-use crate::numeric::Q;
 use crate::results::AnalysisResult;
 
 /// Why a throughput bound exists, and what it means.

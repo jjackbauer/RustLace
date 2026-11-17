@@ -78,7 +78,10 @@ fn wl16_solver_is_cancellable() {
     let mut engine = Engine::new();
     let error = engine
         .eval_with_budget(
-            "x = symbol(\"x\")\nsolve(x^50 - 2 == 0, x)",
+            // The canonical rational kernel made the degree-50 solve finish inside the old
+            // 5 ms budget, so the workload is heavier: the test must still exercise the solve
+            // kernel's cancellation poll, not merely the statement-boundary check.
+            "x = symbol(\"x\")\nsolve(x^200 - 2 == 0, x)",
             Duration::from_millis(5),
         )
         .expect_err("the solve must be cancelled by the budget");

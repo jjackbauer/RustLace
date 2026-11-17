@@ -25,18 +25,26 @@ stack is cross-platform and is not scoped to Windows: non-Windows targets add ef
 | `lovelace-json` | — | JSON with numbers kept as source text |
 | `lovelace-nat` | — | arbitrary-precision naturals |
 | `lovelace-int` | nat | sign + magnitude integers |
-| `lovelace-real` | nat, int | reals with exact periodic decimals |
+| `lovelace-rational` | nat, int | the one canonical exact rational kernel |
+| `lovelace-real` | nat, int, rational | reals with exact periodic decimals; `Rat`↔`Real` projections |
 | `lovelace-array` | — | generic `NdArray<T>` + `Field` |
-| `lovelace-symbolics` | nat, int | expressions, rationals, cancellation token |
-| `lovelace-systems` | nat, int, real | exact queueing/operations research: rational arithmetic, M/M/1, M/M/c, M/M/∞, laws, open Jackson networks, exact MVA, capacity, sweeps |
+| `lovelace-symbolics` | nat, int, rational | expressions, symbolic algebra, cancellation token (re-exports the canonical `Rat`) |
+| `lovelace-systems` | nat, int, rational | exact queueing/operations research: M/M/1, M/M/c, M/M/∞, laws, open Jackson networks, exact MVA, capacity, sweeps; `Q` is the canonical `Rat` alias |
 | `lovelace-lang` | all of the above + systems | lexer, parser, interpreter, builtins, the static library families, MathIR |
 | `lovelace-run` | json, lang, int, real | the runner and wire envelope |
-| `lovelace-know` | json, nat, int | the behavioural graph |
+| `lovelace-know` | json, nat, int, rational | the behavioural graph (`ExactNumber` is a facade over `Rat`) |
 | `lovelace-corpus` | json, lang, symbolics | the parity gate and the property corpora |
-| `lovelace-bench` | nat, int, real | the micro-benchmark harness |
+| `lovelace-bench` | nat, int, real, lang, systems | the micro-benchmark harness |
 | `lovelace-desktop` | json, lang†, symbolics†, GUI stack (Windows) | the native IDE; † behind the default `real-engine` feature |
 
 `lovelace-desktop-spike` is a standalone package (`[workspace]` of its own) and not a member.
+
+Exactly one general-purpose rational implementation exists. `lovelace-rational` owns it;
+`lovelace-symbolics::Rat`, `lovelace-systems::Q` and `lovelace-know::ExactNumber` are the same type or
+facades that own no arithmetic. `docs/architecture-ownership.md` is normative and
+`tools/architecture-policy.json` is its machine-readable form; `python tools/check-architecture.py`
+verifies the real `cargo metadata` graph and the source declarations, and the `architecture-policy`
+CI job is a required check.
 
 ## Fixed APIs
 
@@ -44,14 +52,40 @@ stack is cross-platform and is not scoped to Windows: non-Windows targets add ef
 
     Nat::zero(), from_u64(u64), from_decimal(&str)->Option<Nat>, to_decimal()->String,
     is_zero(), is_one(), add, sub(&Nat)->Option<Nat>, mul, div_rem(&Nat)->Option<(Nat,Nat)>,
-    pow(u64)->Nat, factorial(u64)->Nat, mul_pow10(usize)->Nat, to_u64()->Option<u64>;
+    pow(u64)->Nat, factorial(u64)->Nat, mul_pow10(usize)->Nat, gcd(&Nat)->Nat, to_u64()->Option<u64>;
     Clone + Ord + Hash + Default.
 
     Int::zero(), from_i64(i64), from_decimal(&str)->Option<Int>, to_decimal()->String,
     is_zero(), is_negative(), magnitude()->&Nat, negate(), add, sub, mul,
-    div_rem(&Int)->Option<(Int,Int)>, pow(u64)->Int, factorial(u64)->Int;
+    div_rem(&Nat)->Option<(Int,Int)>, pow(u64)->Int, factorial(u64)->Int;
     Clone + Ord + Hash + Default. Division truncates toward zero; the remainder takes the
     dividend's sign; there is no negative zero.
+
+### Rat (the canonical rational kernel)
+
+    Rat::zero(), one(), from_i64(i64), from_u64(u64), from_nat(&Nat), from_int(&Int),
+    from_parts(Int, Nat)->Result<Rat, RationalError>, from_decimal(&str)->Option<Rat>,
+    numerator()->&Int, denominator()->&Nat, is_zero/one/negative/positive/integer(),
+    to_i64()->Option<i64>, to_u64()->Option<u64>, to_int_exact()->Option<Int>,
+    add, sub, mul, neg, abs, div(&Rat)->Option<Rat>, checked_div(&Rat)->Result<Rat, RationalError>,
+    pow_i64(i64)->Option<Rat>, checked_pow(i64, &Limits, &dyn Cancel)->Result<Rat, RationalError>,
+    add_with/sub_with/mul_with/checked_div_with(..., &Limits), cmp;
+    Clone + Debug + PartialEq + Eq + Hash + Ord + Default.
+    Canonical form: positive non-zero denominator, sign only in the numerator, zero is 0/1,
+    full arbitrary-precision gcd reduction. `Limits::digits`/`bits` bound growth; a budget
+    failure is a categorized error, never a truncated success. `RationalError` exposes
+    `code()`/`category()` with DomainError, BudgetExceeded or InternalInvariantFailure.
+
+### Real
+
+    Real::zero(), from_i64(i64), from_int(&Int), from_str(&str)->Option<Real>,
+    from_fraction(&Nat, &Nat, max_digits)->Option<Real>,   // None on /0; detects the period
+    from_rational(&Rat, max_digits)->Conversion<Real>,     // lossless flag + exactness report
+    to_string()->String, is_exact()->bool, is_integer()->bool, to_int_exact()->Option<Int>,
+    to_rational()->(Int, Nat), to_rat()->Conversion<Rat>,  // reports a truncated input
+    add, sub, mul, neg, div(&Self, max_digits)->Option<Real>, cmp,
+    pow_int(i64)->Real, sqrt(digits)->Real, pi(digits)->Real,
+    abs(), trunc(), floor(), ceil(), frac(); Clone + PartialEq + PartialOrd.
 
 ### Array
 
@@ -63,15 +97,6 @@ stack is cross-platform and is not scoped to Windows: non-Windows targets add ef
     sum(), prod(), min(), max(), sum_axis(axis), prod_axis(axis),
     index_partial(&[usize]), slice(&[Slice]).
     trait Field { zero, one, add, sub, mul, div, neg, is_zero, from_i64 }.
-
-### Real
-
-    Real::zero(), from_i64(i64), from_int(&Int), from_str(&str)->Option<Real>,
-    from_fraction(&Nat, &Nat, max_digits)->Option<Real>,   // None on /0; detects the period
-    to_string()->String, is_exact()->bool, is_integer()->bool, to_int_exact()->Option<Int>,
-    add, sub, mul, neg, div(&Self, max_digits)->Option<Real>, cmp,
-    pow_int(i64)->Real, sqrt(digits)->Real, pi(digits)->Real,
-    abs(), trunc(), floor(), ceil(), frac(); Clone + PartialEq + PartialOrd.
 
 ### Engine (the API every host and the corpus gate consume)
 
@@ -101,6 +126,18 @@ stack is cross-platform and is not scoped to Windows: non-Windows targets add ef
 `position` is a UTF-16 code-unit offset into the caller's source. Cancellation is checked at every
 top-level statement boundary and inside long kernels; both produce a `LangError` with code
 `Cancelled` and category `BudgetExceeded`.
+
+### Systems exact values (RNL-NUM-011)
+
+Every numeric field in a `sys_*` record is a decimal projection (`Real`). Each such record also
+carries an additive `exact_values` record whose fields are `ExactRational` records with a signed
+`numerator` (`Integer`) and a positive `denominator` (`Natural`). Example:
+`sys_mm1(8, 10).exact_values.utilization` is `ExactRational(numerator: 4, denominator: 5)`.
+The exact value is therefore available across the language and wire boundaries; the decimal field
+alone is never treated as proof of exact preservation. This is additive: the envelope protocol
+version remains 2 and a record consumer ignores fields it does not read. A precision-limited `Real`
+is refused as a `sys_*` input (`InvalidArgument`/`TypeMismatch`) rather than promoted to an exact
+rational.
 
 ## Rendering rules (from the corpus — these are the contract)
 

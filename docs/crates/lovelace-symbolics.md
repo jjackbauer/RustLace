@@ -14,7 +14,8 @@ workspace polls.
 
 ### Public surface
 
-- `Expr` — the canonical expression type; `Rat` — an exact rational coefficient (`Int` over `Nat`).
+- `Expr` — the canonical expression type; `Rat` — a re-export of the canonical
+  `lovelace_rational::Rat` coefficient type. The crate owns no numerator/denominator implementation.
 - Modules: `assumptions` (the tri-state assumption kernel), `cancel` (deadline + live flag),
   `polynomials`, `rational_functions`, `groebner`, `symbolic_matrix`, `solution_set`,
   `series_kink`, `parameter_domain`, `rewrite_registry`, `real_literal`, `proof_bridge`.
@@ -24,7 +25,7 @@ workspace polls.
 
 ### Dependencies
 
-`lovelace-nat`, `lovelace-int`.
+`lovelace-nat`, `lovelace-int`, `lovelace-rational`.
 
 ## Outputs
 
@@ -35,14 +36,16 @@ return simple values: `free_of`, `contains`, `contains_fun`, `contains_sym`, `ha
 `has_algebraic_power`, `has_pole_risk`, `is_constant` return `bool`, while `as_piecewise` and
 `as_derivative` return `Option` for the shape they recognise. `Rat` accessors return its
 `numerator()`/`denominator()` and arithmetic returns `Rat`; `div`, `pow_i64` and `to_i64` return
-`Option`. `Display`/`to_string` render the canonical printed form, and the cancellation functions
+`Option`, and `Rat::from_parts` returns a `Result` that refuses a zero denominator. `Display`/`to_string` render the canonical printed form, and the cancellation functions
 answer `bool` (`check`, `expired`, `observed`, `poll`) with `arm` returning a `Scope` guard that
 restores the previous armed state when dropped.
 
 ## Precision behaviour
 
-All coefficients are exact rationals: a `Rat` is an `Int` numerator over a `Nat` denominator, so
-construction, arithmetic and differentiation neither round nor lose a term. A `Real` literal enters
+All coefficients are exact rationals from the shared kernel: a `Rat` is a canonical arbitrary-
+precision fraction with a positive denominator and a full-GCD reduction, so construction, arithmetic
+and differentiation neither round nor lose a term. The kernel's `Limits` can bound growth; the
+symbolic layer does not impose its own precision budget. A `Real` literal enters
 through `Expr::real(text)`, which keeps the decimal text rather than converting to a binary float.
 A series carries its O-term as part of the expression, so the order is visible in the value rather
 than implied. Precision policy above this layer (the solver's 40-place working precision, display
@@ -52,7 +55,8 @@ formatting) belongs to `lovelace-lang`; this crate has no precision knob and no 
 
 The crate has no error enum. A request that cannot be represented is answered with an `Option`:
 
-- `Rat::div` returns `None` on a zero divisor.
+- `Rat::div` returns `None` on a zero divisor; `Rat::checked_div` returns a categorized error.
+- `Rat::from_parts` returns `Err(ZeroDenominator)` for a zero denominator.
 - `Rat::pow_i64` returns `None` for `0` raised to a negative exponent.
 - `Rat::to_i64` returns `None` when the exact value does not fit an `i64`.
 - `Expr::as_piecewise` / `Expr::as_derivative` return `None` for an expression of another shape.

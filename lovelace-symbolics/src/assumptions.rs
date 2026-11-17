@@ -1196,7 +1196,7 @@ pub fn decimal_to_rational(text: &str) -> Option<Rat> {
     } else {
         numerator
     };
-    Some(Rat::from_parts(numerator, denominator))
+    Some(Rat::from_parts(numerator, denominator).expect("a rational denominator is non-zero"))
 }
 
 fn int_of_nat(value: &lovelace_nat::Nat) -> Int {

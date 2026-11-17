@@ -13,6 +13,8 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 | Page | Read it when |
 |---|---|
 | [architecture.md](architecture.md) | you need the layering, the threading model, cancellation, the incremental cache, or the data flow of one run |
+| [architecture-ownership.md](architecture-ownership.md) | you are adding a numerical type, a crate or a dependency edge, or you need the normative ownership matrix and exception procedure |
+| [benchmarks-numerics.md](benchmarks-numerics.md) | you need the measured rational/symbolic/systems benchmark evidence and its environment |
 | [build-and-run.md](build-and-run.md) | you are setting up a machine, or a build/launch fails |
 | [testing.md](testing.md) | you are changing code and need the commands, the counts, or the layers |
 | [extending.md](extending.md) | you are adding a builtin, a statically integrated library family, a UI pane, a diagnostic or a fixture |
@@ -35,9 +37,11 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 - [lovelace-json](crates/lovelace-json.md)
 - [lovelace-nat](crates/lovelace-nat.md)
 - [lovelace-int](crates/lovelace-int.md)
+- [lovelace-rational](crates/lovelace-rational.md)
 - [lovelace-real](crates/lovelace-real.md)
 - [lovelace-array](crates/lovelace-array.md)
 - [lovelace-symbolics](crates/lovelace-symbolics.md)
+- [lovelace-systems](crates/lovelace-systems.md)
 - [lovelace-lang](crates/lovelace-lang.md)
 - [lovelace-run](crates/lovelace-run.md)
 - [lovelace-know](crates/lovelace-know.md)
@@ -56,6 +60,9 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 - [ADR-006: atomic saves and recorded file identity](adr/006-atomic-save-and-external-change.md)
 - [ADR-007: one token set per theme, and a contrast gate that reads the tokens](adr/007-theme-tokens-and-contrast.md)
 - [ADR-008: the native workbench runs on Linux as well as Windows](adr/008-linux-gui-support.md)
+- [ADR-009: remove the Modus static families](adr/009-remove-modus-static-families.md)
+- [ADR-010: transactional cancellation](adr/010-transactional-cancellation.md)
+- [ADR-011: one shared rational kernel](adr/011-shared-rational-kernel.md)
 
 ## Reference material carried with the tests
 

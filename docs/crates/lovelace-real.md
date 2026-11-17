@@ -18,7 +18,8 @@ fast. Arithmetic involving a repeating value converts to an exact rational first
 ### Public surface
 
 - `Real`: `zero`, `from_i64`, `from_int`, `from_str`, `from_fraction(num, den, max_digits)`,
-  `to_decimal_fixed`, `to_rational`, `is_exact`, `is_integer`, `to_int_exact`, `period_start`,
+  `from_rational(&Rat, max_digits)`, `to_decimal_fixed`, `to_rational`, `to_rat`,
+  `is_exact`, `is_integer`, `to_int_exact`, `period_start`,
   `period_length`, `add`, `sub`, `mul`, `div(max_digits)`, `neg`, `abs`, `pow_int`, `sqrt(digits)`,
   `pi(digits)`.
 - Display scoping: `display_decimal_places()` and `with_display_decimal_places(places, f)` — the
@@ -31,7 +32,7 @@ fast. Arithmetic involving a repeating value converts to an exact rational first
 
 ### Dependencies
 
-`lovelace-nat`, `lovelace-int`.
+`lovelace-nat`, `lovelace-int`, `lovelace-rational`.
 
 ## Outputs
 
@@ -39,7 +40,9 @@ fast. Arithmetic involving a repeating value converts to an exact rational first
 `pow_int`, `from_str` and `to_int_exact` return `Option` because the request can be refused.
 `to_decimal_fixed(digits)` returns a fixed-point decimal string, and `Display`/`to_string` render the
 documented form (`0.(3)`, `1.414...`); `to_rational` returns the exact `(Int, Nat)` pair behind the
-value. The metadata accessors answer the representation: `is_exact`, `is_integer`, `period_start`,
+value. `from_rational` returns `Conversion<Real>` and `to_rat` returns `Conversion<Rat>`; the
+`Conversion` carries `value`, `lossless` and the four-part `ExactnessProvenance`. The metadata
+accessors answer the representation: `is_exact`, `is_integer`, `period_start`,
 `period_length`, `is_zero`. `truncated_frac(digits)` returns the value truncated to a fractional
 count, and the display scoping helpers return whatever their closure returns.
 
@@ -57,10 +60,20 @@ its budget on leading zeros once the run alone fills it, and a period that close
 is never discovered — the quotient is then the budgeted truncation, inexact, with no period
 metadata. `sqrt(digits)` and `pi(digits)` are precision-limited at the requested count: the
 published digits are a truncation, and the digit count alone does not establish a final-error bound.
+
+`from_rational(&Rat, max_digits)` is the canonical rational→real projection. It is exact when the
+expansion terminates or its period closes inside the budget; otherwise it returns a `Conversion`
+whose `lossless` flag is false and whose `representation` is `Truncated { precision }`, and the
+`Real` carries `is_exact() == false`. `to_rat()` is the reverse: the stored digits always have an
+exact rational representation, but a value that was already truncated reports
+`input: Truncated` and `lossless: false`. Converting it back therefore does not restore digits that
+were never stored (RNL-NUM-009).
+
 `with_display_decimal_places` bounds how many fractional digits a non-periodic value publishes while
 the scope is active on the calling thread and restores the previous cap afterwards; library code
-defaults to no cap, so internal arithmetic keeps every computed digit. An `inexact` marker is
-provenance, not an error bound (see the
+defaults to no cap, so internal arithmetic keeps every computed digit. A render budget is separate
+from the representation: printing two digits of an exact `1/3` does not make the value inexact. An
+`inexact` marker is provenance, not an error bound (see the
 [editorial guide](../editorial.md#the-four-kinds-of-claim)).
 
 ## Errors
@@ -68,6 +81,8 @@ provenance, not an error bound (see the
 - `div` returns `None` on a zero divisor.
 - `from_fraction` returns `None` when the denominator is zero (the underlying `Nat::div_rem` returns
   `None`); a period longer than the budget is not an error — it is a truncated, inexact value.
+- `from_rational` is total for a valid `Rat` (the canonical constructor guarantees a non-zero
+  denominator); it reports a truncated projection through `Conversion`, not through an error.
 - `from_str` returns `None` for text that is not a decimal or periodic literal.
 - `to_int_exact` returns `None` when the value is not an integer; it never rounds.
 - `pow_int` returns `None` for `0` raised to a negative exponent (the reciprocal division refuses);
@@ -86,6 +101,9 @@ provenance, not an error bound (see the
   closes exactly at the cap is not discovered at all.
 - **`to_int_exact` refuses rather than rounds.** A non-integer has no integer conversion, so a caller
   that wants truncation uses `truncated_frac` first.
+- **A truncated real is not restored by rational conversion.** `to_rat()` is exact for the stored
+  digits but reports the input as truncated; the lost digits are gone, and a subsequent exact
+  computation operates on the stored approximation, not the original value.
 - **The display cap is thread-local scoped state, not a property of the value.**
   `with_display_decimal_places` changes rendering on the calling thread for the duration of the
   closure and restores the previous cap; it does not truncate the stored digits and another thread
@@ -108,8 +126,8 @@ assert_eq!(two.sqrt(30).to_string(), "1.414213562373095048801688724209"); // des
 
 ### Tests
 
-2487 `#[test]` functions across the crate, the largest suite in the workspace. They include the
+2493 `#[test]` functions across the crate, the largest suite in the workspace. They include the
 parity rounds (`real_parity_round7.rs`, `round10`…), the transcendental suite
 (`transcendental.rs`, `round25`, `round26`), the fixed-width path (`fast_path_tests.rs`), the
-`LReal`/`LReal128` forms (`lreal_tests.rs`) and the precision benchmark helper
-(`round36_precbench.rs`).
+`LReal`/`LReal128` forms (`lreal_tests.rs`), the canonical `Rat`↔`Real` conversion contracts
+(`rational_conversion_tests.rs`) and the precision benchmark helper (`round36_precbench.rs`).

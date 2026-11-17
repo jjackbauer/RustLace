@@ -6,9 +6,9 @@
 //! caller cannot ask for an unbounded allocation. Results keep their declaration order and each
 //! point carries its own provenance.
 
+use crate::Q;
 use crate::errors::SystemsError;
 use crate::model::{Cancel, QueueNetwork, SolverOptions, Workload};
-use crate::numeric::Q;
 use crate::results::AnalysisResult;
 
 /// The largest number of points one sweep may request.
@@ -79,7 +79,33 @@ fn check_count(count: u64, options: &SolverOptions) -> Result<(), SystemsError> 
     options.check_iterations(count)
 }
 
+/// The one grid contract both axes share: an inclusive endpoint is legal only when the span is an
+/// exact whole number of steps. The returned count includes both endpoints.
+fn grid_point_count(from: &Q, to: &Q, step: &Q) -> Result<u64, SystemsError> {
+    let span = to.sub(from);
+    let steps = span
+        .checked_div(step)
+        .map_err(|_| SystemsError::type_mismatch("A sweep needs a positive step"))?;
+    if !steps.is_integer() || steps.mul(step) != span || steps.is_negative() {
+        return Err(SystemsError::sweep_endpoint_not_on_grid(
+            &from.to_string(),
+            &to.to_string(),
+            &step.to_string(),
+        ));
+    }
+    let steps = steps.to_u64().ok_or_else(|| {
+        SystemsError::type_mismatch("A sweep count must be integral and non-negative")
+    })?;
+    steps
+        .checked_add(1)
+        .ok_or_else(|| SystemsError::type_mismatch("A sweep count overflowed"))
+}
+
 /// Sweeps a closed model's population from `from` to `to` in `step` increments.
+///
+/// The endpoint is inclusive only when `(to - from)` is exactly divisible by `step`; otherwise the
+/// request is refused with `SweepEndpointNotOnGrid` rather than silently clamping a partial final
+/// step onto the endpoint.
 pub fn sweep_population(
     network: &QueueNetwork,
     from: u64,
@@ -101,14 +127,25 @@ pub fn sweep_population(
     if from > to {
         return Err(SystemsError::type_mismatch("A sweep requires from <= to"));
     }
-    let count = (to - from) / step + 1;
+    let span = to - from;
+    if span % step != 0 {
+        return Err(SystemsError::sweep_endpoint_not_on_grid(
+            &from.to_string(),
+            &to.to_string(),
+            &step.to_string(),
+        ));
+    }
+    let count = (span / step)
+        .checked_add(1)
+        .ok_or_else(|| SystemsError::type_mismatch("A sweep count overflowed"))?;
     check_count(count, options)?;
     let mut points = Vec::with_capacity(count as usize);
-    let mut population = from;
-    loop {
+    for index in 0..count {
         if cancel.is_cancelled() {
             return Err(SystemsError::cancelled());
         }
+        // `index * step <= span`, so this addition cannot overflow.
+        let population = from + index * step;
         let mut copy = network.clone();
         if let Workload::Closed(closed) = &mut copy.workload {
             closed.population = population;
@@ -118,11 +155,12 @@ pub fn sweep_population(
             parameter: Q::from_u64(population),
             result,
         });
-        if population == to {
-            break;
-        }
-        population = population.saturating_add(step).min(to);
     }
+    debug_assert_eq!(points.len() as u64, count);
+    debug_assert_eq!(
+        points.last().map(|point| point.parameter.to_u64()),
+        Some(Some(to))
+    );
     Ok(SweepResult {
         axis: SweepAxis::Population,
         points,
@@ -131,6 +169,9 @@ pub fn sweep_population(
 }
 
 /// Sweeps an open model's arrival rate from `from` to `to` in `step` increments.
+///
+/// The same exact-grid contract as [`sweep_population`] applies: a partial final step is a
+/// `SweepEndpointNotOnGrid` refusal, never a clamped extra point.
 pub fn sweep_arrival(
     network: &QueueNetwork,
     from: &Q,
@@ -152,21 +193,11 @@ pub fn sweep_arrival(
     if from > to {
         return Err(SystemsError::type_mismatch("A sweep requires from <= to"));
     }
-    let span = to.sub(from);
-    let steps = span.div(step).ok_or_else(|| {
-        SystemsError::type_mismatch("An arrival-rate sweep needs a positive step")
-    })?;
-    let count = steps
-        .to_i64()
-        .and_then(|value| u64::try_from(value).ok())
-        .map(|value| value + 1)
-        .ok_or_else(|| {
-            SystemsError::type_mismatch("A sweep count must be integral and non-negative")
-        })?;
+    let count = grid_point_count(from, to, step)?;
     check_count(count, options)?;
     let mut points = Vec::with_capacity(count as usize);
     let mut rate = from.clone();
-    loop {
+    for _ in 0..count {
         if cancel.is_cancelled() {
             return Err(SystemsError::cancelled());
         }
@@ -179,12 +210,10 @@ pub fn sweep_arrival(
             parameter: rate.clone(),
             result,
         });
-        if rate == *to {
-            break;
-        }
-        let next = rate.add(step);
-        rate = if next > *to { to.clone() } else { next };
+        rate = rate.add(step);
     }
+    debug_assert_eq!(points.len() as u64, count);
+    debug_assert_eq!(points.last().map(|point| &point.parameter), Some(to));
     Ok(SweepResult {
         axis: SweepAxis::ArrivalRate,
         points,
@@ -195,8 +224,8 @@ pub fn sweep_arrival(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Q;
     use crate::model::{ClosedWorkload, NeverCancel, OpenWorkload, ServiceDiscipline, Station};
-    use crate::numeric::Q;
 
     fn station(id: &str) -> Station {
         Station::new(
@@ -287,5 +316,76 @@ mod tests {
                 .code(),
             "UnsupportedModel"
         );
+    }
+
+    /// RNL-MIG-007: the inclusive endpoint is legal only when the span is exactly divisible by the
+    /// step. A partial final step is a structured refusal, never a clamped extra point.
+    #[test]
+    fn a_partial_final_step_is_refused_on_both_axes() {
+        let population =
+            sweep_population(&closed(), 1, 6, 4, &SolverOptions::default(), &NeverCancel)
+                .expect_err("6 is not on the 1, 5 grid");
+        assert_eq!(population.code(), "SweepEndpointNotOnGrid");
+        assert_eq!(population.category().as_str(), "DomainError");
+
+        let arrival = sweep_arrival(
+            &open(),
+            &Q::from_i64(1),
+            &Q::from_i64(6),
+            &Q::from_i64(4),
+            &SolverOptions::default(),
+            &NeverCancel,
+        )
+        .expect_err("6 is not on the 1, 5 grid");
+        assert_eq!(arrival.code(), "SweepEndpointNotOnGrid");
+        assert_eq!(arrival.category().as_str(), "DomainError");
+    }
+
+    /// The precomputed count is exactly the number of executed, ordered points, and the last point
+    /// is exactly the endpoint when the grid is valid.
+    #[test]
+    fn the_count_matches_the_executed_points_exactly() {
+        let population =
+            sweep_population(&closed(), 1, 7, 2, &SolverOptions::default(), &NeverCancel)
+                .expect("1, 3, 5, 7 is an exact grid");
+        assert_eq!(population.points.len(), 4);
+        let parameters: Vec<u64> = population
+            .points
+            .iter()
+            .map(|point| point.parameter.to_u64().expect("integral"))
+            .collect();
+        assert_eq!(parameters, vec![1, 3, 5, 7]);
+
+        let arrival = sweep_arrival(
+            &open(),
+            &Q::from_i64(1),
+            &Q::from_i64(7),
+            &Q::from_i64(2),
+            &SolverOptions::default(),
+            &NeverCancel,
+        )
+        .expect("1, 3, 5, 7 is an exact grid");
+        assert_eq!(arrival.points.len(), 4);
+        assert_eq!(
+            arrival
+                .points
+                .iter()
+                .map(|point| point.parameter.to_u64().expect("integral"))
+                .collect::<Vec<_>>(),
+            vec![1, 3, 5, 7]
+        );
+
+        // A zero span is the single-point grid, not an empty sweep.
+        let single = sweep_arrival(
+            &open(),
+            &Q::from_i64(3),
+            &Q::from_i64(3),
+            &Q::from_i64(2),
+            &SolverOptions::default(),
+            &NeverCancel,
+        )
+        .expect("a single point");
+        assert_eq!(single.points.len(), 1);
+        assert_eq!(single.points[0].parameter, Q::from_i64(3));
     }
 }

@@ -302,7 +302,7 @@ fi
 # Build the throwaway crate metadata. Path dependencies are the workspace
 # crates the fences are allowed to exercise; every path must exist.
 # ---------------------------------------------------------------------------
-deps="lovelace-array lovelace-int lovelace-json lovelace-lang lovelace-nat lovelace-real lovelace-symbolics lovelace-systems"
+deps="lovelace-array lovelace-int lovelace-json lovelace-lang lovelace-nat lovelace-rational lovelace-real lovelace-symbolics lovelace-systems"
 for dep in $deps; do
     if [ ! -f "$dep/Cargo.toml" ]; then
         printf 'check-crate-examples: workspace crate %s/Cargo.toml is missing\n' "$dep" >&2

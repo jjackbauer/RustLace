@@ -29,10 +29,10 @@ fn num(value: i64) -> Num {
 }
 
 fn rat(numerator: i64, denominator: u64) -> Num {
-    Num::Exact(Rat::from_parts(
-        Int::from_i64(numerator),
-        Nat::from_u64(denominator),
-    ))
+    Num::Exact(
+        Rat::from_parts(Int::from_i64(numerator), Nat::from_u64(denominator))
+            .expect("a rational denominator is non-zero"),
+    )
 }
 
 fn node(op: IrOpKind, operands: &[usize]) -> IrNode {

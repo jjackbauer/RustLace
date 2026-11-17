@@ -43,7 +43,9 @@ with "lovelace-run binary not found; pass the 'runner' argument or set LOVELACE_
 
 ### Dependencies
 
-`lovelace-json`, `lovelace-nat`, `lovelace-int`.
+`lovelace-json`, `lovelace-nat`, `lovelace-int`, `lovelace-rational`. `ExactNumber` is a facade
+over the canonical `Rat`: it owns the Lovelace literal grammar and renderer, but no numerator/
+denominator storage, GCD normalization or arithmetic.
 
 ## Outputs
 

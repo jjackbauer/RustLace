@@ -17,47 +17,52 @@ Every crate keeps its tests beside the code as `#[cfg(test)]` modules: parity ro
 ### The current aggregate, measured
 
 Every count in the current table is an **exact** observation of a named revision; none of the rows
-is carried forward as a current total. The aggregate was measured on **Linux** (WSL2, Ubuntu
-24.04.4 LTS, x86_64) on **2026-11-16** at commit
-**`fa87ecc6abe41d3e174d62b211dd6b6fac2e29b7`** (`v0.4.1-4-gfa87ecc`) with:
+is carried forward as a current total. The aggregate below was measured on **Windows 11 x86_64**
+on **2026-11-17**, against baseline commit
+**`8b124d1`** plus the uncommitted RNL-001 working tree, with:
 
 ```console
-$ xvfb-run -a -s "-screen 0 1600x1000x24" cargo test --workspace --no-fail-fast
+$ cargo test --workspace --no-fail-fast
 ```
 
-The run reports **35 test targets: 6147 passed, 0 failed, 1 ignored**. The per-crate rows below
-are the same commands grouped by crate (`cargo test -p <crate>`, with the desktop under
-`xvfb-run`), on the same commit, date and host; they sum to the same 6147 passed and 1 ignored.
+The run reports **45 test targets: 6267 passed, 0 failed, 0 ignored**. The per-crate rows below
+are the same commands grouped by crate (`cargo test -p <crate>`, with the desktop under its normal
+test path), measured in the same working tree; they sum to the same 6267 passed and 0 ignored.
 
 | Crate | Test targets | Passed | Failed | Ignored |
 |---|---:|---:|---:|---:|
-| `lovelace-real` | 2 | 2487 | 0 | 0 |
-| `lovelace-lang` | 2 | 1750 | 0 | 0 |
-| `lovelace-desktop` (Linux) | 2 | 715 | 0 | 0 |
-| `lovelace-run` | 3 | 450 | 0 | 0 |
+| `lovelace-real` | 2 | 2493 | 0 | 0 |
+| `lovelace-lang` | 3 | 1742 | 0 | 0 |
+| `lovelace-desktop` (Windows) | 2 | 729 | 0 | 0 |
+| `lovelace-run` | 3 | 454 | 0 | 0 |
 | `lovelace-nat` | 2 | 271 | 0 | 0 |
 | `lovelace-symbolics` | 2 | 197 | 0 | 0 |
 | `lovelace-int` | 2 | 135 | 0 | 0 |
 | `lovelace-array` | 2 | 61 | 0 | 0 |
-| `lovelace-corpus` | 3 | 18 | 0 | 1 |
-| `lovelace-json` | 2 | 7 | 0 | 0 |
-| `lovelace-bench` | 1 | 0 | 0 | 0 |
+| `lovelace-systems` | 3 | 55 | 0 | 0 |
 | `lovelace-know` | 12 | 56 | 0 | 0 |
-| **Total** | **35** | **6147** | **0** | **1** |
+| `lovelace-corpus` | 5 | 28 | 0 | 0 |
+| `lovelace-rational` | 4 | 26 | 0 | 0 |
+| `lovelace-json` | 2 | 20 | 0 | 0 |
+| `lovelace-bench` | 1 | 0 | 0 | 0 |
+| **Total** | **45** | **6267** | **0** | **0** |
 
 Rows that compose more than one target:
 
-- `lovelace-desktop` is 711 passed in `src/main.rs` plus 4 in `tests/linux_cli.rs`. This is the
-  Linux measurement; the Windows desktop figure is **not measured in this environment** and is
-  kept separate [below](#windows-and-linux-are-separate-observations).
-- `lovelace-run` is 438 in `src/main.rs`, 1 in `tests/recursion_depth.rs` and 11 in `tests/repl.rs`.
+- `lovelace-rational` is 15 unit tests, 9 seeded property campaigns and 2 oracle comparisons, plus
+  one zero-test doctest target.
+- `lovelace-systems` is 51 unit tests, 3 independent-oracle tests and 1 doctest, plus one
+  zero-test integration target.
+- `lovelace-lang` is 1737 in-crate tests plus 5 cross-library semantics tests.
+- `lovelace-run` is 442 in `src/main.rs` (including the additive `exact_values` wire test), 1 in
+  `tests/recursion_depth.rs` and 11 in `tests/repl.rs`.
 - `lovelace-know` is 56 across nine integration targets, with two zero-test unit targets and one
   zero-test doctest target. Its CLI-stdio tests spawn the real `lovelace-run` binary, so a
   standalone `cargo test -p lovelace-know` in a fresh target directory needs `cargo build -p
   lovelace-run` first (the test helper prints that instruction when the binary is missing);
   `cargo test --workspace` builds it as part of `lovelace-run`'s own test targets.
 
-The historical measurement above counts one ignored test,
+The earlier `fa87ecc` measurement counted one ignored test,
 `property_assertions::mathir_evaluates_like_symbolic`, annotated at the time as "blocked:
 numeric::evaluate and IrEvaluator differ by 1 ulp at 50 places (lovelace-lang)". The M0.2 work
 re-enabled it: the divergence was an **evaluation-order** difference in the test's direct arm, which
@@ -65,9 +70,10 @@ called `substitute` before evaluation. Substitution folded `5/3 + 2/3` into `7/3
 compared `7/3 + B` against MathIR's original `(5/3 + B) + 2/3`; the separate 50-place truncations
 differ by 1 ulp. Both arms now bind `x` and call `evaluate_bound`, and
 `mathir_matches_direct_for_folded_constant_regression` pins item 28 at x=1/3. The current
-`lovelace-corpus` suite has **zero ignored tests** and reports **21 passed** (the 19 original lib
-tests, the folded-constant regression, and the debug corpus-worker recursion test); the 6,147
-passed / 1 ignored figures remain an exact observation of `fa87ecc`, not a current count.
+`lovelace-corpus` suite has **zero ignored tests** and reports **28 passed** across five targets
+(the property assertions, the lib unit test, the corpus-worker recursion test, the unsafe audit and
+the workload tests); the 6,147 passed / 1 ignored figures remain an exact observation of
+`fa87ecc`, not a current count.
 
 ### The reconciled historical table: 6,067 + 68 = 6,135
 
@@ -148,7 +154,7 @@ names (3 added, 2 removed). The 1737 row is therefore a snapshot of `7ceeeba`, n
 
 Moving the recorded table to this branch's measured table is a two-row change:
 `6,135 + 13` (the `lovelace-lang` tests above) `− 1` (the measured Linux desktop 715 replaces the
-recorded Windows 716) `= 6,147`, which is exactly the independently measured current total. The
+recorded Windows 716) `= 6,147`, which was the independently measured total at `fa87ecc`. The
 6,135 side of that sentence is the recorded aggregate; it is not a Windows measurement made here.
 
 ### Windows and Linux are separate observations
@@ -157,9 +163,10 @@ recorded Windows 716) `= 6,147`, which is exactly the independently measured cur
   **715** in total, 0 failed, 0 ignored, at `fa87ecc` on 2026-11-16 under the command above. The
   earlier v0.4.1 record reports the same 711 + 4 split; this run re-measures it at the commit
   named above.
-- **Windows desktop, recorded but not measured here:** **716 passed**, 0 failed, 0 ignored. This
-  environment is WSL Ubuntu only, so the Windows target was not run, and the 716 is a carried
-  observation from a Windows host, not inferred from 715. Conversely, 715 is not inferred from 716.
+- **Windows desktop, recorded at `fa87ecc`:** **716 passed**, 0 failed, 0 ignored. That earlier
+  measurement was carried from a Windows host, not inferred from 715. The RNL-001 working-tree
+  measurement in §1 is the newer Windows observation: **729 passed** after the rational
+  consolidation's added tests. Conversely, the Linux 715 is not inferred from either Windows row.
 
 Ten tests in the crate do not compile on Linux, which is why the two totals differ. The
 `src/ui/**` modules compile and run there; the ten tests that do not are Windows by premise or
@@ -207,6 +214,22 @@ reason.
   generated corpora, then compares transcripts by FNV-1a hash.
 - **Frozen knowledge graph** — `knowledge-graph-demo.json` (seed 20240617) is re-reduced by
   `lovelace-know`'s convergence, graph and seed-reproduction tests.
+- **Independent rational oracle** — `tools/rational-oracle.py` generates
+  `parity/rational/oracle.tsv` with Python's `fractions.Fraction` (seed 20261117);
+  `lovelace-rational/tests/oracle.rs` recomputes every recorded case through the Rust API. The
+  fixture is checked for staleness by `--check` in CI.
+- **Independent systems oracle** — `tools/systems-oracle.py` re-derives M/M/1, Erlang C, MVA and
+  open-Jackson metrics from their textbook definitions over `Fraction`; `lovelace-systems/tests/oracle.rs`
+  compares the production models with `parity/systems/oracle.tsv`.
+- **Cross-library consistency** — `lovelace-lang/tests/cross_library.rs` performs the same signed
+  division and systems computation through the canonical kernel, Symbolics, Systems and the
+  language, and compares exact values, signs, precision classification and error codes.
+- **Architecture policy** — `tools/check-architecture.py` reads
+  `tools/architecture-policy.json`, asks `cargo metadata` for the real graph, and scans Rust items.
+  `tools/test-architecture-gates.py` injects every required forbidden change into an isolated
+  fixture and requires a nonzero exit; the valid fixture proves domain formulas, typed units and a
+  canonical alias are accepted. Both run as the `architecture-policy` CI job, on Linux and Windows,
+  independently of the unit tests.
 
 ## 3. Desktop GUI harness
 
@@ -252,8 +275,13 @@ locked or the window is occluded.
 
 ## 5. Benchmarks
 
-`lovelace-bench` (see [`crates/lovelace-bench.md`](crates/lovelace-bench.md)) prints a `RESULT` line
-and a `DIGEST`; the digest is what proves a thread-budget change does not change the answer.
+`lovelace-bench` (see [`crates/lovelace-bench.md`](crates/lovelace-bench.md)) prints an `ENV` line,
+a `RESULT` line and a `DIGEST`. The `ENV` line records the host, architecture, compiler, profile,
+digit count and repetitions; the digest is what proves a result-neutral change (a thread-budget
+change, an optimization) does not change the answer. The rational, symbolic, Erlang C, Jackson and
+MVA workloads and the measured comparison against the two pre-migration kernels are in
+[`benchmarks-numerics.md`](benchmarks-numerics.md). Timings are host observations, not a CI gate;
+a regression needs a reviewed measurement at the commit under test (RNL-CI-011).
 
 ## Running a subset
 

@@ -10,6 +10,7 @@
 //! republished as a structured `LangError` with the same stable code and the mapped category.
 
 use lovelace_nat::Nat;
+use lovelace_real::Real;
 use lovelace_systems::{
     Cancel, ClosedWorkload, OpenWorkload, Q, QueueNetwork, ServiceDiscipline, SolverOptions,
     Station, SystemsError, Workload, analyze, analyze_closed, bottlenecks, mm_infinity, mm1, mmc,
@@ -220,9 +221,22 @@ impl Ctx<'_> {
     fn number(&self, value: &Value, index: usize) -> Result<Q, LangError> {
         match value {
             Value::Natural(n) => Ok(Q::from_nat(n)),
-            Value::Integer(i) => Q::from_parts(i.clone(), Nat::from_u64(1))
-                .ok_or_else(|| self.error(index, "a number", "an unrepresentable integer")),
-            Value::Real(real) => Ok(Q::from_real(real)),
+            Value::Integer(i) => Ok(Q::from_int(i)),
+            Value::Real(real) => {
+                // A systems input is an exact model parameter. A Real is accepted only when its
+                // stored digits denote the input without a prior truncation; a precision-limited
+                // value would otherwise be silently promoted to an exact rational (RNL-NUM-009).
+                let conversion = real.to_rat();
+                if conversion.is_lossless() {
+                    Ok(conversion.value)
+                } else {
+                    Err(self.error(
+                        index,
+                        "an exact number (an integer, fraction or exact decimal)",
+                        format!("a precision-limited Real `{real}`"),
+                    ))
+                }
+            }
             other => Err(self.error(index, "a number", other.kind_name())),
         }
     }
@@ -434,10 +448,35 @@ fn text_list(values: &[&str]) -> Value {
 }
 
 fn real(q: &Q, precision: usize) -> Value {
-    match q.to_real(precision) {
-        Some(value) => Value::Real(value),
-        None => Value::Void,
-    }
+    // The projection is explicit: `Real::from_rational` reports whether the rendering budget
+    // truncated the exact rational. The decimal field is a projection; the record's `exact`
+    // sidecar carries the numerator/denominator pair.
+    Value::Real(Real::from_rational(q, precision).value)
+}
+
+/// The structured exact value: numerator and denominator, both exact language values.
+///
+/// This is the RNL-NUM-011 representation. A decimal field such as `utilization` is a projection;
+/// `exact.utilization` retains the exact `Q` across the language and wire boundaries without
+/// introducing a new language kind (RNL-MIG-005 keeps the promotion policy unchanged).
+fn exact_rational(value: &Q) -> Value {
+    record(
+        "ExactRational",
+        vec![
+            ("numerator", Value::Integer(value.numerator().clone())),
+            ("denominator", Value::Natural(value.denominator().clone())),
+        ],
+    )
+}
+
+fn exact_values(pairs: Vec<(&'static str, &Q)>) -> Value {
+    record(
+        "ExactValues",
+        pairs
+            .into_iter()
+            .map(|(name, value)| (name, exact_rational(value)))
+            .collect(),
+    )
 }
 
 fn count(value: u64) -> Value {
@@ -512,6 +551,22 @@ fn station_metrics_fields(
     if let Some(probability) = &station.probability_waiting {
         fields.push(("probability_waiting", real(probability, precision)));
     }
+    let mut exact = vec![
+        ("visits", &station.visits),
+        ("service_time", &station.service_time),
+        ("service_demand", &station.service_demand),
+        ("throughput", &station.throughput),
+        ("utilization", &station.utilization),
+        ("busy_servers", &station.busy_servers),
+        ("response_time", &station.response_time),
+        ("waiting_time", &station.waiting_time),
+        ("occupancy", &station.occupancy),
+        ("queue_length", &station.queue_length),
+    ];
+    if let Some(probability) = &station.probability_waiting {
+        exact.push(("probability_waiting", probability));
+    }
+    fields.push(("exact_values", exact_values(exact)));
     fields
 }
 
@@ -573,6 +628,16 @@ fn law_records(checks: &[lovelace_systems::LawCheck], precision: usize) -> Value
                         ("left", real(&check.left, precision)),
                         ("right", real(&check.right, precision)),
                         ("holds", Value::Boolean(check.holds)),
+                        (
+                            "exact_values",
+                            record(
+                                "ExactLaw",
+                                vec![
+                                    ("left", exact_rational(&check.left)),
+                                    ("right", exact_rational(&check.right)),
+                                ],
+                            ),
+                        ),
                     ],
                 )
             })
@@ -598,6 +663,16 @@ fn analysis_record(result: &lovelace_systems::AnalysisResult, precision: usize) 
     if let Some(think_time) = &result.aggregate.think_time {
         fields.push(("think_time", real(think_time, precision)));
     }
+    let mut aggregate_exact = vec![
+        ("throughput", &result.aggregate.throughput),
+        ("response_time", &result.aggregate.response_time),
+        ("occupancy", &result.aggregate.occupancy),
+        ("queue_length", &result.aggregate.queue_length),
+    ];
+    if let Some(think_time) = &result.aggregate.think_time {
+        aggregate_exact.push(("think_time", think_time));
+    }
+    fields.push(("exact_values", exact_values(aggregate_exact)));
     fields.push(("laws", law_records(&result.aggregate.law_checks, precision)));
     fields.push((
         "stations",
@@ -623,6 +698,14 @@ fn analysis_record(result: &lovelace_systems::AnalysisResult, precision: usize) 
                                 ("throughput", real(&point.throughput, precision)),
                                 ("response_time", real(&point.response_time, precision)),
                                 ("occupancy", real(&point.occupancy, precision)),
+                                (
+                                    "exact_values",
+                                    exact_values(vec![
+                                        ("throughput", &point.throughput),
+                                        ("response_time", &point.response_time),
+                                        ("occupancy", &point.occupancy),
+                                    ]),
+                                ),
                             ],
                         )
                     })
@@ -659,6 +742,11 @@ fn bottleneck_record(report: &lovelace_systems::BottleneckAnalysis, precision: u
                 if let Some(ceiling) = &entry.ceiling {
                     fields.push(("ceiling", real(ceiling, precision)));
                 }
+                let mut exact = vec![("service_demand", &entry.service_demand)];
+                if let Some(ceiling) = &entry.ceiling {
+                    exact.push(("ceiling", ceiling));
+                }
+                fields.push(("exact_values", exact_values(exact)));
                 record("BottleneckStation", fields)
             })
             .collect(),
@@ -682,6 +770,11 @@ fn bottleneck_record(report: &lovelace_systems::BottleneckAnalysis, precision: u
         Some(bound) => fields.push(("throughput_bound", real(bound, precision))),
         None => fields.push(("throughput_bound", Value::Void)),
     }
+    let mut exact = vec![("max_demand", &report.max_demand)];
+    if let Some(bound) = &report.throughput_bound {
+        exact.push(("throughput_bound", bound));
+    }
+    fields.push(("exact_values", exact_values(exact)));
     record("Bottlenecks", fields)
 }
 
@@ -691,6 +784,17 @@ fn sweep_record(sweep: &lovelace_systems::SweepResult, precision: usize) -> Valu
             .points
             .iter()
             .map(|point| {
+                let max_utilization = point
+                    .result
+                    .stations
+                    .iter()
+                    .map(|station| station.utilization.clone())
+                    .fold(
+                        Q::zero(),
+                        |acc, value| {
+                            if value > acc { value } else { acc }
+                        },
+                    );
                 record(
                     "SweepPoint",
                     vec![
@@ -703,22 +807,15 @@ fn sweep_record(sweep: &lovelace_systems::SweepResult, precision: usize) -> Valu
                             "response_time",
                             real(&point.result.aggregate.response_time, precision),
                         ),
+                        ("max_utilization", real(&max_utilization, precision)),
                         (
-                            "max_utilization",
-                            real(
-                                &point
-                                    .result
-                                    .stations
-                                    .iter()
-                                    .map(|station| station.utilization.clone())
-                                    .fold(
-                                        Q::zero(),
-                                        |acc, value| {
-                                            if value > acc { value } else { acc }
-                                        },
-                                    ),
-                                precision,
-                            ),
+                            "exact_values",
+                            exact_values(vec![
+                                ("parameter", &point.parameter),
+                                ("throughput", &point.result.aggregate.throughput),
+                                ("response_time", &point.result.aggregate.response_time),
+                                ("max_utilization", &max_utilization),
+                            ]),
                         ),
                         ("analysis", analysis_record(&point.result, precision)),
                     ],
@@ -888,6 +985,88 @@ mod tests {
         let bad_id = refusal("sys_station(\"has space\", 1, 1)");
         assert_eq!(bad_id.code, "InvalidIdentifier");
         assert_eq!(bad_id.category, "DomainError");
+    }
+
+    #[test]
+    fn exact_values_cross_the_language_boundary_beside_their_decimal_projection() {
+        // The decimal field stays a projection...
+        assert_eq!(eval("sys_mm1(8, 10).utilization"), "0.8 (Real)");
+        // ...and the exact sidecar carries the canonical numerator/denominator pair.
+        assert_eq!(
+            eval("sys_mm1(8, 10).exact_values.utilization.numerator"),
+            "4 (Integer)"
+        );
+        assert_eq!(
+            eval("sys_mm1(8, 10).exact_values.utilization.denominator"),
+            "5 (Natural)"
+        );
+        assert_eq!(
+            eval("sys_mm1(8, 10).exact_values.response_time.numerator"),
+            "1 (Integer)"
+        );
+        assert_eq!(
+            eval("sys_mm1(8, 10).exact_values.response_time.denominator"),
+            "2 (Natural)"
+        );
+
+        // A periodic exact value keeps its period in the projection and its fraction in the
+        // sidecar; the projection alone is not treated as the exact value.
+        assert_eq!(eval("sys_mm1(1, 3).utilization"), "0.(3) (Real)");
+        assert_eq!(
+            eval("sys_mm1(1, 3).exact_values.utilization.denominator"),
+            "3 (Natural)"
+        );
+
+        let model = "sys_closed(2, 9/100, [sys_station(\"cpu\", 1/100, 1)])";
+        assert_eq!(
+            eval(&format!(
+                "sys_mva({model}).exact_values.throughput.numerator"
+            )),
+            "2000 (Integer)"
+        );
+        assert_eq!(
+            eval(&format!(
+                "sys_mva({model}).exact_values.throughput.denominator"
+            )),
+            "101 (Natural)"
+        );
+        assert_eq!(
+            eval(&format!(
+                "sys_mva({model}).stations[0].exact_values.occupancy.numerator"
+            )),
+            "22 (Integer)"
+        );
+        assert_eq!(
+            eval(&format!(
+                "sys_mva({model}).laws[0].exact_values.left.numerator"
+            )),
+            "2000 (Integer)"
+        );
+
+        let sweep = "sys_sweep(sys_closed(1, 0, [sys_station(\"cpu\", 1/10, 1)]), 1, 3, 1)";
+        assert_eq!(
+            eval(&format!(
+                "{sweep}.points[0].exact_values.throughput.denominator"
+            )),
+            "1 (Natural)"
+        );
+    }
+
+    #[test]
+    fn a_precision_limited_real_is_refused_as_an_exact_model_input() {
+        // `pi(30)` is a truncated Real. Promoting its stored digits to an exact rational would
+        // silently restore precision that was never stored (RNL-NUM-009), so the adapter refuses.
+        let refused = refusal("sys_mm1(pi(30), 10)");
+        assert_eq!(refused.code, "InvalidArgument");
+        assert_eq!(refused.category, "TypeMismatch");
+        assert!(
+            refused.message.contains("precision-limited"),
+            "{}",
+            refused.message
+        );
+
+        // An exact periodic Real (1/3) is lossless and stays accepted.
+        assert!(eval_ok("sys_mm1(1/3, 10).utilization == 1/30"));
     }
 
     #[test]

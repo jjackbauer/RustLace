@@ -4,15 +4,19 @@
 //! Usage: lovelace-bench <op> <digits> [reps]
 //!   op: add | sub | mul | div | factorial | tostring | parse | pi | sqrt | eig_sym_5 | eig_sym_8
 //!       | systems_mmc | systems_jackson | systems_mva
-//! Output: "RESULT <op> <digits> <mean_ms> <median_ms>" plus a DIGEST line so two runs can be
-//! compared byte for byte (used to prove that changing the thread budget changes nothing).
+//!       | rational_add | rational_mul | rational_div_neg | rational_pow | rational_normalize
+//!       | symbolics_diff
+//! Output: "ENV ..." (host, compiler, profile, sizes, repetitions), "RESULT <op> <digits>
+//! <mean_ms> <median_ms>" and a DIGEST line so two runs can be compared byte for byte.
 
 #![forbid(unsafe_code)]
 
 use std::time::Instant;
 
+use lovelace_int::Int;
 use lovelace_lang::{Engine, Value};
 use lovelace_nat::Nat;
+use lovelace_rational::{Limits as RatLimits, NeverCancel as RatNeverCancel, Rat};
 use lovelace_real::Real;
 use lovelace_systems::{
     NeverCancel, Q, QueueNetwork, ServiceDiscipline, SolverOptions, Station, Workload, analyze, mmc,
@@ -51,6 +55,12 @@ enum Work {
     SystemsMmc,
     SystemsJackson,
     SystemsMva,
+    RationalAdd,
+    RationalMul,
+    RationalDivNeg,
+    RationalPow,
+    RationalNormalize,
+    SymbolicsDiff,
 }
 
 impl Work {
@@ -71,6 +81,12 @@ impl Work {
             "systems_mmc" => Work::SystemsMmc,
             "systems_jackson" => Work::SystemsJackson,
             "systems_mva" => Work::SystemsMva,
+            "rational_add" => Work::RationalAdd,
+            "rational_mul" => Work::RationalMul,
+            "rational_div_neg" => Work::RationalDivNeg,
+            "rational_pow" => Work::RationalPow,
+            "rational_normalize" => Work::RationalNormalize,
+            "symbolics_diff" => Work::SymbolicsDiff,
             _ => return None,
         })
     }
@@ -84,9 +100,11 @@ impl Work {
         digits: usize,
         a: &Nat,
         b: &Nat,
+        operands: (&Rat, &Rat),
         want_digest: bool,
         engine: &mut Option<Engine>,
     ) -> Option<String> {
+        let (left, right) = operands;
         match self {
             Work::Add => {
                 let _ = std::hint::black_box(a.add(b));
@@ -184,10 +202,10 @@ impl Work {
                         station
                             .probability_waiting
                             .as_ref()
-                            .map(|value| value.to_decimal(digits))
+                            .map(|value| rational_decimal(value, digits))
                             .unwrap_or_default(),
-                        station.utilization.to_decimal(digits),
-                        station.response_time.to_decimal(digits)
+                        rational_decimal(&station.utilization, digits),
+                        rational_decimal(&station.response_time, digits)
                     ))
                 } else {
                     None
@@ -233,10 +251,81 @@ impl Work {
                 if want_digest {
                     Some(format!(
                         "{}|{}|{}",
-                        result.aggregate.response_time.to_decimal(digits),
-                        result.aggregate.occupancy.to_decimal(digits),
-                        result.stations[1].utilization.to_decimal(digits)
+                        rational_decimal(&result.aggregate.response_time, digits),
+                        rational_decimal(&result.aggregate.occupancy, digits),
+                        rational_decimal(&result.stations[1].utilization, digits)
                     ))
+                } else {
+                    None
+                }
+            }
+            Work::RationalAdd => {
+                let value = std::hint::black_box(left.add(right));
+                if want_digest {
+                    Some(canonical_rat_digest(&value))
+                } else {
+                    None
+                }
+            }
+            Work::RationalMul => {
+                let value = std::hint::black_box(left.mul(right));
+                if want_digest {
+                    Some(canonical_rat_digest(&value))
+                } else {
+                    None
+                }
+            }
+            Work::RationalDivNeg => {
+                let value = std::hint::black_box(
+                    left.checked_div(&right.neg())
+                        .expect("a non-zero generated divisor"),
+                );
+                if want_digest {
+                    Some(canonical_rat_digest(&value))
+                } else {
+                    None
+                }
+            }
+            Work::RationalPow => {
+                let value = std::hint::black_box(
+                    left.checked_pow(17, &RatLimits::digits(1_000_000), &RatNeverCancel)
+                        .expect("the exponent fits the benchmark budget"),
+                );
+                if want_digest {
+                    Some(canonical_rat_digest(&value))
+                } else {
+                    None
+                }
+            }
+            Work::RationalNormalize => {
+                // A common factor in both parts makes the full-GCD normalization the measured
+                // work, not a constructor fast path that returns an already-reduced pair.
+                let numerator = a.mul(b);
+                let denominator = b.mul(&a.add(&Nat::from_u64(1)));
+                let value = std::hint::black_box(
+                    Rat::from_parts(Int::from_nat(numerator), denominator)
+                        .expect("a non-zero generated denominator"),
+                );
+                if want_digest {
+                    Some(canonical_rat_digest(&value))
+                } else {
+                    None
+                }
+            }
+            Work::SymbolicsDiff => {
+                if engine.is_none() {
+                    let mut fresh = Engine::new();
+                    fresh.set_precision(digits);
+                    *engine = Some(fresh);
+                }
+                let engine = engine.as_mut().expect("the engine was just built");
+                let value = std::hint::black_box(
+                    engine
+                        .eval("x = symbol(\"x\"); diff(x^10 + 3*x^5 + 7*x, x)")
+                        .expect("the symbolic differentiation benchmark evaluates"),
+                );
+                if want_digest {
+                    Some(value.display())
                 } else {
                     None
                 }
@@ -275,9 +364,9 @@ impl Work {
                 if want_digest {
                     Some(format!(
                         "{}|{}|{}",
-                        result.aggregate.throughput.to_decimal(digits),
-                        result.aggregate.response_time.to_decimal(digits),
-                        result.aggregate.occupancy.to_decimal(digits)
+                        rational_decimal(&result.aggregate.throughput, digits),
+                        rational_decimal(&result.aggregate.response_time, digits),
+                        rational_decimal(&result.aggregate.occupancy, digits)
                     ))
                 } else {
                     None
@@ -285,6 +374,16 @@ impl Work {
             }
         }
     }
+}
+
+/// The decimal projection of an exact systems rational under the benchmark's digit budget.
+///
+/// The benchmark digests the projected digits, while the value itself remains the canonical
+/// `lovelace-rational` type; the projection is explicit and never feeds back into arithmetic.
+fn rational_decimal(value: &Q, digits: usize) -> String {
+    lovelace_real::Real::from_rational(value, digits.max(1))
+        .value
+        .to_string()
 }
 
 /// A rational `numerator / denominator` for a benchmark model.
@@ -365,6 +464,39 @@ fn eigen_digest(value: &Value) -> String {
     )
 }
 
+/// The canonical numerator/denominator digest, never a decimal projection.
+fn canonical_rat_digest(value: &Rat) -> String {
+    format!(
+        "{}/{}",
+        value.numerator().to_decimal(),
+        value.denominator().to_decimal()
+    )
+}
+
+/// The recorded environment for a benchmark run: host, compiler, profile, sizes and repetitions.
+///
+/// These lines make a timing comparable or not; a number without them is an anecdote.
+fn print_environment(op: &str, digits: usize, reps: usize) {
+    let rustc_program = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let rustc = std::process::Command::new(rustc_program)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_else(|| format!("rustc (minimum {})", env!("CARGO_PKG_RUST_VERSION")));
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    println!(
+        "ENV op={op} digits={digits} reps={reps} os={} arch={} profile={profile} compiler={rustc}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 2 {
@@ -385,12 +517,17 @@ fn main() {
     // Warm up outside the timed region and capture the digest there, so conversion cost never
     // pollutes the measurement. The engine-level cases build their engine here too.
     let mut engine: Option<Engine> = None;
-    let digest = work.run(digits, &a, &b, true, &mut engine);
+    let left = Rat::from_parts(Int::from_nat(a.clone()), b.clone())
+        .expect("the generated denominator is non-zero");
+    let right = Rat::from_parts(Int::from_nat(b.clone()), a.add(&Nat::from_u64(1)))
+        .expect("the generated denominator is non-zero");
+    print_environment(&op, digits, reps);
+    let digest = work.run(digits, &a, &b, (&left, &right), true, &mut engine);
 
     let mut times: Vec<f64> = Vec::with_capacity(reps);
     for _ in 0..reps {
         let start = Instant::now();
-        let _ = work.run(digits, &a, &b, false, &mut engine);
+        let _ = work.run(digits, &a, &b, (&left, &right), false, &mut engine);
         times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     times.sort_by(|x, y| x.partial_cmp(y).unwrap());

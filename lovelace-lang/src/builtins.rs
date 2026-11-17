@@ -3924,9 +3924,15 @@ fn evalir_ir_refusal() -> LangError {
 fn value_to_num(value: &Value) -> Option<crate::numeric::Num> {
     use crate::numeric::Num;
     match value {
-        Value::Natural(n) => Int::from_decimal(&n.to_decimal())
-            .map(|i| Num::Exact(Rat::from_parts(i, Nat::from_u64(1)))),
-        Value::Integer(i) => Some(Num::Exact(Rat::from_parts(i.clone(), Nat::from_u64(1)))),
+        Value::Natural(n) => Int::from_decimal(&n.to_decimal()).map(|i| {
+            Num::Exact(
+                Rat::from_parts(i, Nat::from_u64(1)).expect("a rational denominator is non-zero"),
+            )
+        }),
+        Value::Integer(i) => Some(Num::Exact(
+            Rat::from_parts(i.clone(), Nat::from_u64(1))
+                .expect("a rational denominator is non-zero"),
+        )),
         Value::Real(r) | Value::RealClamped(r, _, _) => Some(Num::Real(r.clone())),
         Value::Complex(re, im) => Some(Num::Complex(crate::complex::Complex::new(
             re.clone(),

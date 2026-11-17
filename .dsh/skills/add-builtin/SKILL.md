@@ -72,13 +72,21 @@ so the descriptor is not optional metadata.
    `kind` is `value`, `error`, `prints` or `plot`; `text` is the exact typed rendering the engine
    must produce. The corpus is a gate, so a wrong `text` is a failure, not a snapshot update.
 
-8. **Update the prose.** If the public surface changed, update `docs/crates/lovelace-lang.md`. If
+8. **Check ownership and cross-library semantics.** A builtin that exposes a numeric, symbolic or
+   systems value is a consumer of the canonical kernel, not a place to add a numeric type. Read
+   `docs/architecture-ownership.md`; run `python tools/check-architecture.py` and
+   `cargo test -p lovelace-lang --test cross_library`. If the builtin returns an exact systems value,
+   keep the decimal field as a projection and expose the exact numerator/denominator through the
+   additive `exact_values` record. If the builtin seems to need a new arithmetic type, stop and
+   improve the owner (RNL-ARC-001); do not add a second kernel.
+
+9. **Update the prose.** If the public surface changed, update `docs/crates/lovelace-lang.md`. If
    the builtin introduces a term, add it to `docs/glossary.md`. If it is wire-visible, add its code
    to the taxonomy test that publishes the code.
 
-9. **Prove discovery.** The same descriptor feeds `--functions`, `--function`, the help dialog and
-   completion. If the descriptor is not in `BUILTINS`, the builtin is invisible to every host even
-   when the evaluator can call it.
+10. **Prove discovery.** The same descriptor feeds `--functions`, `--function`, the help dialog and
+    completion. If the descriptor is not in `BUILTINS`, the builtin is invisible to every host even
+    when the evaluator can call it.
 
 ## Verify
 
@@ -89,6 +97,8 @@ and still exits 0, which is a failed check rather than a pass.
 ```console
 cargo test -p lovelace-lang <name>
 cargo test -p lovelace-lang every_builtin_refuses_every_count_outside_its_declared_arity
+cargo test -p lovelace-lang --test cross_library
+python tools/check-architecture.py
 cargo run -p lovelace-run -- --function <name>
 cargo run -p lovelace-run -- --eval "<name>(X, Y)" --text
 cargo run --release -p lovelace-corpus -- lang/112

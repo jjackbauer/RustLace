@@ -14,7 +14,7 @@ use lovelace_int::Int;
 use lovelace_nat::Nat;
 
 fn rat(n: i64, d: u64) -> Rat {
-    Rat::new(Int::from_i64(n), Nat::from_u64(d))
+    Rat::from_parts(Int::from_i64(n), Nat::from_u64(d)).expect("a rational denominator is non-zero")
 }
 
 fn poly(coeffs: &[Rat], var: &str) -> Expr {

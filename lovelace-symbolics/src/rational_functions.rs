@@ -558,6 +558,7 @@ mod tests {
 
     fn rational(numerator: i64, denominator: i64) -> Rat {
         Rat::from_parts(Int::from_i64(numerator), Nat::from_u64(denominator as u64))
+            .expect("a rational denominator is non-zero")
     }
 
     fn quotient(numerator: Expr, denominator: Expr) -> Expr {
