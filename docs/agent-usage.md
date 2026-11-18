@@ -13,12 +13,12 @@ Do not assume a released executable has APIs added later. See
 
 Use the same source revision for discovery, execution and verification:
 
-\`\`\`console
+```console
 cargo build -p lovelace-run
 cargo run -p lovelace-run -- --eval "1/3" --text
-\`\`\`
+```
 
-The CLI returns JSON by default and human text with \`--text\`; those are
+The CLI returns JSON by default and human text with `--text`; those are
 different contracts. For external tooling, use JSON, never scrape the
 human-readable line or assume the display string is an exact number.
 
@@ -26,18 +26,18 @@ human-readable line or assume the display string is an exact number.
 
 The registry currently contains more functions than the runner's default
 listing limit of 50. Always request a sufficiently high limit and inspect the
-\`truncated\`, \`total\`, and \`returned\` JSON fields:
+`truncated`, `total`, and `returned` JSON fields:
 
-\`\`\`console
+```console
 cargo run -p lovelace-run -- --functions --function-limit 500
 cargo run -p lovelace-run -- --functions sys --function-limit 500
 cargo run -p lovelace-run -- --function matrix_rank
 cargo run -p lovelace-run -- --function sys_mm1
-\`\`\`
+```
 
-If \`truncated\` is true, **do not report discovery as complete**. Increase the
+If `truncated` is true, **do not report discovery as complete**. Increase the
 limit or narrow the search and repeat until the requested inventory is complete.
-Use \`--function <name>\` to inspect parameters, arity, module and advertised
+Use `--function <name>` to inspect parameters, arity, module and advertised
 return kinds **before** constructing an unfamiliar call. A descriptor provides
 discoverability, not a proof that every possible result kind is correct.
 
@@ -46,38 +46,38 @@ and limits beyond the registry descriptor.
 
 ## 3. Evaluate with typed and structured results
 
-For stable automation, evaluate a checked-in script through \`--file\` or a
+For stable automation, evaluate a checked-in script through `--file` or a
 small inline expression, and request a compact envelope:
 
-\`\`\`console
+```console
 cargo run -p lovelace-run -- --eval "matrix_rank([[1,2],[2,4]])" --omit-functions --omit-variables
-\`\`\`
+```
 
-Read \`result.kind\`, \`result.structured\`, \`code\`, \`category\`,
-\`diagnostics\` and the process exit code. A success exits 0; a script
+Read `result.kind`, `result.structured`, `code`, `category`,
+`diagnostics` and the process exit code. A success exits 0; a script
 diagnostic exits 1; invalid CLI usage exits 2. In text mode, failures use
 stderr, not the standard JSON envelope. Do not mistake a valid typed
 "NoSolutions" result for a thrown diagnostic.
 
-Unquoted strings within \`--eval\` can be shell-sensitive. For larger scripts
-or calls containing quotes, write a \`.ls\` file and use \`--file\` instead.
+Unquoted strings within `--eval` can be shell-sensitive. For larger scripts
+or calls containing quotes, write a `.ls` file and use `--file` instead.
 The [reproducible tutorial](tutorials/reproducible.md) demonstrates portable
 JSON extraction and plot artifacts.
 
 ## 4. Treat numerical provenance as a separate question
 
-- \`1/3\` prints \`0.(3)\`: an exact periodic-decimal representation.
-- \`sqrt(2)\` has a finite precision budget and is **precision-limited**, not
+- `1/3` prints `0.(3)`: an exact periodic-decimal representation.
+- `sqrt(2)` has a finite precision budget and is **precision-limited**, not
   error-bounded merely because its printed digits look convincing.
-- \`result.structured.exact\` is representation/provenance evidence, **not**
+- `result.structured.exact` is representation/provenance evidence, **not**
   independent mathematical proof of the algorithm's answer.
 - The CLI and desktop start with different precision defaults. Explicitly set
   precision when comparing runs or persisting computational evidence.
-- When a \`sys_*\` model publishes \`exact_values\`, use the rational
+- When a `sys_*` model publishes `exact_values`, use the rational
   numerator/denominator sidecar as the authoritative exact value instead of
   interpreting the decimal projection as an exact rational.
-- Symbolic \`matrix_rank\` may provide a generic estimate when variables are
-  unconstrained: for \`[[x]]\`, rank depends on whether \`x = 0\`. Do not
+- Symbolic `matrix_rank` may provide a generic estimate when variables are
+  unconstrained: for `[[x]]`, rank depends on whether `x = 0`. Do not
   present a generic symbolic result as an unconditional certificate.
 
 See [precision and formatting](language/precision-and-formatting.md),
@@ -86,8 +86,8 @@ See [precision and formatting](language/precision-and-formatting.md),
 
 ## 5. Recover from failures without fabricating success
 
-Inspect the structured \`code\`, \`category\`, \`message\`, and
-\`signature\` when present. Fix the source or input kind, then rerun.
+Inspect the structured `code`, `category`, `message`, and
+`signature` when present. Fix the source or input kind, then rerun.
 Do not reinterpret a nonzero exit as a valid partial result without examining
 the cancellation/diagnostic contract.
 
