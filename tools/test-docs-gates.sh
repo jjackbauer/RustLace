@@ -1557,6 +1557,26 @@ SH
         env CARGO_TARGET_DIR="$root/fake-target" bash "$root/tools/check-doc-examples.sh"
 }
 
+# The same text must NOT pass if a fake runner moved it from a successful
+# invocation to a diagnostic exit. Output-text parity cannot hide exit drift.
+{
+    root=$work/doc-examples-false-success/repo
+    make_doc_examples_tree "$root"
+    mkdir -p -- "$root/fake-target/debug"
+    for runner_name in lovelace-run lovelace-run.exe; do
+        cat >"$root/fake-target/debug/$runner_name" <<'SH'
+#!/usr/bin/env bash
+printf '= 2 (Natural)\n' >&2
+exit 1
+SH
+        chmod +x "$root/fake-target/debug/$runner_name" || exit 2
+    done
+    expect_failure "doc examples: false success with diagnostic exit" \
+        "docs/guide.md" "output resembles exit 0 but runner exited 1" \
+        "$work/doc-examples-false-success/mutated.log" \
+        env CARGO_TARGET_DIR="$root/fake-target" bash "$root/tools/check-doc-examples.sh"
+}
+
 check_ci_wiring "$repo_root/.github/workflows/ci.yml"
 
 # ---------------------------------------------------------------------------
