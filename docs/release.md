@@ -108,10 +108,14 @@ The `release` job:
    - neither exists: the normal path, which also stops when `main` has moved past the validated
      commit, so a stale run cannot resurrect an older tree;
 4. on the normal path, bumps `[workspace.package] version` in `Cargo.toml` and lets `cargo metadata`
-   rewrite the twelve member versions in `Cargo.lock`, then commits
-   `chore(release): vX.Y.Z [skip ci]`;
-5. creates the tag and pushes the commit and the tag atomically (`git push --atomic`): a rejected
-   push leaves neither behind;
+   rewrite the twelve member versions in `Cargo.lock`, then commits `chore(release): vX.Y.Z`;
+5. pushes that commit to a `release/vX.Y.Z` branch with the repository deploy key stored in the
+   `RELEASE_DEPLOY_KEY` secret, and waits for the CI run the push starts. A deploy key is used
+   because a push made with the workflow's own `GITHUB_TOKEN` starts no CI run, so the release
+   commit could never acquire the required checks. Only when the same seven checks `main` enforces
+   are green does it fast-forward `main` onto the validated commit and push the tag: branch
+   protection never sees an unvalidated commit, and a red or timed-out run leaves `main` and the tag
+   untouched. The deploy key gets no bypass; it only pushes the unprotected release branch;
 6. on both the normal and the recovery path, checks out the tag and builds the Windows executable
    with `cargo build --release -p lovelace-desktop` from that commit. The built file is run with
    `--version` and the job fails unless it prints `lovelace-desktop X.Y.Z` for the tag's version, so
