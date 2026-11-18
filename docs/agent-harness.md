@@ -24,7 +24,7 @@ Two observations derived from the same implementation are not independent
 mathematical evidence. C# parity is behavioral evidence, not a mathematical
 oracle, especially when the historical behavior was defective.
 
-## Implemented in this change
+## Currently implemented
 
 `python tools/harness/check-agent-contracts.py`:
 
