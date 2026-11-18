@@ -33,6 +33,10 @@ some number of places.
 [build and run](docs/build-and-run.md) · [the four tutorials](docs/tutorials/README.md) ·
 [language reference](docs/language/README.md)
 
+**Release compatibility:** these checked-in docs describe this source revision. A downloaded
+release may expose a different API; use the documentation at its tag and consult
+[version applicability](docs/version-applicability.md) before copying an example.
+
 ## Current limitations
 
 - **Pre-1.0.** Interfaces change; the changelog and the conventional-commit history are the record.
