@@ -218,11 +218,19 @@ def validate(root: Path) -> dict[str, int]:
     tutorial_index = read(root, "docs/tutorials/README.md")
     if "checked-out development revision" not in tutorial_index:
         fail("docs/tutorials/README.md", "must explain development-branch applicability")
-    for name in ("linear-algebra", "symbolic", "signal-processing", "reproducible"):
-        path = f"docs/tutorials/{name}.md"
+    tutorial_paths = sorted(
+        path for path in (root / "docs/tutorials").glob("*.md")
+        if path.name != "README.md"
+    )
+    if not tutorial_paths:
+        fail("docs/tutorials", "no tutorials discovered")
+    for tutorial_path in tutorial_paths:
+        path = tutorial_path.relative_to(root).as_posix()
         text = read(root, path)
         if "checked-out RustLace development revision" not in text:
             fail(path, "tutorial does not declare its executable baseline")
+        if f"({tutorial_path.name})" not in tutorial_index:
+            fail("docs/tutorials/README.md", f"unlisted tutorial: {tutorial_path.name}")
 
     # The general example runner supports explicit not-run exemptions. CI must
     # not allow a documentation author to suppress a failing example with only
@@ -281,7 +289,8 @@ def validate(root: Path) -> dict[str, int]:
     if referenced != set(allowed):
         fail("docs/example-waivers.json", f"unused waivers: {sorted(set(allowed)-referenced)}")
 
-    return dict(crates=len(members), skills=skills, adrs=adrs, corpus=total, tutorials=4)
+    return dict(crates=len(members), skills=skills, adrs=adrs, corpus=total,
+                tutorials=len(tutorial_paths))
 
 
 def self_test(root: Path) -> int:
@@ -369,6 +378,29 @@ def self_test(root: Path) -> int:
             fail("docs/parity-with-studio.md", "contradictory count alongside correct count passed")
         parity_page.write_text(original, encoding="utf-8")
 
+        # A fifth tutorial is never silently exempt from version disclosure.
+        fifth_tutorial = baseline / "docs/tutorials/newcomer.md"
+        fifth_tutorial.write_text("# New tutorial\\n", encoding="utf-8")
+        try:
+            validate(baseline)
+        except MetadataFailure as exc:
+            if "docs/tutorials/newcomer.md: tutorial does not declare" not in str(exc):
+                fail("tutorial-version-discovery", f"wrong rejection: {exc}")
+        else:
+            fail("tutorial-version-discovery", "new unversioned tutorial passed")
+        fifth_tutorial.write_text(
+            "# New tutorial\\nchecked-out RustLace development revision\\n",
+            encoding="utf-8",
+        )
+        try:
+            validate(baseline)
+        except MetadataFailure as exc:
+            if "docs/tutorials/README.md: unlisted tutorial" not in str(exc):
+                fail("tutorial-index-discovery", f"wrong rejection: {exc}")
+        else:
+            fail("tutorial-index-discovery", "unlisted tutorial passed")
+        fifth_tutorial.unlink()
+
         # Exercise the actual waiver validator, not just a free-text reject.
         # Include the exact annotation shapes that formerly diverged from the
         # shell executor: '<', '>', and text following the closing '-->'.
@@ -445,7 +477,7 @@ def self_test(root: Path) -> int:
         waiver_case("changed-script", "<!-- not-run: WAIVER-TEST -->",
                     [{**approved, "sha256": hashlib.sha256(b"2 / 0").hexdigest()}],
                     "sha256 mismatch")
-    return len(mutations) + 2 + extra_mutants
+    return len(mutations) + 4 + extra_mutants
 
 
 def main() -> int:
