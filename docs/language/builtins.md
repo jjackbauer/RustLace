@@ -355,7 +355,7 @@ rank-deficient and rectangular matrices. For matrices containing free symbols it
 legacy determinant-based generic estimate, which is not an unconditional rank certificate and may
 require assumptions. Every matrix element is validated before this symbolic fallback: any
 precision-limited numeric or unsupported element is refused with an argument-shape error and
-signature, regardless of its position. trace` sums the diagonal entries.
+signature, regardless of its position. `trace` sums the diagonal entries.
 
 A rectangular matrix can have dependent rows:
 
