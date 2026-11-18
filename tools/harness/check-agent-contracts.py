@@ -139,13 +139,13 @@ def check_skills(root: Path, fields: set[str]) -> int:
     if not count or NUMBER_WORDS.get(count.group(1).lower()) != len(actual):
         fail(f"docs/skills.md stated skill count is not {len(actual)}")
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    docs_header = re.search(r"(?m)^  docs:[ \\t]*$", workflow)
+    docs_header = re.search(r"(?m)^  docs:[ ]*$", workflow)
     if docs_header is None:
         fail("cannot identify the documentation CI job")
     # Stop at the NEXT top-level jobs entry, not one particular neighboring
     # job. Reordering or inserting a job must not change the docs step count.
     following = workflow[docs_header.end():]
-    doc_job = re.split(r"(?m)^  [a-zA-Z_][a-zA-Z0-9_-]*:[ \\t]*$", following, maxsplit=1)[0]
+    doc_job = re.split(r"(?m)^  [a-zA-Z_][a-zA-Z0-9_-]*:[ ]*$", following, maxsplit=1)[0]
     ci_steps = len(re.findall(r"(?m)^      - name: ", doc_job))
     advertised = re.search(r"(?m)^\| Documentation examples .*?\| (\w+) steps", agents)
     if not ci_steps or not advertised or NUMBER_WORDS.get(advertised.group(1).lower()) != ci_steps:
