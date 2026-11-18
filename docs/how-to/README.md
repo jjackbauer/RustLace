@@ -3,6 +3,7 @@
 Start with the task you want to complete, then consult the more detailed
 [language reference](../language/README.md) for every relevant edge case.
 
+- [Choose and use a library](use-libraries.md): understand core arrays, algebra, DSP, MathIR and systems models, with typed examples and references.
 - [Verify a numerical result](verify-a-result.md): distinguish stored exact
   values, precision-limited values and mathematical correctness.
 - [Run scripts from an agent](../agent-usage.md): discover functions without
