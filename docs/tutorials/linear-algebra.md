@@ -63,7 +63,7 @@ requires. Write the right-hand side as a column.
 
 ## Assumptions
 
-- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+- The checked-out RustLace development revision, run from the repository root with the project-root Cargo command
   `cargo run -p lovelace-run -- --file docs/tutorials/examples/linear-algebra.ls --text` on
   Windows, Linux or WSL. `--text` selects the human format shown above. The first run compiles the
   runner.
