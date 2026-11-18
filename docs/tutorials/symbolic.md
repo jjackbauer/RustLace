@@ -74,7 +74,7 @@ The same script is checked in as [symbolic.ls](examples/symbolic.ls).
 
 ## Assumptions
 
-- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+- The checked-out RustLace development revision, run from the repository root with the project-root Cargo command
   `cargo run -p lovelace-run -- --file docs/tutorials/examples/symbolic.ls --text` on Windows,
   Linux or WSL. The first run compiles the runner.
 - Assumptions are session state. `assume(x != 1)` and `assume(x != 0)` remain active for the rest
