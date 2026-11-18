@@ -1285,7 +1285,13 @@ def run(root: Path, metadata_path: str | None) -> tuple[int, dict]:
                             "lovelace-rational",
                         )
                     )
-            if "pull_request:" not in workflow_text or "branches: [main]" not in workflow_text:
+            push_branches = re.search(r"(?m)^\s+branches:\s*\[([^\]]*)\]", workflow_text)
+            push_targets = (
+                {branch.strip().strip("'\"") for branch in push_branches.group(1).split(",")}
+                if push_branches
+                else set()
+            )
+            if "pull_request:" not in workflow_text or "main" not in push_targets:
                 violations.append(
                     Violation(
                         "ci-trigger-missing",
