@@ -102,7 +102,7 @@ $ cargo run -p lovelace-run -- --eval "1/3"
 {"artifacts":[],"elapsed":"407.1 µs",...,"result":{"display":"0.(3)","kind":"Real",...,"typed":"0.(3) (Real)"},...}
 
 $ cargo run --release -p lovelace-corpus
-corpus: 231 passed, 0 failed, 231 total
+corpus: 232 passed, 0 failed, 232 total
 
 $ cargo test -p lovelace-desktop
 test result: ok. <passed> passed; 0 failed; <ignored> ignored; <measured> measured; <filtered> filtered out; finished in <time>
