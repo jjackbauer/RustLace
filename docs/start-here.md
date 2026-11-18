@@ -20,7 +20,7 @@ runner does not build.
 From the repository root:
 
 ```console
-cargo run -p lovelace-run -- --eval "1 / 3" --text
+cargo run -p lovelace-run -- --eval "1 / 3" --text --omit-variables
 ```
 
 The Lovelace expression and its output are:
@@ -30,11 +30,12 @@ The Lovelace expression and its output are:
 ```
 ```text
 = 0.(3) (Real)
-  _ = 0.(3)
 ```
 
-The first line is the result of the last statement. The following `_` entry
-is the last result, also available to later statements in the same execution.
+The line beginning with `=` is the result of the last statement.
+We use `--omit-variables` to keep these first examples focused on the returned
+value. Without it, `--text` also lists the variables in scope, including `_`
+(the last result, available to later statements in the same execution).
 `0.(3)` means an **exact repeating decimal** (one third); it is not the
 rounded `0.333`. This is a [Real](language/values-and-types.md#numeric-kinds-and-widening)
 value. Learn why exact representation and mathematical correctness are different
@@ -45,11 +46,13 @@ in [exactness](language/values-and-types.md#exactness) and
 quoting problems across PowerShell, bash and Command Prompt. To run a file:
 
 ```console
-cargo run -p lovelace-run -- --file my-script.ls --text
+cargo run -p lovelace-run -- --file my-script.ls --text --omit-variables
 ```
 
-The CLI's default output is **JSON**, intended for programs. `--text` is the
-human-readable rendering used throughout these guides; use JSON and the
+The CLI's default output is **JSON**, intended for programs.
+`--text --omit-variables` is the compact human-readable format used in this
+guide. Use `--text` by itself to inspect all variables. For automation,
+use JSON and the
 [wire/diagnostic reference](language/errors-and-diagnostics.md) for automation.
 
 ## 2. Understand values before using a library
@@ -62,7 +65,6 @@ need type declarations. `type(value)` returns the name of the runtime kind.
 ```
 ```text
 = [Natural, Real, Vector, Array] (Vector)
-  _ = [Natural, Real, Vector, Array]
 ```
 
 What you just used:
@@ -90,7 +92,6 @@ shape(zeros(2, 3))
 ```
 ```text
 = [2, 3] (Vector)
-  _ = [2, 3]
 ```
 
 This is a 2-row, 3-column array. Shapes matter: passing a flat vector where
@@ -108,7 +109,6 @@ func square(x) = x^2; square(9)
 ```
 ```text
 = 81 (Natural)
-  _ = 81
 ```
 
 The `=` in `func square(x) = ...` defines the expression body; elsewhere
