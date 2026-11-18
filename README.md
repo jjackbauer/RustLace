@@ -33,6 +33,10 @@ some number of places.
 [build and run](docs/build-and-run.md) · [the four tutorials](docs/tutorials/README.md) ·
 [language reference](docs/language/README.md)
 
+**Release compatibility:** these checked-in docs describe this source revision. A downloaded
+release may expose a different API; use the documentation at its tag and consult
+[version applicability](docs/version-applicability.md) before copying an example.
+
 ## Current limitations
 
 - **Pre-1.0.** Interfaces change; the changelog and the conventional-commit history are the record.
@@ -83,6 +87,17 @@ it with `sha256sum -c SHA256SUMS.linux`. The checksum choice and the retry path 
 
 All three drive the same engine; no host re-implements language behaviour.
 
+## Learn Lovelace
+
+If you want to **use the language**, start with
+[Get started](docs/start-here.md) for a runnable introduction.
+[Working with libraries](docs/how-to/use-libraries.md) explains which
+operations fit common problems and links their input and result kinds.
+The [guided tutorials](docs/tutorials/README.md) cover complete tasks;
+the [language reference](docs/language/README.md) and
+[builtin catalogue](docs/language/builtins.md) document precise behavior.
+You do not need to understand the Rust workspace to run these scripts.
+
 ## Quick start
 
 Requires Rust 1.85+ (`rust-version` in `Cargo.toml`; the tree was built with 1.100.0) and, on
@@ -102,7 +117,7 @@ $ cargo run -p lovelace-run -- --eval "1/3"
 {"artifacts":[],"elapsed":"407.1 µs",...,"result":{"display":"0.(3)","kind":"Real",...,"typed":"0.(3) (Real)"},...}
 
 $ cargo run --release -p lovelace-corpus
-corpus: 231 passed, 0 failed, 231 total
+corpus: 232 passed, 0 failed, 232 total
 
 $ cargo test -p lovelace-desktop
 test result: ok. <passed> passed; 0 failed; <ignored> ignored; <measured> measured; <filtered> filtered out; finished in <time>
@@ -135,7 +150,7 @@ number from your own run instead of copying one from here.
 
 ## The crates
 
-Thirteen crates: twelve workspace members plus one standalone spike that is deliberately outside the
+Fifteen crates: fourteen workspace members plus one standalone spike that is deliberately outside the
 workspace.
 
 | Crate | Responsibility | Page |
@@ -143,6 +158,7 @@ workspace.
 | `lovelace-json` | JSON reader/writer; numbers kept as their source text | [docs/crates/lovelace-json.md](docs/crates/lovelace-json.md) |
 | `lovelace-nat` | arbitrary-precision naturals over base-2^64 limbs, NTT multiplication | [docs/crates/lovelace-nat.md](docs/crates/lovelace-nat.md) |
 | `lovelace-int` | sign + magnitude integers, truncating division | [docs/crates/lovelace-int.md](docs/crates/lovelace-int.md) |
+| `lovelace-rational` | the single canonical exact rational kernel, conversions and budgets | [docs/crates/lovelace-rational.md](docs/crates/lovelace-rational.md) |
 | `lovelace-real` | reals with exact periodic decimals, `sqrt`, `pi` | [docs/crates/lovelace-real.md](docs/crates/lovelace-real.md) |
 | `lovelace-array` | generic `NdArray<T>`, shape algebra, reductions | [docs/crates/lovelace-array.md](docs/crates/lovelace-array.md) |
 | `lovelace-symbolics` | canonical expressions, differentiation, series, Gröbner bases, cancellation token | [docs/crates/lovelace-symbolics.md](docs/crates/lovelace-symbolics.md) |
@@ -169,32 +185,34 @@ Five layers, each with its own command — the detail is in [docs/testing.md](do
 $ cargo test --workspace
 test result: ok. <passed> passed; 0 failed; <ignored> ignored; ...   # one such line per test target
 
-$ cargo run --release -p lovelace-corpus   # the 231-record documentation corpus
+$ cargo run --release -p lovelace-corpus   # the documentation corpus
 $ cargo run -p lovelace-desktop -- --gui-selftest   # 20 workbench checks, Windows and Linux
 $ cargo run -p lovelace-desktop -- --journey J-02   # recorded user journeys
 ```
 
 The workspace total is not repeated here. [docs/testing.md](docs/testing.md#1-unit-tests-in-crate-test)
 records the measured aggregate with its commit, OS, command, counts and date; it lists the per-crate
-rows, keeps the Linux and Windows desktop observations separate, and names the one ignored test. A
+rows, keeps the Linux and Windows desktop observations separate, and distinguishes historical ignored-test observations from newer measurements. A
 count from an earlier revision is not evidence about this one.
 
 On Linux, CI runs the same `--gui-selftest` and the desktop suite under `xvfb-run`, so the workbench
 code is machine-checked there without a display; CI does not open or capture a window, and the
 Linux frame in `docs/images` was captured separately on WSLg.
 
-The corpus is the yardstick: `parity/corpus/lang.json` (111 records from the C# language reference,
-99 value / 10 error / 1 prints / 1 plot) plus `parity/corpus/symbolics.json` (103 records). A missing
+The corpus is the yardstick: `parity/corpus/lang.json` (112 records), `parity/corpus/symbolics.json` (103),
+and `parity/corpus/systems.json` (17), for 232 records at this revision. A missing
 corpus file is exit code 2, never a pass. Run the gate in release: on this host the debug binary
-overflows its main-thread stack at `lang/061`, while the release build of the same sources passes all
-214.
+overflows its main-thread stack at `lang/061`, while the release build of the same sources passes the full corpus.
 
 ## Documentation
 
 | Page | What it covers |
 |---|---|
+| [docs/start-here.md](docs/start-here.md) | first-run language guide with typed examples, links and common errors |
+| [docs/how-to/use-libraries.md](docs/how-to/use-libraries.md) | task-based library guide with input/output types, worked examples and API links |
 | [AGENTS.md](AGENTS.md) | portable contributor guide: entry points, commands, layout, conventions and guardrails |
-| [docs/skills.md](docs/skills.md) | the nine task skills for extending the application, with when-to-use guidance |
+| [docs/agent-usage.md](docs/agent-usage.md) | how a consumer agent discovers commands, handles typed results and refuses unsupported exactness claims |
+| [docs/skills.md](docs/skills.md) | the eight task skills for extending the application, with when-to-use guidance |
 | [docs/README.md](docs/README.md) | the index of everything below |
 | [docs/tutorials/](docs/tutorials/README.md) | four end-to-end tutorials: linear algebra, symbolic, signal processing and the reproducible JSON envelope |
 | [docs/architecture.md](docs/architecture.md) | the five layers, threading, cancellation, the cache, the data flow of a run |
@@ -205,7 +223,7 @@ overflows its main-thread stack at `lang/061`, while the release build of the sa
 | [docs/release.md](docs/release.md) | versioning, the release build, the signing caveat, the checklist |
 | [docs/contributing.md](docs/contributing.md) | workflow, commit style, review expectations, definition of done |
 | [docs/glossary.md](docs/glossary.md) | Real, LReal64/128, library family, MathIR, statement boundary, precision |
-| [docs/adr/](docs/adr/) | nine architecture decision records |
+| [docs/adr/](docs/adr/) | eleven architecture decision records |
 | [docs/crates/](docs/crates/) | one page per crate |
 | [docs/images/README.md](docs/images/README.md) | the screenshots and how they were captured |
 | [CONTRACT.md](CONTRACT.md) | the workspace contract: crates, fixed APIs, rendering rules, corpus |

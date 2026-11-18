@@ -225,6 +225,26 @@ The worked examples below show each of these in the observed output.
 
 ## Examples
 
+### Understand the kinds in these examples
+
+`symbol("x")` produces a
+[Symbolic](../language/values-and-types.md#symbolic) expression, not a
+[Text](../language/values-and-types.md#text) value or a numerical variable.
+The library transforms Symbolic expressions with operations such as
+`factor`, `simplify`, `diff`, `solve` and `subs`. Some solvers produce
+[Record](../language/values-and-types.md#record) results with a status and
+conditions rather than a scalar root; inspect those fields before extracting
+a solution. `evalf` is a bridge to a precision-limited
+[Real](../language/values-and-types.md#numeric-kinds-and-widening).
+
+Pay attention to the **domain** of any transformation. Canceling a common
+factor does not make its former zero a valid substitution. The
+[symbolic tutorial](../tutorials/symbolic.md) walks through a refusal,
+an explicit cancellation and a numerical projection. The
+[library guide](../how-to/use-libraries.md#symbolics-an-expression-is-not-yet-a-numerical-value)
+starts with a shorter factored polynomial.
+
+
 ### Worked examples
 
 Differentiation of a polynomial, the canonical form:

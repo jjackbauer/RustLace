@@ -5,7 +5,8 @@ arithmetic, an N-dimensional array library, the Lovelace scripting language, a n
 runner and a native desktop IDE for Windows and Linux, all in one workspace with no external crates
 under the engine.
 The engine is `lovelace-lang`'s `Engine`, and every host drives the same engine rather than
-re-implementing language behaviour. This file is the portable entry point; task skills are in
+re-implementing language behaviour. This is the contributor entry point. Consumer agents running Lovelace scripts should start with
+[docs/agent-usage.md](docs/agent-usage.md). Task skills for changing the project are in
 `.dsh/skills/` and are indexed at [docs/skills.md](docs/skills.md).
 
 ## Three entry points
@@ -85,8 +86,7 @@ for J-02 is `JOURNEY summary journeys=1 failed=0`.
 
 Test counts are not duplicated here: [docs/testing.md](docs/testing.md#1-unit-tests-in-crate-test)
 carries the measured aggregate with its commit SHA, OS, command and date, keeps the Linux and
-Windows desktop observations separate, and records the one ignored test
-(`property_assertions::mathir_evaluates_like_symbolic`, annotated in place). Read the count from a
+Windows desktop observations separate, and distinguishes older ignored-test observations from current measurements. Read the count from a
 run at the commit you are changing; do not quote a historical total as current.
 `--gui-selftest` gives 20 checks, 0 failed on both platforms; `--selftest` gives 15 checks on
 Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 232 passed, 0

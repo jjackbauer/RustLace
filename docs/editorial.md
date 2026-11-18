@@ -68,8 +68,8 @@ New pages follow one of four shapes, after Diátaxis:
 
 | Shape | Reader question | Where it goes |
 |---|---|---|
-| **Tutorial** | "Teach me by doing." | [docs/tutorials/](tutorials/) — four end-to-end tutorials today; a new page goes there |
-| **How-to** | "How do I do this one thing?" | a new `docs/how-to/` page (no how-to pages exist yet) |
+| **Tutorial** | "Teach me by doing." | [docs/start-here.md](start-here.md) for the first encounter; [docs/tutorials/](tutorials/) for complete problems and measured outcomes |
+| **How-to** | "How do I do this one thing?" | [docs/how-to/](how-to/) with focused task recipes, expected input/output kinds and specific failure modes |
 | **Reference** | "What exactly does this do?" | `docs/language/`, `docs/crates/`, `docs/extensions/` |
 | **Explanation** | "Why is it built this way?" | `docs/architecture.md`, `docs/adr/` |
 
@@ -78,6 +78,59 @@ interpretation of that output, the assumptions, the precision considerations, an
 reproduces it. A reference page for a builtin contains: purpose, inputs and their accepted kinds,
 output, precision behaviour, errors, limitations, and at least one example with its observed typed
 result.
+
+## Human documentation: teach the language before its implementation
+
+A language and library manual is not the same thing as a contributor's crate
+inventory. Use these reader-facing conventions for every **new or substantially
+rewritten** guide, tutorial and library example:
+
+1. **State the task and prerequisites.** Begin with what the reader will
+   accomplish and the concepts they need. Link to
+   [Get started](start-here.md) if the example presupposes language basics.
+2. **Provide runnable, minimal input and observed output.** Use a
+   `lovelace` block immediately followed by a `text` block. Prefer a small
+   stand-alone result to a long opaque transcript. Use checked-in `.ls`
+   scripts for multi-step workflows, and state a portable runner command.
+3. **Explain each newly introduced kind at its first use.** Link
+   `Natural`, `Real`, `Vector`, `Array`, `Complex`, `Symbolic`,
+   `Record`, `Text` and other public runtime kinds to their
+   [definitions](language/values-and-types.md). Describe the *actual shape
+   and elements* of a collection, not only the word `Array`.
+4. **Link APIs where they do work.** A reader should be able to click from a
+   call such as `matmul`, `fft`, `cancel`, `compile` or `sys_mm1`
+   to the relevant [builtin](language/builtins.md) or
+   [library reference](extensions/README.md). Include parameter roles,
+   result kinds and non-obvious preconditions in the surrounding explanation.
+5. **Explain the observed result and at least one error or boundary.** Don't
+   make the reader reverse-engineer why `[[1],[2]]` differs from `[1,2]`,
+   what a complex FFT coefficient signifies, whether simplification preserves
+   a function's domain, or why JSON `structured` is not a language `Record`.
+6. **Choose the right level of proof.** Link to
+   [precision](language/precision-and-formatting.md) and distinguish
+   representational exactness from independent mathematical verification.
+7. **End with a deliberate next step.** Link a tutorial to a reference and a
+   reference back to a concrete task. Distinguish APIs available in a source
+   build from older released binaries.
+
+### Page roles and section placement
+
+- **Getting started:** problem, prerequisites, first execution, anatomy of
+  result, values and types, a small library operation, recovery, where next.
+- **Tutorial:** the seven top-level sections required by the tutorial checker
+  stay intact. Put prerequisites under *Problem*, type/function links and
+  explanations under *Reading the result*, and reproducibility under
+  *Verification*. New subsection headings do not replace those contracts.
+- **How-to:** goal, type-aware preconditions, executable steps, interpretation,
+  common refusal or limitation, and links to the normative API.
+- **Reference:** contract before implementation: input kinds, output kinds,
+  behavior, precision, errors, limitations, tested example, related material.
+  Crate internals belong in their own developer reference.
+
+The link checker verifies that the destination exists, and the example runner
+checks that the illustrated output is reproducible. Neither proves that the
+explanation teaches the concept or that the mathematics is correct. Reviewers
+must still read the page from the perspective of a newcomer.
 
 ## Rules for claims and evidence
 
@@ -98,6 +151,24 @@ result.
 5. **Portable paths in examples.** No `C:\Users\<someone>\...`. Use a repository-relative path or a
    placeholder that reads as one.
 6. **`.ls` is the script extension.** Use it in every example; the compatibility note for other extensions lives in the language reference.
+
+## Version-bound examples and evidence
+
+Every maintained tutorial states whether it applies to the checked-out source
+revision or to a named released binary. Never silently substitute a current
+source-only API into an older release tutorial. When a release behavior differs,
+link to [version applicability](version-applicability.md) and label the
+difference where the reader first encounters the example.
+
+Example execution exemptions are governed by
+[the waiver policy](example-waivers.md). An unreviewed `not-run` annotation
+is a documentation defect, even if the other examples still pass.
+
+Counts of crates, skills, ADRs and corpus records are derived from the
+repository manifest and fixture inventories by
+`python tools/check-doc-metadata.py`. Updating prose without updating
+the source of truth is not a repair. The checker also mutation-tests these
+statements so a stale count cannot quietly pass.
 
 ## Agent instructions are code
 

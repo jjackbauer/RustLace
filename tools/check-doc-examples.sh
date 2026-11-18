@@ -369,6 +369,22 @@ for page in "${pages[@]}"; do
             continue
         fi
 
+        # A matching message is not sufficient if a runner changed the exit
+        # contract. Recognizable success and refusal transcripts imply their
+        # corresponding process status. Unrecognized text remains subject to
+        # the original output comparison.
+        case "$expected" in
+            '= '*) expected_rc=0 ;;
+            'Error ['*) expected_rc=1 ;;
+            *) expected_rc=-1 ;;
+        esac
+        if ((expected_rc >= 0 && rc != expected_rc)); then
+            printf 'FAIL %s:%d: output resembles exit %d but runner exited %d\n' \
+                "$page" "$fence_line" "$expected_rc" "$rc" >&2
+            failed=$((failed + 1))
+            continue
+        fi
+
         if ((rc == 0)); then
             raw=$(cat "$stdout_file")
         else

@@ -147,6 +147,27 @@ a panic. The worked examples below show the version, arity and empty-parameter m
 
 ## Examples
 
+### Understand the kinds in these examples
+
+The expression `symbol("x")^2 + 1` is
+[Symbolic](../language/values-and-types.md#symbolic), while the parameter
+list `[x]` is a [Vector](../language/values-and-types.md#vector-and-array).
+`compile` and `lower` return a versioned IR
+[Text](../language/values-and-types.md#text) representation, **not** a
+Lovelace [Function](../language/values-and-types.md#function).
+`compile_full` returns a structured
+[Record](../language/values-and-types.md#record) describing the kernel;
+`evalir` and `evalir_batch` use the IR, a vector of inputs and an explicit
+precision budget.
+
+A kernel's version and argument count are part of the contract: an IR
+text from a different format version or an incorrectly shaped input must
+be refused instead of guessed. Start with
+[the library guide](../how-to/use-libraries.md#mathir-compile-expressions-for-repeated-evaluation)
+for the task and type map, then use the runnable calls below to inspect the
+compiled representation.
+
+
 ### Worked examples
 
 `compile` lowers a symbolic expression to IR. The parameter list is the kernel's argument order:

@@ -175,8 +175,9 @@ service time or think time therefore survives `sys_station → sys_open → sys_
 
 ## Corpus
 
-`parity/corpus/lang.json` holds 111 records (99 value, 10 error, 1 prints, 1 plot) extracted from the
-C# language reference, and `parity/corpus/symbolics.json` holds 103. Each record is
+`parity/corpus/lang.json` holds 112 records (100 value, 10 error, 1 prints, 1 plot) extracted from the
+C# language reference, `parity/corpus/symbolics.json` holds 103 records, and
+`parity/corpus/systems.json` holds 17 records from the RustLace Systems reference. Each record is
 `{id, doc, heading, script, kind, text}`; `kind` ∈ value | error | prints | plot. The gate reads
 `<repository root>/parity/corpus/*.json` from `CARGO_MANIFEST_DIR`, so it runs from any working
 directory. A missing or unparsable corpus is exit code 2, and at least one divergence is exit code 1;

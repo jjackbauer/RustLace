@@ -10,6 +10,23 @@ The reference is organised as a set of focused pages rather than one enormous fi
 first four in order if you are new to the language; the remaining pages are reference material
 that can be consulted independently.
 
+## Find what you need
+
+| Goal | Page |
+|---|---|
+| First time writing a `.ls` script? | [Get started](../start-here.md) — a short, executable introduction to expressions, values, arrays, functions and errors |
+| Working with a library? | [Working with libraries](../how-to/use-libraries.md) — task-driven examples with input and output type links |
+| Looking up a value kind? | [Values and types](values-and-types.md) — the public kinds, conversions, exactness and collection shapes |
+| Looking up a function? | [Builtins](builtins.md) — complete catalogue; the per-function CLI descriptor is available through `--function` |
+| Want an end-to-end worked problem? | [Tutorials](../tutorials/README.md) — select by topic |
+| Calling the runner from a program? | [JSON errors and diagnostics](errors-and-diagnostics.md) and [consumer-agent guide](../agent-usage.md) |
+
+**Conventions:** `lovelace` blocks are executable input; the adjacent `text`
+blocks are observed `--text` output. In prose, a type name links to its
+definition, and a library operation links to the relevant catalogue or family
+reference. The examples describe the checked-out source revision, not an
+unspecified older binary (see [version applicability](../version-applicability.md)).
+
 ## What RustLace is
 
 RustLace is a complete scripting language for arbitrary-precision mathematics. One engine serves

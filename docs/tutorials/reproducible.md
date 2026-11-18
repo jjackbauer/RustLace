@@ -11,6 +11,12 @@ lets `plot` write into the operating system's temporary directory, and extracts 
 fields a consumer usually needs — `result.display`, `result.kind` and `result.structured.exact` —
 plus the path of the plot artifact.
 
+**Prerequisites:** This example builds on
+[Array](../language/values-and-types.md#vector-and-array) values and
+[Real](../language/values-and-types.md#numeric-kinds-and-widening)
+arithmetic. If you are new to running scripts, follow
+[Get started](../start-here.md) before using the CLI's JSON mode.
+
 ## Source
 
 ```lovelace
@@ -72,9 +78,30 @@ JSON number; read it as the field's documented shape. The envelope also contains
 such as `elapsed` and `timings`; compare the stable `result` and artifact fields when you need
 reproducibility, not the whole envelope byte for byte.
 
+### Language values versus the runner's JSON fields
+
+| In the example | Kind and reference | What the consumer should do |
+|---|---|---|
+| `A`, `b`, `sol`, `residual` | [Array](../language/values-and-types.md#vector-and-array) | Preserve the two-dimensional shape. A Vector is not a column matrix. |
+| `det(A)` | Exact [Real](../language/values-and-types.md#numeric-kinds-and-widening) in this example | Read both `result.kind` and structured exactness; the display string alone is not a type contract. |
+| `plot(...)` | [Plot builtin](../language/plots.md) producing an SVG artifact | Read `artifacts` for file paths; the path depends on the host. |
+| `result.structured` | **JSON envelope object**, not a Lovelace [Record](../language/values-and-types.md#record) | This is transport metadata for an external process. Do not confuse it with a `Record` constructed by a language builtin. |
+| `result.structured.exact` | Representation metadata ([exactness](../language/values-and-types.md#exactness)) | True describes this representation; it does not independently prove an algorithm's correctness. |
+
+**Choose the right output surface:** `--text` is intended for people
+reading an interactive result. The default JSON envelope is intended for
+scripts and agents; handle its [error codes and statuses](../language/errors-and-diagnostics.md#the-error-envelope)
+and avoid assumptions about variable ordering, elapsed time or host paths.
+
+### Continue from here
+
+See [Using RustLace as a consumer agent](../agent-usage.md) for complete
+function discovery and structured refusal handling, and
+[the plot reference](../language/plots.md) for the SVG artifact contract.
+
 ## Assumptions
 
-- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+- The checked-out RustLace development revision, run from the repository root with the project-root Cargo command
   `cargo run -p lovelace-run -- --file docs/tutorials/examples/reproducible.ls --omit-functions
   --omit-variables` on Windows, Linux or WSL. Rust 1.85+ with `cargo` on `PATH` is the only
   prerequisite for that main command; the first run compiles the runner.

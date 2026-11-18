@@ -231,7 +231,8 @@ jobs:
         run: cargo build -p lovelace-run
 
       # Independent Fraction rank oracle, live return-kind checks and stale
-      # agent instruction detection. A zero-case run is a failure.
+      # agent instruction detection. A zero-case run is a failure. Keep these
+      # explicit CI steps: check-agent-contracts.py verifies their presence.
       - name: Check core and agent contracts
         run: python tools/harness/check-agent-contracts.py
 
@@ -327,10 +328,10 @@ jobs:
 
       # One transcript of every gate above, with a machine-readable DOCREPORT
       # line per gate and a total carrying the commit and OS (RQ-023). It is
-      # additive: every gate still runs as its own step, so a failure stays
-      # attributable, and this step fails when any gate fails or a gate does
-      # not print its summary. Both matrix legs run it unconditionally and
-      # upload their own transcript below.
+      # additive: individual checks run as their own steps for attribution,
+      # and this report runs the named gates again to capture complete
+      # machine-readable evidence and failure accounting. Both matrix legs
+      # run it unconditionally and upload their transcript below.
       - name: Report documentation evidence
         shell: bash
         run: |

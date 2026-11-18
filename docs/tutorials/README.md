@@ -1,6 +1,9 @@
 # Tutorials
 
-Four end-to-end tutorials for RustLace 0.4.1. Each one starts from a problem, gives a complete
+Four end-to-end tutorials for the **checked-out development revision** of RustLace.
+These scripts are continuously checked against that revision; they are not a compatibility
+promise for older downloadable releases. See [version applicability](../version-applicability.md)
+when using a tagged binary. Each one starts from a problem, gives a complete
 script, shows the recorded output (or its stable shape, where one value is host-specific), and ends
 with the command that reproduces it.
 
@@ -33,6 +36,16 @@ when a page, an example or an expected value is missing or wrong. It asserts the
 tutorials by name, so a missing or unlisted tutorial is a failure rather than a skip. It is written
 for Ubuntu and Windows (Git Bash), the shells the documentation job provisions, and falls back to
 `cargo run -p lovelace-run` when no built runner is found.
+
+## Choose a tutorial
+
+New to the syntax, `Real`, `Vector`, or `Array`? Begin with
+[Get started](../start-here.md). Each tutorial below assumes a small amount
+of language knowledge and now includes a **types-and-APIs map** with links to
+the normative reference. The examples are independent rather than a sequence;
+choose the problem that matches what you want to accomplish. The
+[library guide](../how-to/use-libraries.md) maps other common tasks to their
+appropriate API families.
 
 | Tutorial | What you do | What it teaches |
 |---|---|---|

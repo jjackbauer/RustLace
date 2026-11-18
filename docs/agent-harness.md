@@ -24,7 +24,7 @@ Two observations derived from the same implementation are not independent
 mathematical evidence. C# parity is behavioral evidence, not a mathematical
 oracle, especially when the historical behavior was defective.
 
-## Implemented in this change
+## Currently implemented
 
 `python tools/harness/check-agent-contracts.py`:
 
@@ -51,6 +51,28 @@ Linux and Windows.
 matrix for all core functions or all registered builtins. Tests for language syntax,
 source positions, cancellation, the numerical kernel and the existing
 documentation corpus remain independently necessary.
+
+## Consumer-agent black-box acceptance
+
+`python tools/harness/check-consumer-journeys.py` drives the public runner
+through a deliberately limited task workflow: detecting truncated discovery,
+requesting a complete catalogue, inspecting function descriptors, evaluating
+an exact rational and matrix rank, exercising the Systems API, running a file,
+and diagnosing an invalid input. It uses small independent rational identities
+as oracles and refuses a zero-work success. This is a deterministic CLI
+acceptance test, **not** an evaluation showing an unfamiliar human or LLM
+agent successfully learned the interface. Such blind trials must supply
+previously unseen tasks and independently evaluate outcomes.
+
+## Observable coverage boundary
+
+The representative agent-contract gate does **not** certify all registered
+builtins. Run `python tools/harness/contract-coverage.py --summary` for an
+explicit inventory count; omit `--summary` to get a per-builtin JSON inventory
+showing which names are selected for runtime checks and which one has an
+independent mathematical oracle. This is **fixture selection**, not proof that
+a CI run executed those cases. The live gate's `executed` count and the
+repository CI transcript establish execution separately.
 
 ## Commands
 

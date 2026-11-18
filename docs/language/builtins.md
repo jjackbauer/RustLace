@@ -8,13 +8,39 @@ The numbers in this page were read from the live registry of a debug `lovelace-r
 the current tree:
 
 ```console
-target/debug/lovelace-run.exe --functions --function-limit 500
+cargo run -p lovelace-run -- --functions --function-limit 500
 ```
 
 The observed envelope reports `"total": 134`, `"returned": 134`, `"truncated": false`. The
 category counts below sum to 134.
 
 ## Purpose
+
+### Find a function by problem and kind
+
+This is the exhaustive catalogue of builtin **names and call arities**; it is
+not intended to be read from top to bottom as a tutorial. If you are new to
+Lovelace, first work through [Get started](../start-here.md). For context,
+typed examples and common mistakes, use
+[Working with libraries](../how-to/use-libraries.md).
+
+| Problem | Typical input kind | Result kind | Where to learn |
+|---|---|---|---|
+| Integer and exact decimal operations | [Natural / Integer / Real](values-and-types.md#numeric-kinds-and-widening) | Numeric scalar | [Numerics](#numerics-10) and [precision](precision-and-formatting.md) |
+| Create, shape, broadcast and reduce data | [Vector / Array](values-and-types.md#vector-and-array) | Array, Vector or scalar | [Arrays](#arrays-23) and [array example](../how-to/use-libraries.md#arrays-distinguish-a-vector-from-a-matrix) |
+| Matrix multiplication, determinant, rank | [Array](values-and-types.md#vector-and-array) | Array or scalar | [Linear Algebra](#linear-algebra-8) and [linear system](../tutorials/linear-algebra.md) |
+| Algebra, differentiation and solving | [Symbolic](values-and-types.md#symbolic) | Symbolic, numeric or [Record](values-and-types.md#record) | [Symbolics](../extensions/symbolics.md) and [symbolic tutorial](../tutorials/symbolic.md) |
+| Signal operations and Fourier transforms | [Vector](values-and-types.md#vector-and-array) of [Real](values-and-types.md#numeric-kinds-and-widening) / [Complex](values-and-types.md#complex) | Vector, often Complex-valued | [DSP](../extensions/dsp.md) and [FFT tutorial](../tutorials/signal-processing.md) |
+| Compile and repeatedly evaluate expressions | [Symbolic](values-and-types.md#symbolic), Vector | [Text](values-and-types.md#text), [Record](values-and-types.md#record), numeric result | [MathIR](../extensions/mathir.md) |
+| Queueing models and throughput/capacity | Numeric rates, [Record](values-and-types.md#record) models | Record containing Real and exact sidecars | [Systems](../extensions/systems.md) and [analysis guide](../systems-analysis.md) |
+
+The `module` in function discovery names a statically integrated library
+family; it is **not** an import statement. `--function <name>` supplies the
+live descriptor. Return kinds in that descriptor are declared metadata, not
+independent proof that every input branch has the same kind. To interpret a
+numerical result, read [exactness](values-and-types.md#exactness) as well as
+the relevant function's limitations.
+
 
 ### Registry at a glance
 

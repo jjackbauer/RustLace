@@ -18,7 +18,7 @@ No registry is needed for the engine, the runner, the corpus gate or the knowled
 $ cargo build --workspace
 ```
 
-The workspace has twelve members; `lovelace-desktop-spike` is deliberately outside it and is not
+The workspace has fourteen members; `lovelace-desktop-spike` is deliberately outside it and is not
 built by this command (`lovelace-desktop-spike/Cargo.toml`).
 
 Profiles (`Cargo.toml`):

@@ -619,6 +619,24 @@ make_docs_report_tree() {
         'DOCREPORT gate=check-docs status=ok pages=1 links=1 anchors=1 refs=1 citations=0 symbols=0 claims=0 tutorials=0 sections=0 readme=0 modes=stub failures=0'
     write_report_stub "$root" check-reference-pages \
         'DOCREPORT gate=check-reference-pages status=ok pages=1 manifested=1 non_reference=0 unclassified=0 sections=7 failed_pages=0 failures=0'
+    mkdir -p -- "$root/tools/harness" || exit 2
+    write_report_stub "$root" harness/report-agent-contracts \
+        'DOCREPORT gate=agent-contracts status=ok checks=3 failed=0'
+    write_report_stub "$root" harness/report-doc-family \
+        'DOCREPORT gate=doc-family-examples status=ok families=2 failed=0'
+    write_report_stub "$root" harness/report-doc-gate-mutations \
+        'DOCREPORT gate=doc-gates-mutants status=ok checks=1 failed=0'
+    cat >"$root/tools/check-doc-metadata.py" <<'PY'
+import sys
+if "--self-test" in sys.argv:
+    print("DOCREPORT gate=doc-metadata-mutants status=ok mutants=23 failed=0")
+else:
+    print("DOCREPORT gate=doc-metadata status=ok crates=14 skills=8 adrs=11 corpus=232 tutorials=4 failed=0")
+PY
+    mkdir -p -- "$root/tools/harness" || exit 2
+    cat >"$root/tools/harness/check-consumer-journeys.py" <<'PY'
+print("DOCREPORT gate=consumer-journeys status=ok checks=10 discovery=2 descriptors=2 executions=4 refusals=1 failed=0")
+PY
 }
 
 # ---------------------------------------------------------------------------
@@ -1320,16 +1338,16 @@ MD
     make_docs_report_tree "$root"
     expect_success "docs-report: complete summaries" "$root/baseline.log" \
         bash "$root/tools/docs-report.sh"
-    if ! grep -Fq -- 'DOCREPORT total gates=5 ok=5 failed=0' "$root/baseline.log"; then
-        fail "docs-report: clean baseline total" "the total line is not gates=5 ok=5 failed=0"
+    if ! grep -Fq -- 'DOCREPORT total gates=11 ok=11 failed=0' "$root/baseline.log"; then
+        fail "docs-report: clean baseline total" "the total line is not gates=11 ok=11 failed=0"
     fi
 
     write_report_stub "$root" run-tutorials 'run-tutorials: OK (this gate forgot its DOCREPORT line)'
     expect_failure "docs-report: gate exits 0 with no DOCREPORT line" \
         "run-tutorials" "summary=missing" \
         "$root/mutated.log" bash "$root/tools/docs-report.sh"
-    if ! grep -Fq -- 'DOCREPORT total gates=5 ok=4 failed=1' "$root/mutated.log"; then
-        fail "docs-report: total after a missing summary" "the total line is not gates=5 ok=4 failed=1"
+    if ! grep -Fq -- 'DOCREPORT total gates=11 ok=10 failed=1' "$root/mutated.log"; then
+        fail "docs-report: total after a missing summary" "the total line is not gates=11 ok=10 failed=1"
     fi
 }
 
@@ -1468,6 +1486,29 @@ MD
         env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
 }
 
+# Cross-parser regression: the shell executor recognizes '<' and '>'
+# inside reasons and text after '-->'; the metadata mutation suite verifies
+# that these same shapes are never invisible to waiver authorization.
+{
+    root=$work/doc-examples-angle-exemption/repo
+    make_doc_examples_tree "$root"
+    cat >>"$root/docs/guide.md" <<'MD'
+
+<!-- not-run: because x < 0 > 1 is deliberately invalid --> see the note
+```lovelace
+this is not valid lovelace source
+```
+MD
+    expect_success "doc examples: angular and trailing exemption parsed" \
+        "$work/doc-examples-angle-exemption/baseline.log" \
+        env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+    if ! grep -Fq -- 'discovered=2 executed=1 passed=1 failed=0 exempted=1' \
+        "$work/doc-examples-angle-exemption/baseline.log"; then
+        fail "doc examples: angular exemption" \
+            "a '<' or '>' annotation with trailing text was not honored"
+    fi
+}
+
 {
     root=$work/doc-examples-annotation-separated/repo
     make_doc_examples_tree "$root"
@@ -1542,6 +1583,26 @@ SH
     expect_failure "doc examples: unexpected runner exit" \
         "docs/guide.md" "neither success (0) nor a documented refusal (1)" \
         "$work/doc-examples-unexpected-exit/mutated.log" \
+        env CARGO_TARGET_DIR="$root/fake-target" bash "$root/tools/check-doc-examples.sh"
+}
+
+# The same text must NOT pass if a fake runner moved it from a successful
+# invocation to a diagnostic exit. Output-text parity cannot hide exit drift.
+{
+    root=$work/doc-examples-false-success/repo
+    make_doc_examples_tree "$root"
+    mkdir -p -- "$root/fake-target/debug"
+    for runner_name in lovelace-run lovelace-run.exe; do
+        cat >"$root/fake-target/debug/$runner_name" <<'SH'
+#!/usr/bin/env bash
+printf '= 2 (Natural)\n' >&2
+exit 1
+SH
+        chmod +x "$root/fake-target/debug/$runner_name" || exit 2
+    done
+    expect_failure "doc examples: false success with diagnostic exit" \
+        "docs/guide.md" "output resembles exit 0 but runner exited 1" \
+        "$work/doc-examples-false-success/mutated.log" \
         env CARGO_TARGET_DIR="$root/fake-target" bash "$root/tools/check-doc-examples.sh"
 }
 

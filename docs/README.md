@@ -10,6 +10,27 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 [DSP guide](extensions/dsp.md) state the numerical model's limits; the
 [language reference](language/) and the [crate pages](crates/) are the API references.
 
+## Learn and use the language
+
+The primary path is organized like a language manual: begin with an executable
+introduction, then consult tutorials, task guides, and API references as needed.
+
+| If you want to… | Start here | What you will gain |
+|---|---|---|
+| Run your first script | [Get started](start-here.md) | The CLI, the result format, dynamic value kinds, arrays, functions and a first diagnostic |
+| Solve a complete example | [Tutorials](tutorials/README.md) | Guided linear algebra, symbolic mathematics, DSP and reproducible JSON output |
+| Choose a library for a task | [Working with libraries](how-to/use-libraries.md) | Input/output kinds, use cases, constraints and direct links into the APIs |
+| Look up syntax or an operation | [Language reference](language/README.md) and [builtin catalogue](language/builtins.md) | Exact semantics, parameters and error behavior |
+| Understand a specific library family | [Library reference](extensions/README.md) | DSP, Symbolics, MathIR and Systems capabilities and limitations |
+| Integrate the runner into another system | [Consumer-agent guide](agent-usage.md) | Function discovery, typed envelopes, error handling and reproducibility |
+
+The [how-to index](how-to/README.md) collects shorter recipes. These pages
+describe **using Lovelace**, whereas [crates](#per-crate-pages),
+[architecture](architecture.md) and [contribution instructions](../AGENTS.md)
+describe implementing or extending RustLace itself.
+
+## Project and reference index
+
 | Page | Read it when |
 |---|---|
 | [architecture.md](architecture.md) | you need the layering, the threading model, cancellation, the incremental cache, or the data flow of one run |
@@ -24,6 +45,10 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 | [contributing.md](contributing.md) | you are opening a change |
 | [editorial.md](editorial.md) | you are writing or reviewing documentation, a skill or an agent instruction |
 | [agent-harness.md](agent-harness.md) | you are verifying code written by agents or improving independent contract and skill checks |
+| [agent-usage.md](agent-usage.md) | you are an agent using the language and need complete registry discovery, typed results and numerical provenance |
+| [example-waivers.md](example-waivers.md) | you need to exempt an executable example for a justified and independently reviewed reason |
+| [version-applicability.md](version-applicability.md) | you need to distinguish checked-out source documentation from older release binaries |
+| [how-to/](how-to/) | you want short, task-oriented recipes rather than full reference pages |
 | [skills.md](skills.md) | you need the current agent task-skill inventory |
 | [tutorials/](tutorials/) | you are learning RustLace by running a complete script end to end |
 | [systems-analysis.md](systems-analysis.md) | you are modelling a queueing network and need the models, the solvers, the bounds, the refusals and both call surfaces |

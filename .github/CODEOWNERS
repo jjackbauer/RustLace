@@ -23,3 +23,9 @@
 
 # CI gates that enforce the policy.
 /.github/workflows/ci.yml                  @jjackbauer
+
+# Documentation execution waivers and their canonical inventory checker.
+/docs/example-waivers.json                   @jjackbauer
+/docs/example-waivers.md                     @jjackbauer
+/tools/check-doc-metadata.py                @jjackbauer
+/tools/harness/report-agent-contracts.sh    @jjackbauer
