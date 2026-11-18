@@ -3015,12 +3015,7 @@ pub fn call(
                 Value::Array(a) => {
                     let shape = a.shape().to_vec();
                     if shape.len() != 2 {
-                        return Err(shape_failure(
-                            "matrix_rank",
-                            1,
-                            "a rank-2 matrix",
-                            &args[0],
-                        ));
+                        return Err(shape_failure("matrix_rank", 1, "a rank-2 matrix", &args[0]));
                     }
                     // Exact rational matrices use true row rank, including rectangular
                     // matrices and nullity greater than one. Symbolic matrices retain the
