@@ -122,6 +122,20 @@ def validate(root: Path) -> dict[str, int]:
         if not declared or int(declared.group(1)) != len(records):
             fail("README.md", f"{family} corpus count drift (actual={len(records)})")
     total = sum(corpus_counts.values())
+    # The normative workspace contract and parity reference must not keep
+    # historic family sizes as if they described current fixtures.
+    for scoped in ("CONTRACT.md", "docs/crates/lovelace-corpus.md",
+                   "docs/parity-with-studio.md"):
+        scoped_text = read(root, scoped)
+        for family, count in corpus_counts.items():
+            marker = f"`parity/corpus/{family}.json`"
+            if marker not in scoped_text:
+                fail(scoped, f"missing {family} corpus from current inventory")
+            family_line = next(
+                (line for line in scoped_text.splitlines() if marker in line), ""
+            )
+            if not re.search(rf"\b{count}\s+records\b", family_line):
+                fail(scoped, f"{family} inventory drift (actual={count})")
     corpus_page = read(root, "docs/crates/lovelace-corpus.md")
     for path, text, pattern in (
         ("README.md", readme, rf"\bfor {total} records\b"),
@@ -230,7 +244,8 @@ def self_test(root: Path) -> int:
     with tempfile.TemporaryDirectory(prefix="rustlace-metadata-") as tmp:
         baseline = Path(tmp) / "fixture"
         for path in (
-            "Cargo.toml", "README.md", "AGENTS.md", "docs/build-and-run.md",
+            "Cargo.toml", "README.md", "AGENTS.md", "CONTRACT.md",
+            "docs/parity-with-studio.md", "docs/build-and-run.md",
             "docs/skills.md", "docs/tutorials/README.md",
             "docs/crates/lovelace-corpus.md", "docs/version-applicability.md",
             "docs/example-waivers.json",
@@ -254,6 +269,10 @@ def self_test(root: Path) -> int:
             ("corpus-count", "README.md", "for 232 records", "for 231 records"),
             ("tutorial-version", "docs/tutorials/linear-algebra.md",
              "checked-out RustLace development revision", "RustLace 0.4.1"),
+            ("normative-corpus-count", "CONTRACT.md",
+             "lang.json` holds 112 records", "lang.json` holds 111 records"),
+            ("parity-inventory", "docs/parity-with-studio.md",
+             "lang.json` – 112 records", "lang.json` – 111 records"),
         ]
         # An agent must not be able to silence a failing example simply by
         # inserting a not-run annotation while leaving other examples green.
