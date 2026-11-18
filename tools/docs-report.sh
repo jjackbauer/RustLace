@@ -25,7 +25,7 @@
 #                                links, anchors, references, citations, symbols,
 #                                claims, tutorial precision sections, README
 #   5. check-reference-pages.sh  the seven-section reference-page contract
-#   6. report-agent-contracts.sh - live/core agent contracts and mutants
+#   6. report-agent-contracts.sh - live/core agent contracts and mutants (once per OS)
 #   7. report-doc-family.sh - language and extension example runners
 #   8. check-doc-metadata.py - inventories and version applicability
 #   9. check-doc-metadata.py --self-test - inventory mutation probes
