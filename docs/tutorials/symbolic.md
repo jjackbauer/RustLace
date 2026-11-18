@@ -11,6 +11,12 @@ approximation.
 This tutorial differentiates `x^3 + 2*x`, watches `simplify` refuse a cancellation, sees what makes
 `simplify` fire in a case it can prove, and then asks `evalf` for 20 decimal places.
 
+**Prerequisites:** This example introduces
+[Symbolic](../language/values-and-types.md#symbolic) expressions,
+assumptions, and numerical [Real](../language/values-and-types.md#numeric-kinds-and-widening)
+results. It is worth reviewing [variables and functions](../language/functions-and-scope.md)
+and the [first-run guide](../start-here.md) before attempting to extend it.
+
 ## Source
 
 ```lovelace
@@ -71,6 +77,30 @@ The same script is checked in as [symbolic.ls](examples/symbolic.ls).
   so this is where symbolic exactness ends and a precision budget begins. The request is for 20
   decimal places; the 20th place is zero, and that trailing zero is not rendered, so 19 digits are
   visible. Asking for 21 places prints `1.414213562373095048801`.
+
+### Types and functions used
+
+| In the script | Type or API | Why it matters |
+|---|---|---|
+| `symbol("x")` | Creates a [Symbolic](../language/values-and-types.md#symbolic) value | An ordinary unbound name is an error, not an implicit math variable. |
+| `diff(f, x)` | [Symbolics calculus](../extensions/symbolics.md) returning Symbolic | Retains algebraic structure; no decimal approximation is involved. |
+| `assume(...)` | [Symbolic assumption](../extensions/symbolics.md#precision-behaviour) | Session-scoped knowledge affects which rewrites can be justified. |
+| `simplify(...)`, `cancel(...)` | [Distinct algebra operations](../extensions/symbolics.md) | A rewrite may require a provable precondition; `cancel` can change the expression's domain if its excluded points are forgotten. |
+| `subs(df, x, 2)` | [Symbolic substitution](../extensions/symbolics.md) | Produces the exact value 14 in this example. |
+| `evalf(sqrt(2), 20)` | [Precision-limited Real](../language/precision-and-formatting.md#evalf) | Requests a decimal approximation to an irrational result, not a certified error bound. |
+
+**Keep the domain:** `(x^2-1)/(x-1)` and `x+1` agree only for
+`x != 1`. Seeing the latter expression after cancellation is not
+permission to use it at `x=1`. The
+[Symbolics library guide](../extensions/symbolics.md) documents the
+distinction between symbolic equality, assumptions and transformations.
+
+### Continue from here
+
+Try [Symbolics and types](../how-to/use-libraries.md#symbolics-an-expression-is-not-yet-a-numerical-value)
+to understand how these expressions fit into the language type system.
+For repeated evaluation of a symbolic expression, see
+[MathIR compilation](../how-to/use-libraries.md#mathir-compile-expressions-for-repeated-evaluation).
 
 ## Assumptions
 
