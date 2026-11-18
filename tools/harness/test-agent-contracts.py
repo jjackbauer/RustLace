@@ -11,7 +11,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "tools/harness/check-agent-contracts.py"
-FILES = ("lovelace-lang/src/registry.rs", "docs/skills.md", "AGENTS.md")
+FILES = ("lovelace-lang/src/registry.rs", "docs/skills.md", "AGENTS.md",
+         ".github/workflows/ci.yml")
 
 
 def seed(destination: Path) -> None:
@@ -57,6 +58,20 @@ def main() -> int:
          'module: "Core"', 'module: "Missing"'),
         ("missing-verify", ".dsh/skills/add-builtin/SKILL.md",
          "## Verify", "## NotVerified"),
+        ("agent-index-drift", "AGENTS.md",
+         "(.dsh/skills/add-builtin/SKILL.md)",
+         "(.dsh/skills/does-not-exist/SKILL.md)"),
+        ("retired-plugin-directive", ".dsh/skills/add-builtin/SKILL.md",
+         'Use `module: "Core"`', 'Use `plugin: None`'),
+        ("frontmatter-drift", ".dsh/skills/add-builtin/SKILL.md",
+         "name: add-builtin", "name: add-builtin-obsolete"),
+        ("missing-when-to-use", ".dsh/skills/add-builtin/SKILL.md",
+         "whenToUse:", "obsoleteUseField:"),
+        ("missing-registry-kind", "lovelace-lang/src/registry.rs",
+         'return_kind: Some("Natural | Integer | Real | Symbolic | Vector"),',
+         'return_kind: None,'),
+        ("missing-registry-struct-field", "lovelace-lang/src/registry.rs",
+         "pub module: &'static str,", "pub plugin: &'static str,"),
     )
     with tempfile.TemporaryDirectory(prefix="rustlace-agent-contracts-") as temp:
         base = Path(temp)
