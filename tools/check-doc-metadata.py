@@ -316,7 +316,25 @@ def self_test(root: Path) -> int:
             else:
                 fail(file, f"{label}: mutant passed")
             target.write_text(content, encoding="utf-8")
-    return len(mutations) + 1
+
+        # A correct count must not mask a second stale assertion elsewhere.
+        # The parity page already contains an uncounted corpus link before its
+        # inventory; the clean fixture also guards against the old first-hit bug.
+        parity_page = baseline / "docs/parity-with-studio.md"
+        original = parity_page.read_text(encoding="utf-8")
+        parity_page.write_text(
+            original + "\n- `parity/corpus/lang.json` – 111 records (obsolete)\n",
+            encoding="utf-8",
+        )
+        try:
+            validate(baseline)
+        except MetadataFailure as exc:
+            if "docs/parity-with-studio.md: lang inventory drift" not in str(exc):
+                fail("docs/parity-with-studio.md", f"wrong duplicate-count rejection: {exc}")
+        else:
+            fail("docs/parity-with-studio.md", "contradictory count alongside correct count passed")
+        parity_page.write_text(original, encoding="utf-8")
+    return len(mutations) + 2
 
 
 def main() -> int:
