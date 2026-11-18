@@ -104,3 +104,8 @@ input script, invocation, observed exit status, result kind, relevant structured
 fields, working precision, and independent check where mathematical correctness
 matters. Record the unresolved limitations and avoid calling an example run a
 mathematical proof.
+
+The deterministic public-CLI journey check lives in
+[`tools/harness/check-consumer-journeys.py`](../tools/harness/check-consumer-journeys.py).
+It tests concrete discovery, execution and refusal paths; it does not establish
+independent agent learning success.
