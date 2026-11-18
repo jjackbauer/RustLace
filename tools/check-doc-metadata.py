@@ -133,8 +133,12 @@ def validate(root: Path) -> dict[str, int]:
     # Catch stale totals even if a new correct total was appended elsewhere.
     for path, text in (("README.md", readme), ("docs/crates/lovelace-corpus.md", corpus_page)):
         wrong = re.findall(r"\bcorpus:\s*(\d+) passed,\s*0 failed,\s*(\d+) total", text)
-        if any(int(passed) != total or int(all_) != total for passed, all_ in wrong):
+        if any(int(all_) != total or int(passed) > total for passed, all_ in wrong):
             fail(path, f"stale corpus transcript (current total={total})")
+        # A filtered corpus invocation may correctly report fewer passes than
+        # the total inventory. README's first-run transcript is unfiltered.
+        if path == "README.md" and any(int(passed) != total for passed, _ in wrong):
+            fail(path, f"unfiltered quick start must execute all {total} records")
     for path, text in (("README.md", readme), ("AGENTS.md", agents)):
         if re.search(r"\bthe one ignored test\b", text):
             fail(path, "historical ignored-test assertion presented as current")
