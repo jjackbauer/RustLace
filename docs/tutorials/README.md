@@ -1,6 +1,9 @@
 # Tutorials
 
-Four end-to-end tutorials for RustLace 0.4.1. Each one starts from a problem, gives a complete
+Four end-to-end tutorials for the **checked-out development revision** of RustLace.
+These scripts are continuously checked against that revision; they are not a compatibility
+promise for older downloadable releases. See [version applicability](../version-applicability.md)
+when using a tagged binary. Each one starts from a problem, gives a complete
 script, shows the recorded output (or its stable shape, where one value is host-specific), and ends
 with the command that reproduces it.
 
