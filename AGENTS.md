@@ -124,8 +124,8 @@ sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxcurso
 
 ### CI jobs
 
-`.github/workflows/ci.yml` has five job definitions and runs on pushes to `main`, pull requests and
-manual dispatch:
+`.github/workflows/ci.yml` has five job definitions and runs on pushes to `main` and
+`release/**` branches, pull requests and manual dispatch:
 
 | Job | Commands |
 |---|---|
