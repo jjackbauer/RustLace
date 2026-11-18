@@ -14,9 +14,14 @@ if python tools/harness/test-agent-contracts.py; then
 else
     printf 'agent-contracts: mutation check failed\n' >&2
 fi
-if [[ $ok -eq 2 ]]; then
-    printf 'DOCREPORT gate=agent-contracts status=ok checks=2 failed=0\n'
+if python tools/harness/contract-coverage.py --summary; then
+    ok=$((ok + 1))
 else
-    printf 'DOCREPORT gate=agent-contracts status=fail checks=2 failed=%d\n' "$((2-ok))"
+    printf 'agent-contracts: coverage inventory failed\n' >&2
+fi
+if [[ $ok -eq 3 ]]; then
+    printf 'DOCREPORT gate=agent-contracts status=ok checks=3 failed=0\n'
+else
+    printf 'DOCREPORT gate=agent-contracts status=fail checks=3 failed=%d\n' "$((3-ok))"
     exit 1
 fi
