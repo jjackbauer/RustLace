@@ -87,6 +87,17 @@ it with `sha256sum -c SHA256SUMS.linux`. The checksum choice and the retry path 
 
 All three drive the same engine; no host re-implements language behaviour.
 
+## Learn Lovelace
+
+If you want to **use the language**, start with
+[Get started](docs/start-here.md) for a runnable introduction.
+[Working with libraries](docs/how-to/use-libraries.md) explains which
+operations fit common problems and links their input and result kinds.
+The [guided tutorials](docs/tutorials/README.md) cover complete tasks;
+the [language reference](docs/language/README.md) and
+[builtin catalogue](docs/language/builtins.md) document precise behavior.
+You do not need to understand the Rust workspace to run these scripts.
+
 ## Quick start
 
 Requires Rust 1.85+ (`rust-version` in `Cargo.toml`; the tree was built with 1.100.0) and, on
@@ -197,6 +208,8 @@ overflows its main-thread stack at `lang/061`, while the release build of the sa
 
 | Page | What it covers |
 |---|---|
+| [docs/start-here.md](docs/start-here.md) | first-run language guide with typed examples, links and common errors |
+| [docs/how-to/use-libraries.md](docs/how-to/use-libraries.md) | task-based library guide with input/output types, worked examples and API links |
 | [AGENTS.md](AGENTS.md) | portable contributor guide: entry points, commands, layout, conventions and guardrails |
 | [docs/agent-usage.md](docs/agent-usage.md) | how a consumer agent discovers commands, handles typed results and refuses unsupported exactness claims |
 | [docs/skills.md](docs/skills.md) | the eight task skills for extending the application, with when-to-use guidance |
