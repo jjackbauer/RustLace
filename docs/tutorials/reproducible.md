@@ -74,7 +74,7 @@ reproducibility, not the whole envelope byte for byte.
 
 ## Assumptions
 
-- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+- The checked-out RustLace development revision, run from the repository root with the project-root Cargo command
   `cargo run -p lovelace-run -- --file docs/tutorials/examples/reproducible.ls --omit-functions
   --omit-variables` on Windows, Linux or WSL. Rust 1.85+ with `cargo` on `PATH` is the only
   prerequisite for that main command; the first run compiles the runner.
