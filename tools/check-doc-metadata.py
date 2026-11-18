@@ -192,7 +192,15 @@ def validate(root: Path) -> dict[str, int]:
                 or rel.startswith("docs/tutorials/")):
             continue
         source = doc.read_text(encoding="utf-8").replace("\r\n", "\n")
-        for mark in re.finditer(r"<!--\s*not-run:\s*([^<>]*?)\s*-->\s*\n", source):
+        # Examples that merely SHOW a waiver annotation are not waivers.
+        # Preserve character offsets so we can read the genuine fenced source
+        # following an annotation from the original text.
+        prose = re.sub(
+            r"(?ms)^\s*```[^\n]*\n.*?^\s*```[ \t]*$",
+            lambda match: " " * len(match.group()),
+            source,
+        )
+        for mark in re.finditer(r"<!--\s*not-run:\s*([^<>]*?)\s*-->\s*\n", prose):
             reason = mark.group(1).strip()
             match = re.match(r"(WAIVER-[A-Z0-9-]+)\b", reason)
             if not match or match.group(1) not in allowed:
