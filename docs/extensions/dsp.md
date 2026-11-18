@@ -238,6 +238,26 @@ defective reference are recorded in [ADR-004](../adr/004-thirty-digit-default.md
 
 ## Examples
 
+### Understand the kinds in these examples
+
+A [Vector](../language/values-and-types.md#vector-and-array) is the
+one-dimensional collection of samples passed to `fft`, `dft`,
+`movingavg` and most of this family. Input samples commonly have
+[Real](../language/values-and-types.md#numeric-kinds-and-widening) values.
+Transforms can return a Vector with
+[Complex](../language/values-and-types.md#complex) elements, even when the
+input consists only of real numbers; the outer result kind is still
+`Vector`.
+
+Don't confuse the shape of a [Vector](../language/values-and-types.md#vector-and-array)
+with a rank-2 [Array](../language/values-and-types.md#vector-and-array), or
+the displayed digits of a complex coefficient with a guaranteed error bound.
+The [worked DSP tutorial](../tutorials/signal-processing.md) explains which
+coefficients in a four-point example are exact and where a longer FFT becomes
+precision-limited. The [library guide](../how-to/use-libraries.md#dsp-input-samples-can-produce-complex-output)
+shows a smaller first call.
+
+
 ### Worked examples
 
 Each block is a script run through the built CLI, with the observed output pasted beneath it. The
