@@ -629,7 +629,7 @@ make_docs_report_tree() {
     cat >"$root/tools/check-doc-metadata.py" <<'PY'
 import sys
 if "--self-test" in sys.argv:
-    print("DOCREPORT gate=doc-metadata-mutants status=ok mutants=6 failed=0")
+    print("DOCREPORT gate=doc-metadata-mutants status=ok mutants=10 failed=0")
 else:
     print("DOCREPORT gate=doc-metadata status=ok crates=14 skills=8 adrs=11 corpus=232 tutorials=4 failed=0")
 PY
