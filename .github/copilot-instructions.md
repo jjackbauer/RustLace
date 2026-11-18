@@ -17,7 +17,7 @@ This file does.
 ```console
 cargo build --workspace
 cargo test --workspace
-cargo run --release -p lovelace-corpus      # 231 records; run it in release (see below)
+cargo run --release -p lovelace-corpus      # 232 records; run it in release (see below)
 cargo test -p lovelace-desktop
 cargo run -p lovelace-desktop -- --gui-selftest
 python tools/check-architecture.py          # ownership and dependency policy
