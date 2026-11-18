@@ -6,6 +6,19 @@ descriptor is present in `Engine::new()`, and the one static dispatcher answers 
 directory documents each family: what it contributes, what it refuses, worked examples, and its
 specific limits.
 
+## Using a library from Lovelace
+
+As a language user, you do **not** need to know the corresponding Rust crate
+or the implementation's module boundaries. Every operation listed here is
+available by name in a regular `.ls` script.
+
+For a problem-oriented entry point, start with
+[Working with libraries](../how-to/use-libraries.md): it shows worked calls
+and links the [Vector, Array, Symbolic, Complex and Record kinds](../language/values-and-types.md)
+used by the examples. For syntax and exhaustive argument names, consult the
+[builtin catalogue](../language/builtins.md); for one live descriptor, run
+`cargo run -p lovelace-run -- --function fft`.
+
 | Family (`module`) | Builtins | Builtin categories it spans | Page |
 | --- | --- | --- | --- |
 | DSP (`DSP`) | 16 | `DSP` | [dsp.md](dsp.md) |
