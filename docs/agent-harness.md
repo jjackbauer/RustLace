@@ -52,6 +52,16 @@ matrix for all core functions or all registered builtins. Tests for language syn
 source positions, cancellation, the numerical kernel and the existing
 documentation corpus remain independently necessary.
 
+## Observable coverage boundary
+
+The representative agent-contract gate does **not** certify all registered
+builtins. Run `python tools/harness/contract-coverage.py --summary` for an
+explicit inventory count; omit `--summary` to get a per-builtin JSON inventory
+showing which names are selected for runtime checks and which one has an
+independent mathematical oracle. This is **fixture selection**, not proof that
+a CI run executed those cases. The live gate's `executed` count and the
+repository CI transcript establish execution separately.
+
 ## Commands
 
 From the workspace root, after compiling the runner:
