@@ -5089,22 +5089,32 @@ fn matrix_rank_exact_numeric(matrix: &NdArray<Value>) -> Result<Option<usize>, L
     let shape = matrix.shape();
     let (rows, cols) = (shape[0], shape[1]);
     let mut work = vec![vec![Rat::zero(); cols]; rows];
+    let mut contains_symbolic = false;
+    // Validate EVERY entry before selecting the symbolic fallback. An early
+    // symbolic entry must never hide a later inexact or unsupported value.
     for (index, value) in matrix.iter().enumerate() {
         poll(index as u64)?;
         if matches!(value, Value::Real(r) if !r.is_exact())
             || matches!(value, Value::RealClamped(_, _, _))
         {
-            return Err(LangError::plain(
-                "matrix_rank() requires exact numeric entries; a precision-limited Real cannot certify rank.",
+            return Err(shape_failure(
+                "matrix_rank",
+                1,
+                "a matrix of exact numeric or symbolic entries (precision-limited Real values are not supported)",
+                value,
             ));
         }
         let expr = as_expr(value).ok_or_else(|| {
-            LangError::plain("matrix_rank() requires exact numeric or symbolic entries.")
+            shape_failure("matrix_rank", 1, "a matrix of exact numeric or symbolic entries", value)
         })?;
-        let Sym::Num(rational) = expr else {
-            return Ok(None);
-        };
-        work[index / cols][index % cols] = rational;
+        match expr {
+            Sym::Num(rational) => work[index / cols][index % cols] = rational,
+            _ => contains_symbolic = true,
+        }
+    }
+    if contains_symbolic {
+        // The legacy symbolic estimate is not an unconditional certificate.
+        return Ok(None);
     }
     let mut rank = 0usize;
     for column in 0..cols {
@@ -5121,7 +5131,14 @@ fn matrix_rank_exact_numeric(matrix: &NdArray<Value>) -> Result<Option<usize>, L
             }
             let factor = work[row][column]
                 .checked_div(&pivot_row[column])
-                .map_err(|error| LangError::plain(error.to_string()))?;
+                .map_err(|error| {
+                    LangError::coded(
+                        format!("matrix_rank(): exact pivot division failed: {error}"),
+                        0,
+                        "InternalInvariantFailure",
+                        "InternalInvariantFailure",
+                    )
+                })?;
             work[row][column] = Rat::zero();
             for col in (column + 1)..cols {
                 poll(col as u64)?;
@@ -12266,11 +12283,42 @@ mod matrix_rank_exact_regressions {
     }
 
     #[test]
-    fn rank_refuses_precision_limited_numbers_as_exact_evidence() {
+    fn rank_refuses_precision_limited_numbers_in_every_entry_order() {
+        let scripts = [
+            "matrix_rank([[sqrt(2),0],[0,1]])",
+            "matrix_rank([[symbol(\"x\"),1],[evalf(sqrt(2),10),1]])",
+            "matrix_rank([[evalf(sqrt(2),10),1],[symbol(\"x\"),1]])",
+        ];
+        for script in scripts {
+            let mut engine = Engine::new();
+            let error = engine.eval(script).expect_err(script);
+            assert_eq!(
+                error.message,
+                "matrix_rank(): argument 1 must be a matrix of exact numeric or symbolic entries (precision-limited Real values are not supported); got Real.",
+                "{script}"
+            );
+            assert_eq!(error.code, "InvalidArgument", "{script}");
+            assert_eq!(error.category, "TypeMismatch", "{script}");
+            let signature = error.signature.expect("argument signature");
+            assert_eq!(signature.position, Some(1));
+            assert_eq!(signature.parameter.as_deref(), Some("a"));
+        }
+    }
+
+    #[test]
+    fn rank_rejects_nonnumeric_elements_with_a_typed_signature() {
         let mut engine = Engine::new();
         let error = engine
-            .eval("matrix_rank([[sqrt(2),0],[0,1]])")
-            .expect_err("inexact rank input must not be certified");
-        assert!(error.to_string().contains("precision-limited Real"));
+            .eval("matrix_rank([[symbol(\"x\"),1],[\"no\",1]])")
+            .expect_err("Text must not reach the symbolic determinant path");
+        assert_eq!(
+            error.message,
+            "matrix_rank(): argument 1 must be a matrix of exact numeric or symbolic entries; got Text."
+        );
+        assert_eq!(error.code, "InvalidArgument");
+        assert_eq!(error.category, "TypeMismatch");
+        let signature = error.signature.expect("argument signature");
+        assert_eq!(signature.position, Some(1));
+        assert_eq!(signature.parameter.as_deref(), Some("a"));
     }
 }
