@@ -18,7 +18,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 NUMBER_WORDS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
                 "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
-                "ten": 10, "eleven": 11, "twelve": 12}
+                "ten": 10, "eleven": 11, "twelve": 12, "fifteen": 15,
+                "seventeen": 17}
 CASES = (
     ("abs", "abs(-3)", "Integer", "3"),
     ("abs", 'abs(symbol("x"))', "Symbolic", None),
@@ -84,6 +85,15 @@ def load_registry(root: Path) -> tuple[set[str], dict[str, dict[str, str]]]:
             fail(f"{name}: Core descriptor lacks a nonempty return_kind")
     if not any(entry["module"] == "Core" for entry in registry.values()):
         fail("registry scan found no Core descriptors")
+    # The documented catalogue is a second inventory: a builtin cannot be
+    # removed from code (or added without docs) and keep passing static-only.
+    catalogue = (root / "docs/language/builtins.md").read_text(encoding="utf-8")
+    documented = re.findall(r"(?m)^\\| \\x60([a-z][a-z0-9_]*)\\x60 \\|", catalogue)
+    if len(documented) != len(set(documented)):
+        fail("builtin catalogue contains duplicate function rows")
+    if set(documented) != set(registry):
+        fail(f"builtin catalogue mismatch: docs-only={sorted(set(documented)-set(registry))}, "
+             f"registry-only={sorted(set(registry)-set(documented))}")
     return fields, registry
 
 
@@ -104,6 +114,18 @@ def check_skills(root: Path, fields: set[str]) -> int:
     count = re.search(r"^(\w+) task skills\b", index, re.I | re.M)
     if not count or NUMBER_WORDS.get(count.group(1).lower()) != len(actual):
         fail(f"docs/skills.md stated skill count is not {len(actual)}")
+    workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    if "\\n  docs:\\n" not in workflow or "\\n  architecture-policy:" not in workflow:
+        fail("cannot identify the documentation CI job")
+    doc_job = workflow.split("\\n  docs:\\n", 1)[1].split("\\n  architecture-policy:", 1)[0]
+    ci_steps = len(re.findall(r"(?m)^      - name: ", doc_job))
+    advertised = re.search(r"(?m)^\\| Documentation examples .*?\\| (\\w+) steps", agents)
+    if not ci_steps or not advertised or NUMBER_WORDS.get(advertised.group(1).lower()) != ci_steps:
+        fail(f"AGENTS.md documentation CI step count drift: actual={ci_steps}")
+    for command in ("tools/harness/check-agent-contracts.py",
+                    "tools/harness/test-agent-contracts.py"):
+        if command not in doc_job or command not in agents:
+            fail(f"agent instructions or documentation CI omit required gate {command}")
     for path in paths:
         text = path.read_text(encoding="utf-8")
         if not re.search(rf"(?m)^name:\s*{re.escape(path.parent.name)}\s*$", text):
@@ -189,6 +211,12 @@ def live_registry(runner: Path, static: dict[str, dict[str, str]]) -> dict[str, 
         if descriptor.get("returnKind") != static[name].get("return_kind"):
             fail(f"{name}: compiled returnKind mismatches static registry")
         contracts[name] = descriptor
+    # These operations have fixed public output kinds; over-advertising an
+    # unreachable kind is also contract drift, not merely a harmless superset.
+    for name, allowed in (("matmul", {"Array"}), ("matrix_rank", {"Integer"})):
+        kinds = {value.strip() for value in contracts[name]["returnKind"].split("|")}
+        if kinds != allowed:
+            fail(f"{name}: returnKind over-advertises unreachable kinds: {kinds - allowed}")
     return contracts
 
 
