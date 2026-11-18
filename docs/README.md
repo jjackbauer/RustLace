@@ -24,6 +24,9 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 | [contributing.md](contributing.md) | you are opening a change |
 | [editorial.md](editorial.md) | you are writing or reviewing documentation, a skill or an agent instruction |
 | [agent-harness.md](agent-harness.md) | you are verifying code written by agents or improving independent contract and skill checks |
+| [agent-usage.md](agent-usage.md) | you are an agent using the language and need complete registry discovery, typed results and numerical provenance |
+| [version-applicability.md](version-applicability.md) | you need to distinguish checked-out source documentation from older release binaries |
+| [how-to/](how-to/) | you want short, task-oriented recipes rather than full reference pages |
 | [skills.md](skills.md) | you need the current agent task-skill inventory |
 | [tutorials/](tutorials/) | you are learning RustLace by running a complete script end to end |
 | [systems-analysis.md](systems-analysis.md) | you are modelling a queueing network and need the models, the solvers, the bounds, the refusals and both call surfaces |
