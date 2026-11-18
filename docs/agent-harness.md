@@ -29,7 +29,7 @@ oracle, especially when the historical behavior was defective.
 `python tools/harness/check-agent-contracts.py`:
 
 - Reads `BuiltinInfo`'s current fields from `lovelace-lang/src/registry.rs`.
-- Checks that all 44 Core descriptors exist; no plugin loader is introduced.
+- Checks that every Core descriptor exist; no plugin loader is introduced.
 - Checks actual `.dsh/skills/*/SKILL.md` names, required frontmatter and
   Verify sections, and the `AGENTS.md` / `docs/skills.md` inventories.
 - Refuses the retired `plugin: None` / `plugin: Some(...)` instructions
@@ -48,7 +48,7 @@ is not sufficient evidence. Both checks run in the documentation CI matrix on
 Linux and Windows.
 
 **Current limit:** these representative calls are *not* a complete behavioral
-matrix for all 44 core functions or all 134 builtins. Tests for language syntax,
+matrix for all core functions or all registered builtins. Tests for language syntax,
 source positions, cancellation, the numerical kernel and the existing
 documentation corpus remain independently necessary.
 
@@ -62,7 +62,7 @@ python tools/harness/check-agent-contracts.py
 python tools/harness/test-agent-contracts.py
 ```
 
-The first check reports `AGENTCONTRACT skills=... core=44 executed=... failed=0`.
+The first check reports `AGENTCONTRACT skills=... core=<live-count> executed=... failed=0`.
 The mutation check reports `AGENTCONTRACTMUTATION total=... passed=... failed=0`.
 The counts are observed data, not hardcoded evidence of mathematical correctness.
 `--static-only` is available for quick validation of skill and registry
