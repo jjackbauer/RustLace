@@ -107,6 +107,10 @@ source-only API into an older release tutorial. When a release behavior differs,
 link to [version applicability](version-applicability.md) and label the
 difference where the reader first encounters the example.
 
+Example execution exemptions are governed by
+[the waiver policy](example-waivers.md). An unreviewed `not-run` annotation
+is a documentation defect, even if the other examples still pass.
+
 Counts of crates, skills, ADRs and corpus records are derived from the
 repository manifest and fixture inventories by
 `python tools/check-doc-metadata.py`. Updating prose without updating
