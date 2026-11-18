@@ -89,7 +89,7 @@ Windows desktop observations separate, and records the one ignored test
 (`property_assertions::mathir_evaluates_like_symbolic`, annotated in place). Read the count from a
 run at the commit you are changing; do not quote a historical total as current.
 `--gui-selftest` gives 20 checks, 0 failed on both platforms; `--selftest` gives 15 checks on
-Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 231 passed, 0
+Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 232 passed, 0
 failed. A run that needs the application directory needs it writable:
 set `APPDATA` on Windows, or `XDG_CONFIG_HOME`/`HOME` on Linux, to a scratch directory first.
 
@@ -182,7 +182,7 @@ and the decision records under `docs/adr/`. The screenshots and their capture me
 
 Fixtures live where the consuming test resolves them:
 
-- `parity/corpus/lang.json`, `parity/corpus/symbolics.json` and `parity/corpus/systems.json` - the 231-record documentation
+- `parity/corpus/lang.json`, `parity/corpus/symbolics.json` and `parity/corpus/systems.json` - the 232-record documentation
   corpus read by `lovelace-corpus`; `knowledge-graph-demo.json` at the root is the frozen knowledge
   graph (seed 20240617) read by `lovelace-know`.
 - `docs/goal-desktop-v4/journeys.md`, `platform-matrix.md`, `reference/REF-*.json` and
@@ -237,7 +237,7 @@ placeholder rather than a path from one machine.
 
 ### Fixture naming
 
-- Corpus records: sequential ID matching the file prefix, zero-padded to three digits (`lang/112`,
+- Corpus records: sequential ID matching the file prefix, zero-padded to three digits (`lang/113`,
   `sym/104`), with `id`, `doc`, `heading`, `script`, `kind`, `text`.
 - Golden wire envelopes: `<case>.ls` plus `<case>.json` under
   `docs/csharp-oracle/Lovelace.Run.Tests/fixtures/`; the pair name matches the case, not the date.
