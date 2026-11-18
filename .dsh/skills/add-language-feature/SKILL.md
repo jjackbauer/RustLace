@@ -102,12 +102,12 @@ cargo test -p lovelace-lang <the test you added>
 cargo test -p lovelace-lang --test cross_library
 python tools/check-architecture.py
 cargo test -p lovelace-run golden_batch
-cargo run --release -p lovelace-corpus -- lang/112
+cargo run --release -p lovelace-corpus -- lang/113
 cargo run -p lovelace-run -- --eval "1 != 2" --text
 ```
 
 Observable success: `suite_lex_parse_batch` and the focused feature test each report a nonzero passed
 count with `0 failed`; `golden_batch` reports its nonzero count (8 tests today) with the environment
-variable unset; the corpus filter reports `1 passed, 0 failed, 231 total (filter lang/112)`; the CLI
+variable unset; the corpus filter reports `1 passed, 0 failed, 232 total (filter lang/113)`; the CLI
 prints the exact typed value (`True (Boolean)` in the example) or the exact coded error with its
 UTF-16 position.
