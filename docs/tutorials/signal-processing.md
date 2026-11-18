@@ -71,7 +71,7 @@ or design the signal at a power-of-two length; trimming would compute a differen
 
 ## Assumptions
 
-- RustLace 0.4.1, run from the repository root with the project-root Cargo command
+- The checked-out RustLace development revision, run from the repository root with the project-root Cargo command
   `cargo run -p lovelace-run -- --file docs/tutorials/examples/signal-processing.ls --text` on
   Windows, Linux or WSL. The DSP builtins are part of the CLI's builtin registry, and the first run
   compiles the runner.
