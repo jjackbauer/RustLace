@@ -37,6 +37,16 @@ tutorials by name, so a missing or unlisted tutorial is a failure rather than a 
 for Ubuntu and Windows (Git Bash), the shells the documentation job provisions, and falls back to
 `cargo run -p lovelace-run` when no built runner is found.
 
+## Choose a tutorial
+
+New to the syntax, `Real`, `Vector`, or `Array`? Begin with
+[Get started](../start-here.md). Each tutorial below assumes a small amount
+of language knowledge and now includes a **types-and-APIs map** with links to
+the normative reference. The examples are independent rather than a sequence;
+choose the problem that matches what you want to accomplish. The
+[library guide](../how-to/use-libraries.md) maps other common tasks to their
+appropriate API families.
+
 | Tutorial | What you do | What it teaches |
 |---|---|---|
 | [Linear algebra](linear-algebra.md) | Invert a 2 x 2 matrix, solve a system, and inspect the residual | Exact arithmetic versus a floating-point tolerance; why the right-hand side must be a column |
