@@ -11,8 +11,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "tools/harness/check-agent-contracts.py"
-FILES = ("lovelace-lang/src/registry.rs", "docs/skills.md", "AGENTS.md",
-         ".github/workflows/ci.yml")
+FILES = ("lovelace-lang/src/registry.rs", "docs/skills.md",
+         "docs/language/builtins.md", "AGENTS.md", ".github/workflows/ci.yml")
 
 
 def seed(destination: Path) -> None:
@@ -72,6 +72,10 @@ def main() -> int:
          'return_kind: None,'),
         ("missing-registry-struct-field", "lovelace-lang/src/registry.rs",
          "pub module: &'static str,", "pub plugin: &'static str,"),
+        ("catalogue-drift", "docs/language/builtins.md",
+         "| `abs` | 1 | x |", "| `abs_old` | 1 | x |"),
+        ("ci-step-count-drift", "AGENTS.md",
+         "seventeen steps", "fifteen steps"),
     )
     with tempfile.TemporaryDirectory(prefix="rustlace-agent-contracts-") as temp:
         base = Path(temp)
