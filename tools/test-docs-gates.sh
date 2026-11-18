@@ -1486,6 +1486,29 @@ MD
         env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
 }
 
+# Cross-parser regression: the shell executor recognizes '<' and '>'
+# inside reasons and text after '-->'; the metadata mutation suite verifies
+# that these same shapes are never invisible to waiver authorization.
+{
+    root=$work/doc-examples-angle-exemption/repo
+    make_doc_examples_tree "$root"
+    cat >>"$root/docs/guide.md" <<'MD'
+
+<!-- not-run: because x < 0 > 1 is deliberately invalid --> see the note
+```lovelace
+this is not valid lovelace source
+```
+MD
+    expect_success "doc examples: angular and trailing exemption parsed" \
+        "$work/doc-examples-angle-exemption/baseline.log" \
+        env CARGO_TARGET_DIR="$runner_target_dir" bash "$root/tools/check-doc-examples.sh"
+    if ! grep -Fq -- 'discovered=2 executed=1 passed=1 failed=0 exempted=1' \
+        "$work/doc-examples-angle-exemption/baseline.log"; then
+        fail "doc examples: angular exemption" \
+            "a '<' or '>' annotation with trailing text was not honored"
+    fi
+}
+
 {
     root=$work/doc-examples-annotation-separated/repo
     make_doc_examples_tree "$root"
