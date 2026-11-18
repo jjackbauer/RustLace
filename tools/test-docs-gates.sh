@@ -624,6 +624,8 @@ make_docs_report_tree() {
         'DOCREPORT gate=agent-contracts status=ok checks=3 failed=0'
     write_report_stub "$root" harness/report-doc-family \
         'DOCREPORT gate=doc-family-examples status=ok families=2 failed=0'
+    write_report_stub "$root" harness/report-doc-gate-mutations \
+        'DOCREPORT gate=doc-gates-mutants status=ok checks=1 failed=0'
     cat >"$root/tools/check-doc-metadata.py" <<'PY'
 import sys
 if "--self-test" in sys.argv:
@@ -1336,16 +1338,16 @@ MD
     make_docs_report_tree "$root"
     expect_success "docs-report: complete summaries" "$root/baseline.log" \
         bash "$root/tools/docs-report.sh"
-    if ! grep -Fq -- 'DOCREPORT total gates=10 ok=10 failed=0' "$root/baseline.log"; then
-        fail "docs-report: clean baseline total" "the total line is not gates=10 ok=10 failed=0"
+    if ! grep -Fq -- 'DOCREPORT total gates=11 ok=11 failed=0' "$root/baseline.log"; then
+        fail "docs-report: clean baseline total" "the total line is not gates=11 ok=11 failed=0"
     fi
 
     write_report_stub "$root" run-tutorials 'run-tutorials: OK (this gate forgot its DOCREPORT line)'
     expect_failure "docs-report: gate exits 0 with no DOCREPORT line" \
         "run-tutorials" "summary=missing" \
         "$root/mutated.log" bash "$root/tools/docs-report.sh"
-    if ! grep -Fq -- 'DOCREPORT total gates=10 ok=9 failed=1' "$root/mutated.log"; then
-        fail "docs-report: total after a missing summary" "the total line is not gates=10 ok=9 failed=1"
+    if ! grep -Fq -- 'DOCREPORT total gates=11 ok=10 failed=1' "$root/mutated.log"; then
+        fail "docs-report: total after a missing summary" "the total line is not gates=11 ok=10 failed=1"
     fi
 }
 
