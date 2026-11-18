@@ -205,6 +205,27 @@ refused rather than converted, because a systems parameter must be exact.
 
 ## Examples
 
+### Understand the kinds in these examples
+
+`sys_mm1` and `sys_analyze` return typed
+[Record](../language/values-and-types.md#record) values with named members.
+For instance, `.utilization` is a projected
+[Real](../language/values-and-types.md#numeric-kinds-and-widening) value;
+an `exact_values` member, where supported, retains numerator and denominator
+in an `ExactRational` Record. A Record is not the same kind as an
+[Array or Vector](../language/values-and-types.md#vector-and-array), and
+member access (`result.utilization`) is different from array indexing
+(`series[0]`).
+
+Inputs such as arrival rate, service time and server count have *different
+physical meanings*. Check the
+[systems analysis guide](../systems-analysis.md) for units, stability
+conditions and model assumptions before interpreting a number as capacity.
+The [task-first library guide](../how-to/use-libraries.md#systems-read-both-projected-and-exact-values)
+walks through a single-station example; the per-builtin reference below
+provides the full models and refusal cases.
+
+
 Every example below is a complete call with the output the runner prints for it
 (`cargo run -p lovelace-run -- <script> --text --omit-variables`), so it can be pasted into the
 editor as is. Each builtin's block gives its arguments, return record, the fields it defines, its precision
