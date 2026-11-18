@@ -380,7 +380,7 @@ def self_test(root: Path) -> int:
 
         # A fifth tutorial is never silently exempt from version disclosure.
         fifth_tutorial = baseline / "docs/tutorials/newcomer.md"
-        fifth_tutorial.write_text("# New tutorial\\n", encoding="utf-8")
+        fifth_tutorial.write_text("# New tutorial\n", encoding="utf-8")
         try:
             validate(baseline)
         except MetadataFailure as exc:
@@ -389,7 +389,7 @@ def self_test(root: Path) -> int:
         else:
             fail("tutorial-version-discovery", "new unversioned tutorial passed")
         fifth_tutorial.write_text(
-            "# New tutorial\\nchecked-out RustLace development revision\\n",
+            "# New tutorial\nchecked-out RustLace development revision\n",
             encoding="utf-8",
         )
         try:
