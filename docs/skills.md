@@ -1,6 +1,6 @@
 # Skills
 
-Nine task skills for extending RustLace without guessing. Each skill is a numbered procedure with
+Eight task skills for extending RustLace without guessing. Each skill is a numbered procedure with
 the real files to touch and a `## Verify` section whose commands produce an observable result. The
 machine-readable skills live under `.dsh/skills/`; the portable contributor guide is
 [AGENTS.md](../AGENTS.md). Start with [docs/extending.md](extending.md) for the prose walkthroughs.

@@ -350,7 +350,23 @@ matrix is an `InvalidArgument` / `TypeMismatch` refusal naming the offending sha
 residual tracks the ambient computation precision, so a higher `setprecision` buys a smaller
 residual.
 
-`matrix_rank` is computed exactly over a symbolic matrix, and `trace` sums the diagonal entries.
+`matrix_rank` uses exact rational elimination for matrices of exact numeric values, including
+rank-deficient and rectangular matrices. For matrices containing free symbols it retains the
+legacy determinant-based generic estimate, which is not an unconditional rank certificate and may
+require assumptions. Every matrix element is validated before this symbolic fallback: any
+precision-limited numeric or unsupported element is refused with an argument-shape error and
+signature, regardless of its position. `trace` sums the diagonal entries.
+
+A rectangular matrix can have dependent rows:
+
+```lovelace
+matrix_rank([[1, 2, 3], [2, 4, 6]])
+```
+```text
+= 1 (Integer)
+  _ = 1
+```
+
 Symbolic matrices take the same builtins; `det([[x, 1], [y, x]])` is `x^2 - y` symbolically.
 
 ### Calculus (10)

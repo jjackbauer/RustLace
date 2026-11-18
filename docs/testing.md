@@ -193,12 +193,12 @@ reason.
 
 ## 2. Oracle and golden tests
 
-- **Documentation corpus** — `parity/corpus/{lang,symbolics,systems}.json` (231 records) extracted from the
-  C# language reference. `lovelace-corpus` runs every script and compares the rendered text:
+- **Documentation corpus** — `parity/corpus/{lang,symbolics,systems}.json` (232 records: legacy reference
+  examples plus the RustLace rank regression). `lovelace-corpus` runs every script and compares the rendered text:
 
   ```console
   $ cargo run --release -p lovelace-corpus
-  corpus: 231 passed, 0 failed, 231 total
+  corpus: 232 passed, 0 failed, 232 total
   ```
 
   Run the gate **in release** in CI. The corpus runs its scripts on a 256 MiB worker: the debug

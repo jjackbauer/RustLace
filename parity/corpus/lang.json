@@ -1,7 +1,8 @@
 {
  "version": 1,
  "sources": [
-  "Lovelace.Suite/docs/Language.md"
+  "Lovelace.Suite/docs/Language.md",
+  "docs/language/builtins.md"
  ],
  "examples": [
   {
@@ -891,6 +892,14 @@
    "script": "x = symbol(\"x\")\ntype(solve_full(x^2 - 4 == 0, x))",
    "kind": "value",
    "text": "SolveResult"
+  },
+  {
+   "id": "lang/112",
+   "doc": "docs/language/builtins.md",
+   "heading": "Linear Algebra",
+   "script": "matrix_rank([[1,2,3],[2,4,6]])",
+   "kind": "value",
+   "text": "1 (Integer)"
   }
  ]
 }

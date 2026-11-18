@@ -3015,23 +3015,27 @@ pub fn call(
                 Value::Array(a) => {
                     let shape = a.shape().to_vec();
                     if shape.len() != 2 {
-                        return Err(LangError::plain("matrix_rank needs a rank-2 matrix."));
+                        return Err(shape_failure("matrix_rank", 1, "a rank-2 matrix", &args[0]));
                     }
+                    // Exact rational matrices use true row rank, including rectangular
+                    // matrices and nullity greater than one. Symbolic matrices retain the
+                    // legacy generic estimate pending a condition-aware symbolic rank API.
                     let (rows, cols) = (shape[0], shape[1]);
-                    let mut rank = rows.min(cols);
-                    if rows == cols {
-                        let d = det(a)?;
-                        let zero = as_expr(&d).map(|e| e == Sym::num(0)).unwrap_or(false);
-                        if zero {
-                            rank = rows.saturating_sub(1);
+                    let rank = if let Some(rank) = matrix_rank_exact_numeric(a)? {
+                        rank
+                    } else {
+                        let mut estimate = rows.min(cols);
+                        if rows == cols {
+                            let d = det(a)?;
+                            if as_expr(&d).is_some_and(|e| e == Sym::num(0)) {
+                                estimate = rows.saturating_sub(1);
+                            }
                         }
-                    }
+                        estimate
+                    };
                     Ok(Value::Integer(Int::from_i64(rank as i64)))
                 }
-                other => Err(LangError::plain(format!(
-                    "matrix_rank needs a matrix, but got '{}'.",
-                    other.kind_name()
-                ))),
+                other => Err(shape_failure("matrix_rank", 1, "a rank-2 matrix", other)),
             }
         }
         "cancel" => {
@@ -5072,6 +5076,83 @@ fn det_numeric(m: &[Vec<Value>]) -> Result<Value, LangError> {
         }
     }
     Ok(det)
+}
+
+/// Compute the rank over the canonical exact rational kernel, with no lossy Real
+/// projection. Return None only when a genuinely symbolic entry prevents
+/// unconditional rational elimination. That case currently follows the legacy
+/// symbolic-rank path, which is NOT an unconditional mathematical certificate.
+fn matrix_rank_exact_numeric(matrix: &NdArray<Value>) -> Result<Option<usize>, LangError> {
+    let shape = matrix.shape();
+    let (rows, cols) = (shape[0], shape[1]);
+    let mut work = vec![vec![Rat::zero(); cols]; rows];
+    let mut contains_symbolic = false;
+    // Validate EVERY entry before selecting the symbolic fallback. An early
+    // symbolic entry must never hide a later inexact or unsupported value.
+    for (index, value) in matrix.iter().enumerate() {
+        poll(index as u64)?;
+        if matches!(value, Value::Real(r) if !r.is_exact())
+            || matches!(value, Value::RealClamped(_, _, _))
+        {
+            return Err(shape_failure(
+                "matrix_rank",
+                1,
+                "a matrix of exact numeric or symbolic entries (precision-limited Real values are not supported)",
+                value,
+            ));
+        }
+        let expr = as_expr(value).ok_or_else(|| {
+            shape_failure(
+                "matrix_rank",
+                1,
+                "a matrix of exact numeric or symbolic entries",
+                value,
+            )
+        })?;
+        match expr {
+            Sym::Num(rational) => work[index / cols][index % cols] = rational,
+            _ => contains_symbolic = true,
+        }
+    }
+    if contains_symbolic {
+        // The legacy symbolic estimate is not an unconditional certificate.
+        return Ok(None);
+    }
+    let mut rank = 0usize;
+    for column in 0..cols {
+        checkpoint()?;
+        let Some(pivot) = (rank..rows).find(|&row| !work[row][column].is_zero()) else {
+            continue;
+        };
+        work.swap(rank, pivot);
+        let pivot_row = work[rank].clone();
+        for row in (rank + 1)..rows {
+            poll(row as u64)?;
+            if work[row][column].is_zero() {
+                continue;
+            }
+            let factor = work[row][column]
+                .checked_div(&pivot_row[column])
+                .map_err(|error| {
+                    LangError::coded(
+                        format!("matrix_rank(): exact pivot division failed: {error}"),
+                        0,
+                        "InternalInvariantFailure",
+                        "InternalInvariantFailure",
+                    )
+                })?;
+            work[row][column] = Rat::zero();
+            for col in (column + 1)..cols {
+                poll(col as u64)?;
+                work[row][col] = work[row][col].sub(&factor.mul(&pivot_row[col]));
+            }
+        }
+        rank += 1;
+        if rank == rows {
+            break;
+        }
+    }
+    Ok(Some(rank))
 }
 
 fn inv_matrix(a: &NdArray<Value>) -> Result<Value, LangError> {
@@ -12178,4 +12259,95 @@ fn eig_sym(engine: &Engine, array: &NdArray<Value>, pos: usize) -> Result<Value,
             ("exact".to_string(), Value::Boolean(false)),
         ],
     ))
+}
+
+#[cfg(test)]
+mod matrix_rank_exact_regressions {
+    use crate::Engine;
+
+    #[test]
+    fn rank_uses_exact_elimination_not_a_determinant_heuristic() {
+        let cases = [
+            ("matrix_rank([[0,0],[0,0]])", "0 (Integer)"),
+            ("matrix_rank([[1,2],[2,4]])", "1 (Integer)"),
+            ("matrix_rank([[1,2,3],[2,4,6],[3,6,9]])", "1 (Integer)"),
+            ("matrix_rank([[1,2,3],[2,4,6]])", "1 (Integer)"),
+            ("matrix_rank([[1,0,0],[0,1,0]])", "2 (Integer)"),
+            ("matrix_rank([[1,2],[3,4]])", "2 (Integer)"),
+            ("matrix_rank([[0,1],[0,0]])", "1 (Integer)"),
+            ("matrix_rank([[1/2,1],[1,2]])", "1 (Integer)"),
+        ];
+        for (source, expected) in cases {
+            let mut engine = Engine::new();
+            let value = engine.eval(source).expect(source);
+            assert_eq!(engine.format_typed(&value), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn rank_refuses_precision_limited_numbers_in_every_entry_order() {
+        let scripts = [
+            "matrix_rank([[sqrt(2),0],[0,1]])",
+            "matrix_rank([[symbol(\"x\"),1],[evalf(sqrt(2),10),1]])",
+            "matrix_rank([[evalf(sqrt(2),10),1],[symbol(\"x\"),1]])",
+        ];
+        for script in scripts {
+            let mut engine = Engine::new();
+            let error = engine.eval(script).expect_err(script);
+            assert_eq!(
+                error.message,
+                "matrix_rank(): argument 1 must be a matrix of exact numeric or symbolic entries (precision-limited Real values are not supported); got Real.",
+                "{script}"
+            );
+            assert_eq!(error.code, "InvalidArgument", "{script}");
+            assert_eq!(error.category, "TypeMismatch", "{script}");
+            let signature = error.signature.expect("argument signature");
+            assert_eq!(signature.position, Some(1));
+            assert_eq!(signature.parameter.as_deref(), Some("a"));
+        }
+    }
+
+    #[test]
+    fn rank_rejects_non_matrix_and_wrong_rank_with_a_typed_signature() {
+        let cases = [
+            (
+                "matrix_rank([1, 2, 3])",
+                "Vector",
+                "matrix_rank(): argument 1 must be a rank-2 matrix; got Vector.",
+            ),
+            (
+                "matrix_rank([[[1, 2], [3, 4]]])",
+                "Array",
+                "matrix_rank(): argument 1 must be a rank-2 matrix; got Array.",
+            ),
+        ];
+        for (script, kind, expected) in cases {
+            let mut engine = Engine::new();
+            let error = engine.eval(script).expect_err(script);
+            assert_eq!(error.message, expected, "{script}");
+            assert_eq!(error.code, "InvalidArgument", "{script}");
+            assert_eq!(error.category, "TypeMismatch", "{script}");
+            let signature = error.signature.expect("argument signature");
+            assert_eq!(signature.position, Some(1));
+            assert_eq!(signature.parameter.as_deref(), Some("a"));
+            assert_eq!(signature.arrived_kind.as_deref(), Some(kind));
+        }
+    }
+
+    #[test]
+    fn rank_rejects_nonnumeric_elements_with_a_typed_signature() {
+        let mut engine = Engine::new();
+        let error = engine
+            .eval("matrix_rank([[symbol(\"x\"),1],[\"no\",1]])")
+            .expect_err("Text must not reach the symbolic determinant path");
+        assert_eq!(
+            error.message,
+            "matrix_rank(): argument 1 must be a matrix of exact numeric or symbolic entries; got Text."
+        );
+        assert_eq!(error.code, "InvalidArgument");
+        assert_eq!(error.category, "TypeMismatch");
+        let signature = error.signature.expect("argument signature");
+        assert_eq!(signature.position, Some(1));
+        assert_eq!(signature.parameter.as_deref(), Some("a"));
+    }
 }

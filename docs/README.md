@@ -23,6 +23,8 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 | [release.md](release.md) | you are cutting a release |
 | [contributing.md](contributing.md) | you are opening a change |
 | [editorial.md](editorial.md) | you are writing or reviewing documentation, a skill or an agent instruction |
+| [agent-harness.md](agent-harness.md) | you are verifying code written by agents or improving independent contract and skill checks |
+| [skills.md](skills.md) | you need the current agent task-skill inventory |
 | [tutorials/](tutorials/) | you are learning RustLace by running a complete script end to end |
 | [systems-analysis.md](systems-analysis.md) | you are modelling a queueing network and need the models, the solvers, the bounds, the refusals and both call surfaces |
 | [LICENSE](../LICENSE) | you need the terms this repository is released under |

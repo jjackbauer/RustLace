@@ -230,6 +230,14 @@ jobs:
       - name: Build lovelace-run
         run: cargo build -p lovelace-run
 
+      # Independent Fraction rank oracle, live return-kind checks and stale
+      # agent instruction detection. A zero-case run is a failure.
+      - name: Check core and agent contracts
+        run: python tools/harness/check-agent-contracts.py
+
+      - name: Mutation-test agent contract checks
+        run: python tools/harness/test-agent-contracts.py
+
       # Compiles and runs every maintained ```rust fence under docs/crates/
       # against the workspace crates. The script locates cargo itself ($CARGO,
       # then PATH, then $HOME/.cargo/bin/cargo, then

@@ -51,6 +51,8 @@ cargo run --release -p lovelace-corpus -- lang/001
 # the mutation suite has 21 scenarios, and CODEOWNERS declares the policy and kernel owners)
 python tools/check-architecture.py
 python tools/test-architecture-gates.py
+python tools/harness/check-agent-contracts.py        # after building lovelace-run
+python tools/harness/test-agent-contracts.py         # proves stale skill checks fail
 cargo test -p lovelace-rational
 cargo test -p lovelace-lang --test cross_library
 
@@ -87,7 +89,7 @@ Windows desktop observations separate, and records the one ignored test
 (`property_assertions::mathir_evaluates_like_symbolic`, annotated in place). Read the count from a
 run at the commit you are changing; do not quote a historical total as current.
 `--gui-selftest` gives 20 checks, 0 failed on both platforms; `--selftest` gives 15 checks on
-Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 231 passed, 0
+Windows and 14 plus a named `no-network-imports` skip on Linux; the corpus gives 232 passed, 0
 failed. A run that needs the application directory needs it writable:
 set `APPDATA` on Windows, or `XDG_CONFIG_HOME`/`HOME` on Linux, to a scratch directory first.
 
@@ -131,7 +133,7 @@ manual dispatch:
 | Linux (engine crates + GUI desktop under Xvfb) | `cargo fmt --all -- --check`, the Linux GUI runtime, `cargo clippy -p lovelace-lang -p lovelace-rational -p lovelace-real -p lovelace-nat -p lovelace-symbolics -p lovelace-systems --all-targets`, `cargo test -p lovelace-lang -p lovelace-real -p lovelace-symbolics -p lovelace-systems`, `cargo build --release -p lovelace-desktop`, the glibc ABI guard over the built artifact, `xvfb-run ... --gui-selftest` (exit 0 and `checks=20 failed=0`), `xvfb-run ... cargo test -p lovelace-desktop`, then upload `target/release/lovelace-desktop` as `lovelace-desktop-linux-gui-x86_64` |
 | Architecture policy (`ubuntu-latest` and `windows-latest`) | `python tools/check-architecture.py --report architecture-impact-<os>.md`, `python tools/test-architecture-gates.py` (21 scenarios, including the two-field/two-method `partial-duplicate-kernel`), `python tools/rational-oracle.py --check`, `python tools/systems-oracle.py --check`, then upload the impact report. Ownership is abstraction-specific (`reservedTypeNames`, `permittedRepresentations`), and `.github/CODEOWNERS` routes policy, checker, mutation-fixture, ownership-document and rational-kernel changes to the owner. Independent of the unit-test jobs: a green suite cannot outvote a second rational kernel. |
 | Numerical kernel | `cargo test -p lovelace-rational -p lovelace-int -p lovelace-nat -p lovelace-real`, `cargo test -p lovelace-rational --test properties`, `--test oracle`, `cargo test -p lovelace-systems --test oracle`, `cargo test -p lovelace-lang --test cross_library` |
-| Documentation examples (`ubuntu-latest` and `windows-latest`) | fifteen steps, one definition, two OS variants: checkout pinning `core.autocrlf=false`, Rust toolchain, cargo cache, `cargo build -p lovelace-run`, `bash tools/check-crate-examples.sh`, `bash tools/run-tutorials.sh`, `bash docs/language/examples/run-examples.sh` (fenced examples plus the builtin-catalogue check against `--functions`) and `bash docs/extensions/examples/run-examples.sh`, `bash tools/check-doc-examples.sh` (every documented Lovelace snippet, in each page family's documented output mode), `bash tools/check-docs.sh --symbols`, `--claims`, `--readme`, `bash tools/check-reference-pages.sh`, `bash tools/test-docs-gates.sh` (the mutation self-test), `bash tools/docs-report.sh`, and the evidence upload |
+| Documentation examples (`ubuntu-latest` and `windows-latest`) | seventeen steps, one definition, two OS variants: checkout pinning `core.autocrlf=false`, Rust toolchain, cargo cache, `cargo build -p lovelace-run`, `python tools/harness/check-agent-contracts.py`, `python tools/harness/test-agent-contracts.py`, `bash tools/check-crate-examples.sh`, `bash tools/run-tutorials.sh`, `bash docs/language/examples/run-examples.sh` (fenced examples plus the builtin-catalogue check against `--functions`) and `bash docs/extensions/examples/run-examples.sh`, `bash tools/check-doc-examples.sh` (every documented Lovelace snippet, in each page family's documented output mode), `bash tools/check-docs.sh --symbols`, `--claims`, `--readme`, `bash tools/check-reference-pages.sh`, `bash tools/test-docs-gates.sh` (the mutation self-test), `bash tools/docs-report.sh`, and the evidence upload |
 
 The Linux job is the GUI acceptance gate: it compiles the workbench, runs the 20-check selftest and
 the full desktop suite (editor, panes, theme, plot rasteriser, journeys) under Xvfb, and uploads the
@@ -180,7 +182,7 @@ and the decision records under `docs/adr/`. The screenshots and their capture me
 
 Fixtures live where the consuming test resolves them:
 
-- `parity/corpus/lang.json`, `parity/corpus/symbolics.json` and `parity/corpus/systems.json` - the 231-record documentation
+- `parity/corpus/lang.json`, `parity/corpus/symbolics.json` and `parity/corpus/systems.json` - the 232-record documentation
   corpus read by `lovelace-corpus`; `knowledge-graph-demo.json` at the root is the frozen knowledge
   graph (seed 20240617) read by `lovelace-know`.
 - `docs/goal-desktop-v4/journeys.md`, `platform-matrix.md`, `reference/REF-*.json` and
@@ -235,7 +237,7 @@ placeholder rather than a path from one machine.
 
 ### Fixture naming
 
-- Corpus records: sequential ID matching the file prefix, zero-padded to three digits (`lang/112`,
+- Corpus records: sequential ID matching the file prefix, zero-padded to three digits (`lang/113`,
   `sym/104`), with `id`, `doc`, `heading`, `script`, `kind`, `text`.
 - Golden wire envelopes: `<case>.ls` plus `<case>.json` under
   `docs/csharp-oracle/Lovelace.Run.Tests/fixtures/`; the pair name matches the case, not the date.
@@ -273,6 +275,10 @@ the same terms (inbound = outbound), with no separate contributor licence agreem
 
 ## Guardrails
 
+- Before following a task skill, validate its current schema references with
+  `python tools/harness/check-agent-contracts.py --static-only`. The builtin registry uses
+  the static `module` field, never the retired `plugin` field. Runtime verification is
+  mandatory for changes affecting a builtin contract; run the checker without `--static-only`.
 - Never weaken a test to make a change pass: do not delete it, `#[ignore]` it, relax an assertion,
   or drop a fixture. If a contract must move, move the fixture with it and say so in the commit.
 - Never invent capability. If a code path does not exist, report it as missing rather than
