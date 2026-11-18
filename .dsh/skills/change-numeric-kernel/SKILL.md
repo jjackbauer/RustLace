@@ -172,7 +172,7 @@ $env:LOVELACE_THREADS=1; cargo run --release -p lovelace-bench -- sqrt 10000 3
 ```
 
 Observable success: the Real and Nat suites each report a nonzero passed count with `0 failed`; the
-corpus reports `231 passed, 0 failed`; the two benchmark runs print `RESULT sqrt 10000 <mean_ms>
+corpus reports `232 passed, 0 failed`; the two benchmark runs print `RESULT sqrt 10000 <mean_ms>
 <median_ms>` and the same `DIGEST` — today `DIGEST sqrt 10002:1.4142135623730950488016` — with only
 the timings differing; the regression test asserts the exact decimal text and period metadata (for
 example `0.(3)` with start 0 and length 1), not merely that two values are "close".
