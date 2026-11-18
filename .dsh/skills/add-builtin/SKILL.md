@@ -108,6 +108,6 @@ Observable success: the focused test names the builtin and reports at least one 
 `0 failed`; the arity property test reports `1 passed` (it sweeps every registry entry); `--function`
 prints the descriptor JSON with `parameters`, `minArity`, `parameterCount`, `summary` and, for a
 plugin builtin, the plugin name; `--eval` prints the exact typed value you chose, for example
-`6 (Natural)`; the corpus filter ends with `corpus: 1 passed, 0 failed, 231 total (filter lang/112)`
+`6 (Natural)`; the corpus filter ends with `corpus: 1 passed, 0 failed, 232 total (filter <new-corpus-id>)`
 and exit 0 — a filter that matches no record prints `0 passed` and also exits 0, so the count is the
 check.
