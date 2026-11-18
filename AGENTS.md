@@ -142,7 +142,7 @@ GUI binary. The Windows job still runs the workspace suite, builds the release e
 fences and the four tutorials, executes both example runners (the language one also verifies the
 builtin catalogue against the built runner's `--functions` registry) and the every-page
 `check-doc-examples.sh` backstop, runs the three consistency
-modes and the reference-page contract, and proves each gate can fail with the mutation self-test â€” on
+modes and the reference-page contract, and proves each gate can fail with the mutation self-test — on
 Ubuntu and on Windows, so a path-shape, `.exe`-discovery or line-ending bug
 fails on the platform that has it; its checkout pins `core.autocrlf=false` so the bash runners see
 LF on Windows. No job captures a window: the Windows frames come from the documenting host and the
@@ -161,11 +161,11 @@ One line per crate, and what it owns:
 | `lovelace-nat` | arbitrary-precision naturals over base-2^64 limbs, NTT multiplication, Burnikel-Ziegler division, Newton square root |
 | `lovelace-int` | sign + magnitude integers; truncating division; no negative zero |
 | `lovelace-rational` | the one canonical exact rational kernel: full arbitrary-precision GCD reduction, checked arithmetic, growth budgets, exactness provenance and conversions |
-| `lovelace-real` | reals as `int * 10^exp` with exact periodic decimal metadata; `sqrt`, `pi`, display-precision scoping; the `Rat`â†”`Real` projections |
+| `lovelace-real` | reals as `int * 10^exp` with exact periodic decimal metadata; `sqrt`, `pi`, display-precision scoping; the `Rat`↔`Real` projections |
 | `lovelace-array` | generic row-major `NdArray<T>`, shape algebra, indexing, slicing, reductions |
 | `lovelace-symbolics` | canonical expressions, differentiation, series, polynomial algebra, Groebner bases, the cooperative cancellation token; re-exports `Rat` from the kernel |
 | `lovelace-lang` | values, the active lexer/parser (`src/syntax.rs`), interpreter and builtins (`src/lib.rs`, `src/builtins.rs`), registry, MathIR, plots, the `sys_*` systems adapter |
-| `lovelace-systems` | exact queueing/operations-research models: M/M/1, M/M/c, M/M/âˆž, operational laws, open Jackson networks, exact single-class MVA, bottleneck/capacity, sweeps; `Q` is the canonical `Rat` alias; no dependency on the interpreter |
+| `lovelace-systems` | exact queueing/operations-research models: M/M/1, M/M/c, M/M/∞, operational laws, open Jackson networks, exact single-class MVA, bottleneck/capacity, sweeps; `Q` is the canonical `Rat` alias; no dependency on the interpreter |
 | `lovelace-run` | the CLI, the JSON wire envelope, registry discovery and golden envelopes |
 | `lovelace-know` | the observation-driven behavioural graph, JSON persistence and convergence tests; `ExactNumber` is a facade over `Rat` |
 | `lovelace-corpus` | the documentation-corpus parity gate over `parity/corpus/*.json` |
@@ -223,8 +223,8 @@ For a bug, add the regression test first and watch it fail on the old code.
 ### Documentation requirements
 
 Documentation changes are reviewed against [docs/editorial.md](docs/editorial.md). Two rules are
-blocking: every numerical claim says which of the four kinds it is â€” exact, precision-limited,
-error-bounded or parity-verified â€” and every example uses a repository-relative path or a
+blocking: every numerical claim says which of the four kinds it is — exact, precision-limited,
+error-bounded or parity-verified — and every example uses a repository-relative path or a
 placeholder rather than a path from one machine.
 
 ### Where new things go
@@ -232,7 +232,7 @@ placeholder rather than a path from one machine.
 | You are adding | Put it here |
 |---|---|
 | a builtin | descriptor in `lovelace-lang/src/registry.rs`, implementation arm in `lovelace-lang/src/builtins.rs`, test beside the existing batch files, corpus record in `parity/corpus/` |
-| a statically integrated library family | a workspace crate under `lovelace-systems/` (typed models, exact arithmetic through `lovelace-rational`, no interpreter dependency) plus a thin adapter and static descriptors in `lovelace-lang`; follow `docs/extending.md` Â§2 and declare the crate in `tools/architecture-policy.json` |
+| a statically integrated library family | a workspace crate under `lovelace-systems/` (typed models, exact arithmetic through `lovelace-rational`, no interpreter dependency) plus a thin adapter and static descriptors in `lovelace-lang`; follow `docs/extending.md` §2 and declare the crate in `tools/architecture-policy.json` |
 | a workbench pane | focus group in `lovelace-desktop/src/keyboard.rs`, layout and paint in `lovelace-desktop/src/ui/app.rs`, empty state in `lovelace-desktop/src/ui/empty.rs`, tokens in `lovelace-desktop/src/ui/theme.rs` |
 
 ### Fixture naming
