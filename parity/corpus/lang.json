@@ -1,7 +1,8 @@
 {
  "version": 1,
  "sources": [
-  "Lovelace.Suite/docs/Language.md"
+  "Lovelace.Suite/docs/Language.md",
+  "docs/language/builtins.md"
  ],
  "examples": [
   {
