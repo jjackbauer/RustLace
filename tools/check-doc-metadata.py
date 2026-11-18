@@ -131,11 +131,21 @@ def validate(root: Path) -> dict[str, int]:
             marker = f"`parity/corpus/{family}.json`"
             if marker not in scoped_text:
                 fail(scoped, f"missing {family} corpus from current inventory")
-            family_line = next(
-                (line for line in scoped_text.splitlines() if marker in line), ""
-            )
-            if not re.search(rf"\b{count}\s+records\b", family_line):
-                fail(scoped, f"{family} inventory drift (actual={count})")
+            # A reference page can mention the corpus earlier in a table
+            # without making an inventory assertion. Inspect *all* explicit
+            # count declarations instead of blindly taking the first mention.
+            # This also catches a stale declaration appended alongside a
+            # correct one, without treating an uncounted link as a claim.
+            declarations = [
+                int(value)
+                for value in re.findall(
+                    rf"{re.escape(marker)}[^\n]*?\b(\d+)\s+records\b",
+                    scoped_text,
+                )
+            ]
+            if not declarations or any(value != count for value in declarations):
+                fail(scoped, f"{family} inventory drift "
+                    f"(declared={declarations}, actual={count})")
     corpus_page = read(root, "docs/crates/lovelace-corpus.md")
     for path, text, pattern in (
         ("README.md", readme, rf"\bfor {total} records\b"),
