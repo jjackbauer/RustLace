@@ -55,6 +55,49 @@ def stated_count(path: str, content: str, pattern: str) -> int:
     return WORDS[raw]
 
 
+def scan_not_run_annotations(path: str, source: str) -> list[tuple[str, str]]:
+    """Match the executable-example runner's line-oriented waiver grammar.
+
+    The shell runner recognizes a line beginning with optional whitespace,
+    '<!--', optional whitespace and 'not-run:'. It takes everything up to the
+    first '-->' as the reason and tolerates trailing text after the close.
+    A fenced code example showing the annotation is not an actual waiver.
+    Return (reason, exact Lovelace script) for adjacent executable fences.
+    """
+    lines = source.replace("\r\n", "\n").split("\n")
+    annotations = []
+    in_fence = False
+    for index, line in enumerate(lines):
+        if in_fence:
+            if re.fullmatch(r"\s*```\s*", line):
+                in_fence = False
+            continue
+        opening = re.fullmatch(r"\s*```\s*([^\s]*)\s*", line)
+        if opening:
+            in_fence = True
+            continue
+        if not re.match(r"^\s*<!--\s*not-run:", line):
+            continue
+        # Mirror shell parameter expansion: reason=${line#*not-run:};
+        # reason=${reason%%-->*}; trim whitespace. No [^<>] shortcut.
+        reason = line.split("not-run:", 1)[1].split("-->", 1)[0].strip()
+        if not reason:
+            fail(path, f"empty not-run annotation at line {index + 1}")
+        if index + 1 >= len(lines) or not re.fullmatch(
+            r"\s*```\s*lovelace\s*", lines[index + 1], re.I
+        ):
+            fail(path, f"not-run annotation is not immediately above a Lovelace fence at line {index + 1}")
+        closing = next(
+            (end for end in range(index + 2, len(lines))
+             if re.fullmatch(r"\s*```\s*", lines[end])),
+            None,
+        )
+        if closing is None:
+            fail(path, f"unclosed annotated Lovelace fence at line {index + 2}")
+        annotations.append((reason, "\n".join(lines[index + 2:closing])))
+    return annotations
+
+
 def validate(root: Path) -> dict[str, int]:
     manifest = tomllib.loads(read(root, "Cargo.toml"))
     members = manifest["workspace"]["members"]
@@ -220,16 +263,10 @@ def validate(root: Path) -> dict[str, int]:
                 or rel.startswith("docs/tutorials/")):
             continue
         source = doc.read_text(encoding="utf-8").replace("\r\n", "\n")
-        # Examples that merely SHOW a waiver annotation are not waivers.
-        # Preserve character offsets so we can read the genuine fenced source
-        # following an annotation from the original text.
-        prose = re.sub(
-            r"(?ms)^\s*```[^\n]*\n.*?^\s*```[ \t]*$",
-            lambda match: " " * len(match.group()),
-            source,
-        )
-        for mark in re.finditer(r"<!--\s*not-run:\s*([^<>]*?)\s*-->\s*\n", prose):
-            reason = mark.group(1).strip()
+        # Scan original lines with the executable runner's fence and annotation
+        # grammar. A greedy prose regex used to miss '<', '>' and trailing text,
+        # allowing an unregistered waiver to suppress execution.
+        for reason, script in scan_not_run_annotations(rel, doc.read_text(encoding="utf-8")):
             match = re.match(r"(WAIVER-[A-Z0-9-]+)\b", reason)
             if not match or match.group(1) not in allowed:
                 fail(rel, f"unapproved not-run annotation: {reason!r}")
@@ -237,10 +274,7 @@ def validate(root: Path) -> dict[str, int]:
             entry = allowed[ident]
             if rel != entry["path"] or ident in referenced:
                 fail(rel, f"{ident}: path mismatch or duplicate use")
-            code = re.match(r"```lovelace\s*\n(.*?)\n```", source[mark.end():], re.S)
-            if code is None:
-                fail(rel, f"{ident}: annotation has no adjacent Lovelace fence")
-            digest = hashlib.sha256(code.group(1).encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(script.encode("utf-8")).hexdigest()
             if digest != entry["sha256"]:
                 fail(rel, f"{ident}: documented script changed (sha256 mismatch)")
             referenced.add(ident)
