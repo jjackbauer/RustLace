@@ -25,6 +25,10 @@
 #                                links, anchors, references, citations, symbols,
 #                                claims, tutorial precision sections, README
 #   5. check-reference-pages.sh  the seven-section reference-page contract
+#   6. report-agent-contracts.sh - live/core agent contracts and mutants
+#   7. report-doc-family.sh - language and extension example runners
+#   8. check-doc-metadata.py - inventories and version applicability
+#   9. check-doc-metadata.py --self-test - inventory mutation probes
 #
 # check-docs.sh runs once with all three audit flags, the way the script is
 # designed to compose, so one line carries every mode's counts with
@@ -176,6 +180,10 @@ run_gate run-tutorials bash tools/run-tutorials.sh
 run_gate check-doc-examples bash tools/check-doc-examples.sh
 run_gate check-docs bash tools/check-docs.sh --symbols --claims --readme
 run_gate check-reference-pages bash tools/check-reference-pages.sh
+run_gate agent-contracts bash tools/harness/report-agent-contracts.sh
+run_gate doc-family-examples bash tools/harness/report-doc-family.sh
+run_gate doc-metadata python tools/check-doc-metadata.py
+run_gate doc-metadata-mutants python tools/check-doc-metadata.py --self-test
 
 commit=$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || true)
 if [ -z "$commit" ]; then
