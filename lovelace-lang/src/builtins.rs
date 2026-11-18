@@ -3015,7 +3015,12 @@ pub fn call(
                 Value::Array(a) => {
                     let shape = a.shape().to_vec();
                     if shape.len() != 2 {
-                        return Err(LangError::plain("matrix_rank needs a rank-2 matrix."));
+                        return Err(shape_failure(
+                            "matrix_rank",
+                            1,
+                            "a rank-2 matrix",
+                            &args[0],
+                        ));
                     }
                     // Exact rational matrices use true row rank, including rectangular
                     // matrices and nullity greater than one. Symbolic matrices retain the
@@ -3035,10 +3040,7 @@ pub fn call(
                     };
                     Ok(Value::Integer(Int::from_i64(rank as i64)))
                 }
-                other => Err(LangError::plain(format!(
-                    "matrix_rank needs a matrix, but got '{}'.",
-                    other.kind_name()
-                ))),
+                other => Err(shape_failure("matrix_rank", 1, "a rank-2 matrix", other)),
             }
         }
         "cancel" => {
@@ -5105,7 +5107,12 @@ fn matrix_rank_exact_numeric(matrix: &NdArray<Value>) -> Result<Option<usize>, L
             ));
         }
         let expr = as_expr(value).ok_or_else(|| {
-            shape_failure("matrix_rank", 1, "a matrix of exact numeric or symbolic entries", value)
+            shape_failure(
+                "matrix_rank",
+                1,
+                "a matrix of exact numeric or symbolic entries",
+                value,
+            )
         })?;
         match expr {
             Sym::Num(rational) => work[index / cols][index % cols] = rational,
@@ -12302,6 +12309,33 @@ mod matrix_rank_exact_regressions {
             let signature = error.signature.expect("argument signature");
             assert_eq!(signature.position, Some(1));
             assert_eq!(signature.parameter.as_deref(), Some("a"));
+        }
+    }
+
+    #[test]
+    fn rank_rejects_non_matrix_and_wrong_rank_with_a_typed_signature() {
+        let cases = [
+            (
+                "matrix_rank([1, 2, 3])",
+                "Vector",
+                "matrix_rank(): argument 1 must be a rank-2 matrix; got Vector.",
+            ),
+            (
+                "matrix_rank([[[1, 2], [3, 4]]])",
+                "Array",
+                "matrix_rank(): argument 1 must be a rank-2 matrix; got Array.",
+            ),
+        ];
+        for (script, kind, expected) in cases {
+            let mut engine = Engine::new();
+            let error = engine.eval(script).expect_err(script);
+            assert_eq!(error.message, expected, "{script}");
+            assert_eq!(error.code, "InvalidArgument", "{script}");
+            assert_eq!(error.category, "TypeMismatch", "{script}");
+            let signature = error.signature.expect("argument signature");
+            assert_eq!(signature.position, Some(1));
+            assert_eq!(signature.parameter.as_deref(), Some("a"));
+            assert_eq!(signature.arrived_kind.as_deref(), Some(kind));
         }
     }
 
