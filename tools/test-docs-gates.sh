@@ -621,7 +621,7 @@ make_docs_report_tree() {
         'DOCREPORT gate=check-reference-pages status=ok pages=1 manifested=1 non_reference=0 unclassified=0 sections=7 failed_pages=0 failures=0'
     mkdir -p -- "$root/tools/harness" || exit 2
     write_report_stub "$root" harness/report-agent-contracts \
-        'DOCREPORT gate=agent-contracts status=ok checks=2 failed=0'
+        'DOCREPORT gate=agent-contracts status=ok checks=3 failed=0'
     write_report_stub "$root" harness/report-doc-family \
         'DOCREPORT gate=doc-family-examples status=ok families=2 failed=0'
     cat >"$root/tools/check-doc-metadata.py" <<'PY'
