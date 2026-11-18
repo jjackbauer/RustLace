@@ -30,6 +30,7 @@
 #   8. check-doc-metadata.py - inventories and version applicability
 #   9. check-doc-metadata.py --self-test - inventory mutation probes
 #  10. check-consumer-journeys.py - public discovery, typed execution and refusal
+#  11. report-doc-gate-mutations.sh - falsification of documentation checkers
 #
 # check-docs.sh runs once with all three audit flags, the way the script is
 # designed to compose, so one line carries every mode's counts with
@@ -186,6 +187,7 @@ run_gate doc-family-examples bash tools/harness/report-doc-family.sh
 run_gate doc-metadata python tools/check-doc-metadata.py
 run_gate doc-metadata-mutants python tools/check-doc-metadata.py --self-test
 run_gate consumer-journeys python tools/harness/check-consumer-journeys.py
+run_gate doc-gates-mutants bash tools/harness/report-doc-gate-mutations.sh
 
 commit=$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || true)
 if [ -z "$commit" ]; then
