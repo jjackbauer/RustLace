@@ -33,9 +33,33 @@ CASES = (
      "Array", None),
 )
 REFUSALS = (
-    ('matrix_rank([[symbol("x"),1],[evalf(sqrt(2),10),1]])', "Real"),
-    ('matrix_rank([[evalf(sqrt(2),10),1],[symbol("x"),1]])', "Real"),
-    ('matrix_rank([[symbol("x"),1],["bad",1]])', "Text"),
+    (
+        'matrix_rank([[symbol("x"),1],[evalf(sqrt(2),10),1]])',
+        "Real",
+        "matrix_rank(): argument 1 must be a matrix of exact numeric or symbolic entries "
+        "(precision-limited Real values are not supported); got Real.",
+    ),
+    (
+        'matrix_rank([[evalf(sqrt(2),10),1],[symbol("x"),1]])',
+        "Real",
+        "matrix_rank(): argument 1 must be a matrix of exact numeric or symbolic entries "
+        "(precision-limited Real values are not supported); got Real.",
+    ),
+    (
+        'matrix_rank([[symbol("x"),1],["bad",1]])',
+        "Text",
+        "matrix_rank(): argument 1 must be a matrix of exact numeric or symbolic entries; got Text.",
+    ),
+    (
+        "matrix_rank([1, 2, 3])",
+        "Vector",
+        "matrix_rank(): argument 1 must be a rank-2 matrix; got Vector.",
+    ),
+    (
+        "matrix_rank([[[1, 2], [3, 4]]])",
+        "Array",
+        "matrix_rank(): argument 1 must be a rank-2 matrix; got Array.",
+    ),
 )
 RANK_MATRICES = (
     [[0, 0], [0, 0]],
@@ -115,9 +139,13 @@ def check_skills(root: Path, fields: set[str]) -> int:
     if not count or NUMBER_WORDS.get(count.group(1).lower()) != len(actual):
         fail(f"docs/skills.md stated skill count is not {len(actual)}")
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    if "\n  docs:\n" not in workflow or "\n  architecture-policy:" not in workflow:
+    docs_header = re.search(r"(?m)^  docs:[ \\t]*$", workflow)
+    if docs_header is None:
         fail("cannot identify the documentation CI job")
-    doc_job = workflow.split("\n  docs:\n", 1)[1].split("\n  architecture-policy:", 1)[0]
+    # Stop at the NEXT top-level jobs entry, not one particular neighboring
+    # job. Reordering or inserting a job must not change the docs step count.
+    following = workflow[docs_header.end():]
+    doc_job = re.split(r"(?m)^  [a-zA-Z_][a-zA-Z0-9_-]*:[ \\t]*$", following, maxsplit=1)[0]
     ci_steps = len(re.findall(r"(?m)^      - name: ", doc_job))
     advertised = re.search(r"(?m)^\| Documentation examples .*?\| (\w+) steps", agents)
     if not ci_steps or not advertised or NUMBER_WORDS.get(advertised.group(1).lower()) != ci_steps:
@@ -220,7 +248,7 @@ def live_registry(runner: Path, static: dict[str, dict[str, str]]) -> dict[str, 
     return contracts
 
 
-def run_refusal(runner: Path, script: str, arrived_kind: str) -> None:
+def run_refusal(runner: Path, script: str, arrived_kind: str, expected_message: str) -> None:
     envelope = invoke(runner, ["--eval", script, "--omit-functions",
                                "--omit-variables"], 1)
     if (envelope.get("code"), envelope.get("category")) != (
@@ -234,8 +262,8 @@ def run_refusal(runner: Path, script: str, arrived_kind: str) -> None:
         or signature.get("parameter") != "a"
         or signature.get("arrivedKind") != arrived_kind):
         fail(f"matrix_rank refusal missing/mismatched signature for {script}")
-    if "exact numeric or symbolic entries" not in envelope.get("message", ""):
-        fail(f"matrix_rank refusal message drift for {script}")
+    if envelope.get("message") != expected_message:
+        fail(f"matrix_rank refusal message drift for {script}: {envelope.get('message')!r}")
 
 
 def run_case(runner: Path, name: str, source: str, kind: str,
@@ -284,8 +312,8 @@ def main() -> int:
                 run_case(runner, "matrix_rank", f"matrix_rank({literal})",
                          "Integer", str(exact_rank(matrix)), contracts)
                 checked += 1
-            for script, arrived_kind in REFUSALS:
-                run_refusal(runner, script, arrived_kind)
+            for script, arrived_kind, expected_message in REFUSALS:
+                run_refusal(runner, script, arrived_kind, expected_message)
                 checked += 1
         core_count = sum(1 for descriptor in registry.values() if descriptor["module"] == "Core")
         print(f"AGENTCONTRACT skills={skills} core={core_count} executed={checked} failed=0")
