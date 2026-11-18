@@ -7,15 +7,15 @@ CI executes scripts against a runner built from that same revision.
 ## Choose a baseline before copying an example
 
 - **Working from source:** check out the desired commit or tag, build
-  \`lovelace-run\` there with \`cargo build -p lovelace-run\`, then follow the
+  `lovelace-run` there with `cargo build -p lovelace-run`, then follow the
   checked-in documentation at that revision. The four tutorials are tested
-  against the checked-out tree by \`bash tools/run-tutorials.sh\`.
+  against the checked-out tree by `bash tools/run-tutorials.sh`.
 - **Using a downloadable desktop release:** read the documentation and release
-  notes **at that release tag**, not \`main\`. Release assets may not expose
+  notes **at that release tag**, not `main`. Release assets may not expose
   features present in newer development source.
 - **Embedding the engine or consuming JSON:** pin the commit/release and check
-  \`protocolVersion\`, \`mathIrVersion\`, \`symbolicFormatVersion\`, and the
-  live \`--function\` descriptors. Do not use a workspace version number as a
+  `protocolVersion`, `mathIrVersion`, `symbolicFormatVersion`, and the
+  live `--function` descriptors. Do not use a workspace version number as a
   substitute for protocol compatibility.
 - **Following an agent-generated script:** have the agent report the target
   revision, its inspected descriptor, the exact command, and the result's
@@ -23,8 +23,8 @@ CI executes scripts against a runner built from that same revision.
 
 ## A concrete compatibility difference
 
-The Systems \`exact_values\` sidecar was introduced after v0.7.1.
-A v0.7.1 desktop does not have the member on its \`StationAnalysis\` output.
+The Systems `exact_values` sidecar was introduced after v0.7.1.
+A v0.7.1 desktop does not have the member on its `StationAnalysis` output.
 The code on the current development branch has it; do not copy that example
 into a v0.7.1 application and interpret the missing-member failure as an
 arithmetic error. Consult the [Systems reference](extensions/systems.md)
