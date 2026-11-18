@@ -14,7 +14,9 @@ cargo run -p lovelace-run -- --functions --function-limit 500
 The observed envelope reports `"total": 134`, `"returned": 134`, `"truncated": false`. The
 category counts below sum to 134.
 
-## Find a function by problem and kind
+## Purpose
+
+### Find a function by problem and kind
 
 This is the exhaustive catalogue of builtin **names and call arities**; it is
 not intended to be read from top to bottom as a tutorial. If you are new to
@@ -39,7 +41,6 @@ independent proof that every input branch has the same kind. To interpret a
 numerical result, read [exactness](values-and-types.md#exactness) as well as
 the relevant function's limitations.
 
-## Purpose
 
 ### Registry at a glance
 
