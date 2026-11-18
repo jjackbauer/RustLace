@@ -104,6 +104,6 @@ Without `--text` the same evaluation prints one JSON document whose `result`, `v
 
 ### Tests
 
-408 `#[test]` functions in `src/` plus 12 in `tests/`. Among them: the golden wire envelopes carried
+Tests live in `src/` and `tests/`. Among them: the golden wire envelopes carried
 from the C# oracle's fixtures (`docs/csharp-oracle/Lovelace.Run.Tests/fixtures/*`, driven by
 `golden_batch.rs`), the cancellation ledger, the error taxonomy, and the record-schema declarations.
