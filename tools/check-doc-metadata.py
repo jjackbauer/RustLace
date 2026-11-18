@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Check documentation inventories against source metadata, not copied counts.
+
+Pure standard-library check. It deliberately inspects only *current assertions*:
+dated observations in docs/testing.md and historical release notes are not current
+contracts. Use --self-test to mutation-test the assertions and the checker itself.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+import shutil
+import sys
+import tempfile
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+
+
+class MetadataFailure(ValueError):
+    pass
+
+
+def fail(path: str, message: str) -> None:
+    raise MetadataFailure(f"{path}: {message}")
+
+
+def read(root: Path, path: str) -> str:
+    try:
+        return (root / path).read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(path, str(exc))
+
+
+def stated_count(path: str, content: str, pattern: str) -> int:
+    match = re.search(pattern, content, re.I | re.M | re.S)
+    if not match:
+        fail(path, "missing canonical inventory statement")
+    raw = match.group(1).lower()
+    if raw.isdigit():
+        return int(raw)
+    if raw not in WORDS:
+        fail(path, f"unrecognized count word {raw!r}")
+    return WORDS[raw]
+
+
+def validate(root: Path) -> dict[str, int]:
+    manifest = tomllib.loads(read(root, "Cargo.toml"))
+    members = manifest["workspace"]["members"]
+    if not members or len(members) != len(set(members)):
+        fail("Cargo.toml", "empty or duplicate workspace members")
+    member_set = set(members)
+    readme = read(root, "README.md")
+    build = read(root, "docs/build-and-run.md")
+    agents = read(root, "AGENTS.md")
+    skills_index = read(root, "docs/skills.md")
+
+    member_count = stated_count(
+        "README.md", readme,
+        r"^\w+ crates:\s+(\w+) workspace members plus one standalone spike"
+    )
+    total_count = stated_count(
+        "README.md", readme,
+        r"^(\w+) crates:\s+\w+ workspace members plus one standalone spike"
+    )
+    if member_count != len(members) or total_count != len(members) + 1:
+        fail("README.md", f"crate counts {total_count}/{member_count} vs Cargo members={len(members)}")
+    build_count = stated_count(
+        "docs/build-and-run.md", build, r"The workspace has (\w+) members"
+    )
+    if build_count != len(members):
+        fail("docs/build-and-run.md", f"workspace count {build_count} vs {len(members)}")
+
+    crate_section = re.search(r"(?ms)^## The crates\n(.*?)(?=^## |\Z)", readme)
+    if not crate_section:
+        fail("README.md", "missing crate table")
+    listed = re.findall(r"(?m)^\| \x60(lovelace-[a-z-]+)\x60 \|", crate_section.group(1))
+    expected = member_set | {"lovelace-desktop-spike"}
+    if len(listed) != len(set(listed)) or set(listed) != expected:
+        fail("README.md", f"crate table drift: missing={sorted(expected-set(listed))}, extra={sorted(set(listed)-expected)}")
+
+    skill_paths = list((root / ".dsh/skills").glob("*/SKILL.md"))
+    skills = len(skill_paths)
+    if skills == 0:
+        fail(".dsh/skills", "no skill files")
+    if stated_count("README.md", readme, r"the (\w+) task skills for extending") != skills:
+        fail("README.md", "task-skill count drift")
+    if stated_count("docs/skills.md", skills_index, r"^(\w+) task skills") != skills:
+        fail("docs/skills.md", "task-skill count drift")
+
+    adrs = len(list((root / "docs/adr").glob("[0-9][0-9][0-9]-*.md")))
+    if not adrs:
+        fail("docs/adr", "no ADRs found")
+    if stated_count("README.md", readme, r"(\w+) architecture decision records") != adrs:
+        fail("README.md", f"ADR count drift (actual={adrs})")
+
+    corpus_counts = {}
+    for family in ("lang", "symbolics", "systems"):
+        path = f"parity/corpus/{family}.json"
+        try:
+            doc = json.loads(read(root, path))
+        except ValueError as exc:
+            fail(path, f"invalid corpus JSON: {exc}")
+        records = doc.get("examples")
+        if not isinstance(records, list) or not records:
+            fail(path, "examples array missing or empty")
+        corpus_counts[family] = len(records)
+        declared = re.search(
+            rf"\x60parity/corpus/{family}\.json\x60 \((\d+)", readme
+        )
+        if not declared or int(declared.group(1)) != len(records):
+            fail("README.md", f"{family} corpus count drift (actual={len(records)})")
+    total = sum(corpus_counts.values())
+    corpus_page = read(root, "docs/crates/lovelace-corpus.md")
+    for path, text, pattern in (
+        ("README.md", readme, rf"\bfor {total} records\b"),
+        ("AGENTS.md", agents, rf"\b{total}-record documentation\b"),
+        ("docs/crates/lovelace-corpus.md", corpus_page, rf"\b{total} records in total\b"),
+    ):
+        if not re.search(pattern, text):
+            fail(path, f"missing current corpus total {total}")
+    # Catch stale totals even if a new correct total was appended elsewhere.
+    for path, text in (("README.md", readme), ("docs/crates/lovelace-corpus.md", corpus_page)):
+        wrong = re.findall(r"\bcorpus:\s*(\d+) passed,\s*0 failed,\s*(\d+) total", text)
+        if any(int(passed) != total or int(all_) != total for passed, all_ in wrong):
+            fail(path, f"stale corpus transcript (current total={total})")
+    for path, text in (("README.md", readme), ("AGENTS.md", agents)):
+        if re.search(r"\bthe one ignored test\b", text):
+            fail(path, "historical ignored-test assertion presented as current")
+
+    version_page = "docs/version-applicability.md"
+    if not (root / version_page).is_file():
+        fail(version_page, "missing version compatibility instructions")
+    if "docs/agent-usage.md" not in readme or "docs/agent-usage.md" not in agents:
+        fail("README.md / AGENTS.md", "missing consumer-agent entry-point link")
+    tutorial_index = read(root, "docs/tutorials/README.md")
+    if "checked-out development revision" not in tutorial_index:
+        fail("docs/tutorials/README.md", "must explain development-branch applicability")
+    for name in ("linear-algebra", "symbolic", "signal-processing", "reproducible"):
+        path = f"docs/tutorials/{name}.md"
+        text = read(root, path)
+        if "checked-out RustLace development revision" not in text:
+            fail(path, "tutorial does not declare its executable baseline")
+
+    return dict(crates=len(members), skills=skills, adrs=adrs, corpus=total, tutorials=4)
+
+
+def self_test(root: Path) -> int:
+    with tempfile.TemporaryDirectory(prefix="rustlace-metadata-") as tmp:
+        baseline = Path(tmp) / "fixture"
+        for path in (
+            "Cargo.toml", "README.md", "AGENTS.md", "docs/build-and-run.md",
+            "docs/skills.md", "docs/tutorials/README.md",
+            "docs/crates/lovelace-corpus.md", "docs/version-applicability.md",
+        ):
+            target = baseline / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / path, target)
+        for dirname in ("docs/adr", ".dsh/skills", "parity/corpus"):
+            shutil.copytree(root / dirname, baseline / dirname)
+        for name in ("linear-algebra", "symbolic", "signal-processing", "reproducible"):
+            path = f"docs/tutorials/{name}.md"
+            shutil.copy2(root / path, baseline / path)
+
+        validate(baseline)
+        mutations = [
+            ("crate-count", "README.md", "fourteen workspace members", "twelve workspace members"),
+            ("canonical-owner-omitted", "README.md",
+             "| \x60lovelace-rational\x60 |", "| \x60lovelace-rational-old\x60 |"),
+            ("build-count", "docs/build-and-run.md", "fourteen members", "twelve members"),
+            ("skill-count", "README.md", "eight task skills", "nine task skills"),
+            ("corpus-count", "README.md", "for 232 records", "for 231 records"),
+            ("tutorial-version", "docs/tutorials/linear-algebra.md",
+             "checked-out RustLace development revision", "RustLace 0.4.1"),
+        ]
+        for label, file, original, replacement in mutations:
+            target = baseline / file
+            content = target.read_text(encoding="utf-8")
+            if original not in content:
+                fail(file, f"{label}: mutation anchor missing")
+            target.write_text(content.replace(original, replacement, 1), encoding="utf-8")
+            try:
+                validate(baseline)
+            except MetadataFailure as exc:
+                if file not in str(exc):
+                    fail(file, f"{label}: wrong rejection: {exc}")
+            else:
+                fail(file, f"{label}: mutant passed")
+            target.write_text(content, encoding="utf-8")
+    return len(mutations)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", type=Path, default=ROOT)
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    try:
+        if args.self_test:
+            mutants = self_test(args.root)
+            print(f"DOCREPORT gate=doc-metadata-mutants status=ok mutants={mutants} failed=0")
+        else:
+            result = validate(args.root)
+            fields = " ".join(f"{key}={value}" for key, value in result.items())
+            print(f"DOCREPORT gate=doc-metadata status=ok {fields} failed=0")
+        return 0
+    except (OSError, KeyError, MetadataFailure) as exc:
+        print(f"doc-metadata: FAIL: {exc}", file=sys.stderr)
+        name = "doc-metadata-mutants" if args.self_test else "doc-metadata"
+        print(f"DOCREPORT gate={name} status=fail failed=1")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
