@@ -1853,11 +1853,11 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lovelace-array"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "lovelace-bench"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-int",
  "lovelace-lang",
@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "lovelace-corpus"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-json",
  "lovelace-lang",
@@ -1878,7 +1878,7 @@ dependencies = [
 
 [[package]]
 name = "lovelace-desktop"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "eframe",
  "egui",
@@ -1891,18 +1891,18 @@ dependencies = [
 
 [[package]]
 name = "lovelace-int"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-nat",
 ]
 
 [[package]]
 name = "lovelace-json"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "lovelace-know"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-int",
  "lovelace-json",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "lovelace-lang"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-array",
  "lovelace-int",
@@ -1926,11 +1926,11 @@ dependencies = [
 
 [[package]]
 name = "lovelace-nat"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "lovelace-rational"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
@@ -1938,7 +1938,7 @@ dependencies = [
 
 [[package]]
 name = "lovelace-real"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "lovelace-run"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-int",
  "lovelace-json",
@@ -1958,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "lovelace-symbolics"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "lovelace-systems"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "lovelace-int",
  "lovelace-nat",
