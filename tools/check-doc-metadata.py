@@ -274,7 +274,7 @@ def validate(root: Path) -> dict[str, int]:
         # Scan original lines with the executable runner's fence and annotation
         # grammar. A greedy prose regex used to miss '<', '>' and trailing text,
         # allowing an unregistered waiver to suppress execution.
-        for reason, script in scan_not_run_annotations(rel, doc.read_text(encoding="utf-8")):
+        for reason, script in scan_not_run_annotations(rel, source):
             match = re.match(r"(WAIVER-[A-Z0-9-]+)\b", reason)
             if not match or match.group(1) not in allowed:
                 fail(rel, f"unapproved not-run annotation: {reason!r}")
