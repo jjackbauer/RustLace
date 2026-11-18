@@ -90,7 +90,6 @@ x = symbol("x"); factor(x^4 - 5*x^2 + 4)
 ```
 ```text
 = (x - 2)*(x - 1)*(x + 1)*(x + 2) (Symbolic)
-  x = x
 ```
 
 `symbol("x")` creates a [Symbolic](../language/values-and-types.md#symbolic)
