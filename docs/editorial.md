@@ -99,6 +99,20 @@ result.
    placeholder that reads as one.
 6. **`.ls` is the script extension.** Use it in every example; the compatibility note for other extensions lives in the language reference.
 
+## Version-bound examples and evidence
+
+Every maintained tutorial states whether it applies to the checked-out source
+revision or to a named released binary. Never silently substitute a current
+source-only API into an older release tutorial. When a release behavior differs,
+link to [version applicability](version-applicability.md) and label the
+difference where the reader first encounters the example.
+
+Counts of crates, skills, ADRs and corpus records are derived from the
+repository manifest and fixture inventories by
+`python tools/check-doc-metadata.py`. Updating prose without updating
+the source of truth is not a repair. The checker also mutation-tests these
+statements so a stale count cannot quietly pass.
+
 ## Agent instructions are code
 
 `AGENTS.md`, `.github/copilot-instructions.md` and `.dsh/skills/**` are executable operational inputs.
