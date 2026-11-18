@@ -65,14 +65,14 @@ the same draw order, so an added draw shifts every later value exactly as it wou
 - Exit 2: the corpus could not be loaded — a missing or malformed corpus file is a failure, never an
   empty pass. An **empty corpus** (zero records in the files) is also a `2` with `corpus is empty:
   refusing a vacuous pass`.
-- A filter that matches nothing is not an error: the run prints `corpus: 0 passed, 0 failed, 231
+- A filter that matches nothing is not an error: the run prints `corpus: 0 passed, 0 failed, 232
   total (filter <prefix>)` and exits 0, so a mistyped selector passes vacuously while selecting
   nothing.
 - The library functions return their values directly; there is no error enum on that surface.
 
 ## Limitations
 
-- **The corpus is a fixed fixture.** Three JSON files, 231 records in total; the gate does not generate
+- **The corpus is a fixed fixture.** Three JSON files, 232 records in total; the gate does not generate
   or update a corpus, and there is no record mode — adding a record is a source change plus a JSON
   edit.
 - **The filter is a prefix.** The positional argument selects records whose `id` starts with it
@@ -94,14 +94,14 @@ the same draw order, so an added draw shifts every later value exactly as it wou
 
 ```console
 $ cargo run --release -p lovelace-corpus
-corpus: 231 passed, 0 failed, 231 total
+corpus: 232 passed, 0 failed, 232 total
 
 $ cargo run --release -p lovelace-corpus -- --verbose
 PASS lang/001 | 42
 ...
 
 $ cargo run --release -p lovelace-corpus -- lang/101
-corpus: 1 passed, 0 failed, 231 total (filter lang/101)
+corpus: 1 passed, 0 failed, 232 total (filter lang/101)
 ```
 
 The positional argument is an **id prefix** (`id.starts_with(filter)`), so `lang/101` selects one
