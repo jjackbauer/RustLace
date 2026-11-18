@@ -17,7 +17,7 @@ generated corpora with the same draw order as the C# tests
 
 ### Provenance of the corpus
 
-`parity/corpus/lang.json` (111 records) and `parity/corpus/symbolics.json` were extracted from
+`parity/corpus/lang.json` (112 records) and `parity/corpus/symbolics.json` (103 records) were extracted from
 `Language.md` in the original Lovelace suite repository (the external `Lovelace.Suite` tree, not a path
 in this repository); each record carries `{id, doc, heading, script, kind, text}` with
 `kind` ∈ value | error | prints | plot. `parity/corpus/systems.json` (17 records) is the systems
@@ -31,7 +31,7 @@ against; it was carried into this repository so the gate runs on a clean clone
 ### Public surface
 
 - Binary `lovelace-corpus`: `[filter] [--verbose]`, corpus read from
-  `<crate>/../parity/corpus/{lang,symbolics}.json` (resolved from `CARGO_MANIFEST_DIR`, so it works
+  `<crate>/../parity/corpus/{lang,symbolics,systems}.json` (resolved from `CARGO_MANIFEST_DIR`, so it works
   from any working directory).
 - Library: `dotnet_random`, `property_corpus`, and the crate-private `fnv1a64` regression checksum
   used to compare transcripts by hash.
