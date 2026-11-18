@@ -10,6 +10,11 @@ This tutorial smooths an impulse with a moving average, takes a length-4 FFT, sh
 power-of-two length rule, pads a length-3 signal to satisfy it, and compares an 8-point FFT computed
 at the DSP default with the same transform computed at 50 places.
 
+**Prerequisites:** You should recognize
+a [Vector](../language/values-and-types.md#vector-and-array) of numeric samples.
+The FFT introduces [Complex](../language/values-and-types.md#complex) results;
+start with [Get started](../start-here.md) if the displayed kinds are unfamiliar.
+
 ## Source
 
 ```lovelace
@@ -68,6 +73,30 @@ Error [InvalidArgument/TypeMismatch]: FFT length must be a power of two, but got
 That refusal came from `--eval 'fft([1, 2, 3])' --text`. Pad with zeros to the next power of two,
 or design the signal at a power-of-two length; trimming would compute a different signal.
 `append([1, 2, 3], [0])` above is the smallest padding example for this input.
+
+### Types and functions used
+
+| In the script | Type or API | Why it matters |
+|---|---|---|
+| `signal`, `wave` | [Vector](../language/values-and-types.md#vector-and-array) samples | A one-dimensional sequence, not a rank-2 Array. The sample count matters to the FFT. |
+| `movingavg(signal, 2)` | [DSP moving average](../extensions/dsp.md) | The second argument is the window size; the initial history is treated as zero here. |
+| `fft(signal)` | [DSP Fourier transform](../extensions/dsp.md) | Returns a Vector; some coefficients have kind [Complex](../language/values-and-types.md#complex), even though inputs are real. |
+| `append([1,2,3],[0])` | [Vector operation](../language/builtins.md#arrays-23) | Pads a three-sample input to a supported power-of-two length. |
+| `setprecision(50)` | [Session precision](../language/precision-and-formatting.md#setprecisionn) | Changes subsequent computations, not the already computed `default_spectrum`. |
+
+**Why the two results differ:** the four-point impulse FFT has exact
+Gaussian-integer coefficients; the eight-point ramp uses irrational twiddle
+factors and is evaluated to a chosen digit budget. Displaying more digits
+does not convert a numerical approximation into a proof of accuracy.
+See [precision and formatting](../language/precision-and-formatting.md)
+and [verify a numerical result](../how-to/verify-a-result.md).
+
+### Continue from here
+
+The [DSP reference](../extensions/dsp.md) documents other functions such as
+`dft`, convolution and filters, including their input rules and refusal cases.
+For a smaller example of a complex-valued output, see the
+[library walkthrough](../how-to/use-libraries.md#dsp-input-samples-can-produce-complex-output).
 
 ## Assumptions
 
