@@ -10,6 +10,14 @@ come back as an exact zero matrix.
 This tutorial builds a 2 x 2 system, inverts the matrix, solves with `matmul`, and inspects the
 determinant, the solution and the residual gap.
 
+**Prerequisites:** You should know how
+[Vector and Array](../language/values-and-types.md#vector-and-array) differ
+and how `matmul` treats shapes. If not, start with
+[Get started](../start-here.md) and
+[Working with libraries](../how-to/use-libraries.md#linear-algebra-inspect-shape-and-verify-the-answer).
+The example uses the language's [Real](../language/values-and-types.md#numeric-kinds-and-widening)
+arithmetic, not a Rust matrix crate.
+
 ## Source
 
 ```lovelace
@@ -60,6 +68,31 @@ variable in scope, sorted by name. `_` is the previous result, so it repeats `re
 
 `matmul(A, [5, 6])` would not work here: a flat vector does not have the column shape the product
 requires. Write the right-hand side as a column.
+
+### Types and functions used
+
+| In the script | Type or API | Why it matters |
+|---|---|---|
+| `A` | 2×2 [Array](../language/values-and-types.md#vector-and-array) of numeric values | A nested literal defines rows and columns; its shape determines valid matrix multiplication. |
+| `b` | 2×1 [Array](../language/values-and-types.md#vector-and-array), **not** a Vector | A column array matches the shape of the solution. Flattening it changes the operation's meaning. |
+| `inv(A)` | [Linear Algebra builtin](../language/builtins.md#linear-algebra-8) returning an Array | Only valid here because `det(A) != 0`; not a general-purpose substitute for every linear solver. |
+| `matmul(Inv, b)` | [Matrix multiplication](../language/builtins.md#linear-algebra-8) returning an Array | The product has shape 2×1. Multiplication is not elementwise. |
+| `det(A)` | [Determinant](../language/builtins.md#linear-algebra-8) returning a scalar | Nonzero determinant establishes invertibility for this square matrix. |
+| `sol`, `gap` | Exact [Real](../language/values-and-types.md#numeric-kinds-and-widening) elements in Arrays | `1.8`, `1.4` and zero are exact here because the rational calculations terminate. |
+
+**A useful distinction:** `Real` does not mean IEEE floating point,
+and the language has [no separate public Rational kind](../language/values-and-types.md#is-there-a-rational-kind).
+Also, a zero residual is an **independent check of this solution**, not a
+universal proof that all numerical algorithms are correct. The
+[numerical verification guide](../how-to/verify-a-result.md) explains the
+appropriate level of evidence.
+
+### Continue from here
+
+To see how `shape`, `zeros` and `sum` interact with the same arrays,
+read [Core arrays](../how-to/use-libraries.md#arrays-distinguish-a-vector-from-a-matrix).
+For a rank computation, see [`matrix_rank`](../language/builtins.md#linear-algebra-8),
+including why symbolic, parameter-dependent ranks need qualification.
 
 ## Assumptions
 
