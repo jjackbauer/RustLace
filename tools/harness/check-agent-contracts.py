@@ -88,7 +88,7 @@ def load_registry(root: Path) -> tuple[set[str], dict[str, dict[str, str]]]:
     # The documented catalogue is a second inventory: a builtin cannot be
     # removed from code (or added without docs) and keep passing static-only.
     catalogue = (root / "docs/language/builtins.md").read_text(encoding="utf-8")
-    documented = re.findall(r"(?m)^\\| \\x60([a-z][a-z0-9_]*)\\x60 \\|", catalogue)
+    documented = re.findall(r"(?m)^\| \x60([a-z][a-z0-9_]*)\x60 \|", catalogue)
     if len(documented) != len(set(documented)):
         fail("builtin catalogue contains duplicate function rows")
     if set(documented) != set(registry):
@@ -115,11 +115,11 @@ def check_skills(root: Path, fields: set[str]) -> int:
     if not count or NUMBER_WORDS.get(count.group(1).lower()) != len(actual):
         fail(f"docs/skills.md stated skill count is not {len(actual)}")
     workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    if "\\n  docs:\\n" not in workflow or "\\n  architecture-policy:" not in workflow:
+    if "\n  docs:\n" not in workflow or "\n  architecture-policy:" not in workflow:
         fail("cannot identify the documentation CI job")
-    doc_job = workflow.split("\\n  docs:\\n", 1)[1].split("\\n  architecture-policy:", 1)[0]
+    doc_job = workflow.split("\n  docs:\n", 1)[1].split("\n  architecture-policy:", 1)[0]
     ci_steps = len(re.findall(r"(?m)^      - name: ", doc_job))
-    advertised = re.search(r"(?m)^\\| Documentation examples .*?\\| (\\w+) steps", agents)
+    advertised = re.search(r"(?m)^\| Documentation examples .*?\| (\w+) steps", agents)
     if not ci_steps or not advertised or NUMBER_WORDS.get(advertised.group(1).lower()) != ci_steps:
         fail(f"AGENTS.md documentation CI step count drift: actual={ci_steps}")
     for command in ("tools/harness/check-agent-contracts.py",
