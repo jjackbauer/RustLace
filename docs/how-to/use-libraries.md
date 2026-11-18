@@ -10,6 +10,12 @@ returns, and find the authoritative reference. It is a task-oriented companion
 to the [complete builtin catalogue](../language/builtins.md), not an exhaustive
 function list.
 
+**Output convention:** the examples below show `--text --omit-variables`,
+which displays only the result (or refusal). To reproduce one from the
+repository root, put its Lovelace source in a `.ls` file and run
+`cargo run -p lovelace-run -- --file example.ls --text --omit-variables`.
+Plain `--text` additionally prints variables in scope.
+
 **Before you start:** finish the [first-run guide](../start-here.md) if
 `Natural`, `Real`, `Vector`, and `Array` are unfamiliar. All commands and
 outputs here refer to the checked-out revision; see
@@ -39,7 +45,6 @@ sum([[1, 2], [3, 4]])
 ```
 ```text
 = 10 (Natural)
-  _ = 10
 ```
 
 The input is an [Array](../language/values-and-types.md#vector-and-array)
@@ -62,7 +67,6 @@ matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])
 ```
 ```text
 = [[19, 22], [43, 50]] (Array)
-  _ = [[19, 22], [43, 50]]
 ```
 
 Both inputs and the result have kind
@@ -86,7 +90,6 @@ x = symbol("x"); factor(x^4 - 5*x^2 + 4)
 ```
 ```text
 = (x - 2)*(x - 1)*(x + 1)*(x + 2) (Symbolic)
-  _ = (x - 2)*(x - 1)*(x + 1)*(x + 2)
   x = x
 ```
 
@@ -108,7 +111,6 @@ fft([0, 1, 0, 0])
 ```
 ```text
 = [1, -1i, -1, 1i] (Vector)
-  _ = [1, -1i, -1, 1i]
 ```
 
 The input is a [Vector](../language/values-and-types.md#vector-and-array)
@@ -148,7 +150,6 @@ sys_mm1(8, 10).utilization
 ```
 ```text
 = 0.8 (Real)
-  _ = 0.8
 ```
 
 Here `8` and `10` are arrival and service rates. `sys_mm1` returns a
