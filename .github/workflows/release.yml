@@ -18,10 +18,12 @@ name: Release
 #   * neither exists -> normal path (or a logged stop when the range warrants
 #     no release, or when main has moved past the CI-validated commit).
 #
-# `cargo metadata` refreshes Cargo.lock for the new workspace version, the
-# committed message carries [skip ci] so the release commit cannot start CI
-# again, and main plus the tag are pushed atomically: either both move or
-# neither does.
+# `cargo metadata` refreshes Cargo.lock for the new workspace version. The bump
+# commit is pushed to a release/vX.Y.Z branch and validated by the same CI
+# workflow there; only when that run is green does the job fast-forward main
+# onto the validated commit and push the tag. Branch protection therefore never
+# sees an unvalidated commit on main, and a rejected fast-forward leaves main
+# and the tag untouched.
 #
 # Every release carries TWO executables, both built from the tagged commit:
 #
@@ -52,6 +54,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 # Overlapping releases for the same ref queue instead of racing; the guard's
 # tag-and-release check makes a queued duplicate run a no-op.
@@ -225,22 +228,77 @@ jobs:
           Write-Output "Cargo.toml: $((Select-String -Path Cargo.toml -Pattern '^version = "').Line)"
           git --no-pager diff --stat
 
-      - name: Commit the bump, create the tag and push both atomically
+      - name: Commit the bump and push the release branch
+        id: bump
+        if: steps.guard.outputs.release == 'true' && steps.guard.outputs.mode == 'normal'
+        shell: pwsh
+        env:
+          TAG: ${{ steps.guard.outputs.tag }}
+          DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+          REPO: ${{ github.repository }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): $env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'git commit failed' }
+          $sha = (git rev-parse HEAD).Trim()
+          $branch = "release/$env:TAG"
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "branch=$branch" >> $env:GITHUB_OUTPUT
+          # A push made with GITHUB_TOKEN starts no workflow run, and branch
+          # protection needs a real CI result on this commit before main moves,
+          # so the branch is pushed with the repository deploy key. That key
+          # only reaches this unprotected branch; it is not a bypass.
+          $key = Join-Path $env:RUNNER_TEMP 'release-deploy-key'
+          $text = ($env:DEPLOY_KEY -replace "`r`n", "`n").TrimEnd() + "`n"
+          [System.IO.File]::WriteAllText($key, $text, (New-Object System.Text.UTF8Encoding($false)))
+          icacls $key /inheritance:r /grant:r "$($env:USERNAME):(R)" | Out-Null
+          $env:GIT_SSH_COMMAND = "ssh -i `"$key`" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git push "git@github.com:$env:REPO.git" "HEAD:refs/heads/$branch"
+          if ($LASTEXITCODE -ne 0) { throw "could not push $branch" }
+          Write-Output "pushed $branch at $sha"
+
+      - name: Wait for CI on the release commit
+        if: steps.guard.outputs.release == 'true' && steps.guard.outputs.mode == 'normal'
+        shell: pwsh
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          SHA: ${{ steps.bump.outputs.sha }}
+        run: |
+          $deadline = (Get-Date).AddMinutes(60)
+          while ((Get-Date) -lt $deadline) {
+            $runs = gh run list --workflow ci.yml --branch $env:BRANCH --limit 20 --json databaseId,headSha,status,conclusion | ConvertFrom-Json
+            $mine = @($runs) | Where-Object { $_.headSha -eq $env:SHA } | Select-Object -First 1
+            if ($null -ne $mine) {
+              if ($mine.status -eq 'completed') {
+                if ($mine.conclusion -ne 'success') {
+                  throw "CI on $env:BRANCH failed with $($mine.conclusion); nothing was pushed to main"
+                }
+                Write-Output "CI green for $env:SHA (run $($mine.databaseId))"
+                exit 0
+              }
+              Write-Output "waiting for CI run $($mine.databaseId): $($mine.status)"
+            } else {
+              Write-Output "no CI run yet for $env:SHA on $env:BRANCH"
+            }
+            Start-Sleep -Seconds 30
+          }
+          throw 'timed out waiting for the release-branch CI run'
+
+      - name: Fast-forward main onto the validated commit and push the tag
         id: tag
         if: steps.guard.outputs.release == 'true' && steps.guard.outputs.mode == 'normal'
         shell: pwsh
         env:
           TAG: ${{ steps.guard.outputs.tag }}
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): $env:TAG [skip ci]"
-          if ($LASTEXITCODE -ne 0) { throw 'git commit failed' }
           git tag -a $env:TAG -m "RustLace $env:TAG"
           if ($LASTEXITCODE -ne 0) { throw 'git tag failed' }
-          git push --atomic origin "HEAD:main" "refs/tags/$env:TAG"
-          if ($LASTEXITCODE -ne 0) { throw 'the atomic push of main and the tag failed' }
+          git push origin "HEAD:main"
+          if ($LASTEXITCODE -ne 0) { throw 'the fast-forward of main was rejected; the release commit did not land' }
+          git push origin "refs/tags/$env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'the tag push failed' }
           Write-Output "pushed $env:TAG for $((git rev-parse HEAD).Trim())"
 
       - name: Check out the release tag that will be built
