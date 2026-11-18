@@ -16,8 +16,15 @@ normalized LF line endings), `justification`, `approved_by`, and `expires`
 <!-- not-run: WAIVER-123 a concise explanation -->
 ```
 
+The annotation must be on the line immediately before its `lovelace` fence.
+The reason may include comparison symbols such as `<` or `>` and text may
+follow the closing `-->`; the authorization checker and executable-example
+runner both recognize these forms. The required `WAIVER-...` identifier
+must still name an approved, unexpired inventory entry pinned to the exact
+script hash.
+
 The checker rejects missing, expired, unreferenced, duplicate, or mismatched
-waivers. Changing the example invalidates its hash. The waiver inventory and
+waivers. Changing the example invalidates its hash. The waiver inventory, this policy page and
 the checker are routed through CODEOWNERS, but an additional independent reviewer
 and branch-protection configuration are required to enforce separation of
 duties; the checker alone cannot prove that `approved_by` is an authorized person.
