@@ -368,7 +368,84 @@ def self_test(root: Path) -> int:
         else:
             fail("docs/parity-with-studio.md", "contradictory count alongside correct count passed")
         parity_page.write_text(original, encoding="utf-8")
-    return len(mutations) + 2
+
+        # Exercise the actual waiver validator, not just a free-text reject.
+        # Include the exact annotation shapes that formerly diverged from the
+        # shell executor: '<', '>', and text following the closing '-->'.
+        inventory_file = baseline / "docs/example-waivers.json"
+        waiver_page = baseline / "docs/crates/lovelace-corpus.md"
+        saved_inventory = inventory_file.read_text(encoding="utf-8")
+        saved_page = waiver_page.read_text(encoding="utf-8")
+        waived_script = "1 / 0"
+        approved = {
+            "id": "WAIVER-TEST",
+            "path": "docs/crates/lovelace-corpus.md",
+            "sha256": hashlib.sha256(waived_script.encode("utf-8")).hexdigest(),
+            "justification": "Only a self-test; do not use in actual docs",
+            "approved_by": "metadata-self-test",
+            "expires": "2099-12-31",
+        }
+        extra_mutants = 0
+
+        def waiver_case(label: str, annotation: str, records: list[dict],
+                        expected: str | None) -> None:
+            nonlocal extra_mutants
+            waiver_page.write_text(
+                saved_page + "\n" + annotation
+                + "\n" + "\x60\x60\x60lovelace\n" + waived_script + "\n\x60\x60\x60\n",
+                encoding="utf-8",
+            )
+            inventory_file.write_text(
+                json.dumps({"waivers": records}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            try:
+                validate(baseline)
+            except MetadataFailure as exc:
+                if expected is None or expected not in str(exc):
+                    fail(label, f"unexpected waiver rejection: {exc}")
+            else:
+                if expected is not None:
+                    fail(label, "invalid waiver passed")
+            finally:
+                waiver_page.write_text(saved_page, encoding="utf-8")
+                inventory_file.write_text(saved_inventory, encoding="utf-8")
+            if expected is not None:
+                extra_mutants += 1
+
+        # Positive authorization proves '<', '>', and trailing prose are not
+        # mistaken for unused waivers or silently ignored.
+        waiver_case("approved-angle", "<!-- not-run: WAIVER-TEST because x < 0 > 1 -->",
+                    [approved], None)
+        waiver_case("approved-trailing", "<!-- not-run: WAIVER-TEST --> see the note",
+                    [approved], None)
+
+        for label, annotation in (
+            ("unapproved-less-than", "<!-- not-run: because x < 0 is undefined -->"),
+            ("unapproved-greater-than", "<!-- not-run: because x > 0 is undefined -->"),
+            ("unapproved-trailing", "<!-- not-run: WAIVER-TEST --> see the note"),
+        ):
+            waiver_case(label, annotation, [], "unapproved not-run")
+
+        waiver_case("expired", "<!-- not-run: WAIVER-TEST -->",
+                    [{**approved, "expires": "2000-01-01"}], "expired")
+        waiver_case("wrong-digest", "<!-- not-run: WAIVER-TEST -->",
+                    [{**approved, "sha256": "0" * 64}], "sha256 mismatch")
+        waiver_case("invalid-digest-shape", "<!-- not-run: WAIVER-TEST -->",
+                    [{**approved, "sha256": "0" * 63}], "invalid SHA-256")
+        waiver_case("path-mismatch", "<!-- not-run: WAIVER-TEST -->",
+                    [{**approved, "path": "docs/other.md"}], "path mismatch")
+        waiver_case("duplicate-id", "<!-- not-run: WAIVER-TEST -->",
+                    [approved, approved], "duplicate waiver")
+        waiver_case("unused-id", "<!-- not-run: WAIVER-TEST -->",
+                    [approved, {**approved, "id": "WAIVER-UNUSED"}], "unused waivers")
+        waiver_case("missing-field", "<!-- not-run: WAIVER-TEST -->",
+                    [{key: value for key, value in approved.items()
+                      if key != "approved_by"}], "waiver fields")
+        waiver_case("changed-script", "<!-- not-run: WAIVER-TEST -->",
+                    [{**approved, "sha256": hashlib.sha256(b"2 / 0").hexdigest()}],
+                    "sha256 mismatch")
+    return len(mutations) + 2 + extra_mutants
 
 
 def main() -> int:
