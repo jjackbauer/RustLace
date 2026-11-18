@@ -230,13 +230,9 @@ jobs:
       - name: Build lovelace-run
         run: cargo build -p lovelace-run
 
-      # Independent Fraction rank oracle, live return-kind checks and stale
-      # agent instruction detection. A zero-case run is a failure.
-      - name: Check core and agent contracts
-        run: python tools/harness/check-agent-contracts.py
-
-      - name: Mutation-test agent contract checks
-        run: python tools/harness/test-agent-contracts.py
+      # Agent contracts, their mutation probes and coverage inventory run
+      # together as one named gate in docs-report.sh below. Do not duplicate
+      # these expensive checks as standalone steps here.
 
       # Compiles and runs every maintained ```rust fence under docs/crates/
       # against the workspace crates. The script locates cargo itself ($CARGO,
@@ -327,10 +323,11 @@ jobs:
 
       # One transcript of every gate above, with a machine-readable DOCREPORT
       # line per gate and a total carrying the commit and OS (RQ-023). It is
-      # additive: every gate still runs as its own step, so a failure stays
-      # attributable, and this step fails when any gate fails or a gate does
-      # not print its summary. Both matrix legs run it unconditionally and
-      # upload their own transcript below.
+      # additive for the existing standalone documentation checks; agent
+      # contract checks run only here, as a named sub-gate, to avoid duplicated
+      # expensive work. Every failure is attributable in DOCREPORT, and the
+      # step fails for any nonzero or contradictory gate result. Both matrix
+      # legs run it unconditionally and upload their transcript below.
       - name: Report documentation evidence
         shell: bash
         run: |
