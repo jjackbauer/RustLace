@@ -619,6 +619,18 @@ make_docs_report_tree() {
         'DOCREPORT gate=check-docs status=ok pages=1 links=1 anchors=1 refs=1 citations=0 symbols=0 claims=0 tutorials=0 sections=0 readme=0 modes=stub failures=0'
     write_report_stub "$root" check-reference-pages \
         'DOCREPORT gate=check-reference-pages status=ok pages=1 manifested=1 non_reference=0 unclassified=0 sections=7 failed_pages=0 failures=0'
+    mkdir -p -- "$root/tools/harness" || exit 2
+    write_report_stub "$root" harness/report-agent-contracts \
+        'DOCREPORT gate=agent-contracts status=ok checks=2 failed=0'
+    write_report_stub "$root" harness/report-doc-family \
+        'DOCREPORT gate=doc-family-examples status=ok families=2 failed=0'
+    cat >"$root/tools/check-doc-metadata.py" <<'PY'
+import sys
+if "--self-test" in sys.argv:
+    print("DOCREPORT gate=doc-metadata-mutants status=ok mutants=6 failed=0")
+else:
+    print("DOCREPORT gate=doc-metadata status=ok crates=14 skills=8 adrs=11 corpus=232 tutorials=4 failed=0")
+PY
 }
 
 # ---------------------------------------------------------------------------
@@ -1320,16 +1332,16 @@ MD
     make_docs_report_tree "$root"
     expect_success "docs-report: complete summaries" "$root/baseline.log" \
         bash "$root/tools/docs-report.sh"
-    if ! grep -Fq -- 'DOCREPORT total gates=5 ok=5 failed=0' "$root/baseline.log"; then
-        fail "docs-report: clean baseline total" "the total line is not gates=5 ok=5 failed=0"
+    if ! grep -Fq -- 'DOCREPORT total gates=9 ok=9 failed=0' "$root/baseline.log"; then
+        fail "docs-report: clean baseline total" "the total line is not gates=9 ok=9 failed=0"
     fi
 
     write_report_stub "$root" run-tutorials 'run-tutorials: OK (this gate forgot its DOCREPORT line)'
     expect_failure "docs-report: gate exits 0 with no DOCREPORT line" \
         "run-tutorials" "summary=missing" \
         "$root/mutated.log" bash "$root/tools/docs-report.sh"
-    if ! grep -Fq -- 'DOCREPORT total gates=5 ok=4 failed=1' "$root/mutated.log"; then
-        fail "docs-report: total after a missing summary" "the total line is not gates=5 ok=4 failed=1"
+    if ! grep -Fq -- 'DOCREPORT total gates=9 ok=8 failed=1' "$root/mutated.log"; then
+        fail "docs-report: total after a missing summary" "the total line is not gates=9 ok=8 failed=1"
     fi
 }
 
