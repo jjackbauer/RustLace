@@ -8,6 +8,8 @@ contracts. Use --self-test to mutation-test the assertions and the checker itsel
 from __future__ import annotations
 
 import argparse
+from datetime import date
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -151,6 +153,64 @@ def validate(root: Path) -> dict[str, int]:
         if "checked-out RustLace development revision" not in text:
             fail(path, "tutorial does not declare its executable baseline")
 
+    # The general example runner supports explicit not-run exemptions. CI must
+    # not allow a documentation author to suppress a failing example with only
+    # a free-text annotation. Pin each waiver to its exact source and expiry.
+    try:
+        waiver_records = json.loads(read(root, "docs/example-waivers.json"))["waivers"]
+    except (ValueError, KeyError, TypeError) as exc:
+        fail("docs/example-waivers.json", f"invalid waiver inventory: {exc}")
+    if not isinstance(waiver_records, list):
+        fail("docs/example-waivers.json", "waivers must be an array")
+    allowed = {}
+    for entry in waiver_records:
+        if not isinstance(entry, dict):
+            fail("docs/example-waivers.json", "waiver entries must be objects")
+        keys = {"id", "path", "sha256", "justification", "approved_by", "expires"}
+        if set(entry) != keys:
+            fail("docs/example-waivers.json", f"waiver fields must be exactly {sorted(keys)}")
+        ident = entry["id"]
+        if not isinstance(ident, str) or not re.fullmatch(r"WAIVER-[A-Z0-9-]+", ident):
+            fail("docs/example-waivers.json", "invalid waiver ID")
+        if ident in allowed:
+            fail("docs/example-waivers.json", f"duplicate waiver {ident}")
+        if not all(isinstance(entry[k], str) and entry[k].strip() for k in keys):
+            fail("docs/example-waivers.json", f"{ident}: missing field")
+        if not re.fullmatch(r"[a-f0-9]{64}", entry["sha256"]):
+            fail("docs/example-waivers.json", f"{ident}: invalid SHA-256")
+        try:
+            expiry = date.fromisoformat(entry["expires"])
+        except ValueError:
+            fail("docs/example-waivers.json", f"{ident}: invalid expiry")
+        if expiry < date.today():
+            fail("docs/example-waivers.json", f"{ident}: expired")
+        allowed[ident] = entry
+    referenced = set()
+    for doc in (root / "docs").rglob("*.md"):
+        rel = doc.relative_to(root).as_posix()
+        if (rel.startswith(("docs/goal-", "docs/csharp-oracle/", "docs/internal/archive/"))
+                or rel.startswith("docs/tutorials/")):
+            continue
+        source = doc.read_text(encoding="utf-8").replace("\r\n", "\n")
+        for mark in re.finditer(r"<!--\s*not-run:\s*([^<>]*?)\s*-->\s*\n", source):
+            reason = mark.group(1).strip()
+            match = re.match(r"(WAIVER-[A-Z0-9-]+)\b", reason)
+            if not match or match.group(1) not in allowed:
+                fail(rel, f"unapproved not-run annotation: {reason!r}")
+            ident = match.group(1)
+            entry = allowed[ident]
+            if rel != entry["path"] or ident in referenced:
+                fail(rel, f"{ident}: path mismatch or duplicate use")
+            code = re.match(r"```lovelace\s*\n(.*?)\n```", source[mark.end():], re.S)
+            if code is None:
+                fail(rel, f"{ident}: annotation has no adjacent Lovelace fence")
+            digest = hashlib.sha256(code.group(1).encode("utf-8")).hexdigest()
+            if digest != entry["sha256"]:
+                fail(rel, f"{ident}: documented script changed (sha256 mismatch)")
+            referenced.add(ident)
+    if referenced != set(allowed):
+        fail("docs/example-waivers.json", f"unused waivers: {sorted(set(allowed)-referenced)}")
+
     return dict(crates=len(members), skills=skills, adrs=adrs, corpus=total, tutorials=4)
 
 
@@ -161,6 +221,7 @@ def self_test(root: Path) -> int:
             "Cargo.toml", "README.md", "AGENTS.md", "docs/build-and-run.md",
             "docs/skills.md", "docs/tutorials/README.md",
             "docs/crates/lovelace-corpus.md", "docs/version-applicability.md",
+            "docs/example-waivers.json",
         ):
             target = baseline / path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +243,24 @@ def self_test(root: Path) -> int:
             ("tutorial-version", "docs/tutorials/linear-algebra.md",
              "checked-out RustLace development revision", "RustLace 0.4.1"),
         ]
+        # An agent must not be able to silence a failing example simply by
+        # inserting a not-run annotation while leaving other examples green.
+        waived_page = baseline / "docs/crates/lovelace-corpus.md"
+        original_waiver_page = waived_page.read_text(encoding="utf-8")
+        waived_page.write_text(
+            original_waiver_page + "\n<!-- not-run: because the example fails -->\n"
+            + "```lovelace\n1 / 0\n```\n",
+            encoding="utf-8",
+        )
+        try:
+            validate(baseline)
+        except MetadataFailure as exc:
+            if "unapproved not-run" not in str(exc):
+                fail("docs/crates/lovelace-corpus.md", f"wrong waiver rejection: {exc}")
+        else:
+            fail("docs/crates/lovelace-corpus.md", "unapproved waiver passed")
+        waived_page.write_text(original_waiver_page, encoding="utf-8")
+
         for label, file, original, replacement in mutations:
             target = baseline / file
             content = target.read_text(encoding="utf-8")
@@ -196,7 +275,7 @@ def self_test(root: Path) -> int:
             else:
                 fail(file, f"{label}: mutant passed")
             target.write_text(content, encoding="utf-8")
-    return len(mutations)
+    return len(mutations) + 1
 
 
 def main() -> int:
