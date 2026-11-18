@@ -29,7 +29,7 @@ oracle, especially when the historical behavior was defective.
 `python tools/harness/check-agent-contracts.py`:
 
 - Reads `BuiltinInfo`'s current fields from `lovelace-lang/src/registry.rs`.
-- Checks that every Core descriptor exist; no plugin loader is introduced.
+- Checks that every Core descriptor exists; no plugin loader is introduced.
 - Checks actual `.dsh/skills/*/SKILL.md` names, required frontmatter and
   Verify sections, and the `AGENTS.md` / `docs/skills.md` inventories.
 - Refuses the retired `plugin: None` / `plugin: Some(...)` instructions
