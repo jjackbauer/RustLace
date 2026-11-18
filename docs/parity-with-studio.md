@@ -34,11 +34,12 @@ what is preserved, what deliberately differs, and which fixtures pin either clai
 
 ## The fixtures that pin parity
 
-- `parity/corpus/lang.json` – 111 records extracted from the C# suite's `Language.md` in the
+- `parity/corpus/lang.json` – 112 records extracted from the C# suite's `Language.md` in the
   LovelaceSharp repository:
   `{id, doc, heading, script, kind, text}` with `kind` ∈ value | error | prints | plot. Run by
   `lovelace-corpus`; a missing file is exit code 2, never a pass.
-- `parity/corpus/symbolics.json` – the symbolic corpus, same shape.
+- `parity/corpus/symbolics.json` – 103 records, same shape.
+- `parity/corpus/systems.json` – 17 RustLace Systems records, not inherited from the C# reference.
 - `docs/csharp-oracle/Lovelace.Run.Tests/fixtures/*` – 40 golden wire envelopes and scripts from the
   C# test project, compared byte-for-byte by `lovelace-run`'s `golden_batch`.
 - `docs/csharp-oracle/Lovelace.Symbolics/README.md` and
