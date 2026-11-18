@@ -8,7 +8,7 @@ The numbers in this page were read from the live registry of a debug `lovelace-r
 the current tree:
 
 ```console
-target/debug/lovelace-run.exe --functions --function-limit 500
+cargo run -p lovelace-run -- --functions --function-limit 500
 ```
 
 The observed envelope reports `"total": 134`, `"returned": 134`, `"truncated": false`. The
