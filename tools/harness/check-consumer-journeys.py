@@ -73,20 +73,36 @@ def main() -> int:
             if not isinstance(detail, dict) or detail.get("module") != module:
                 fail(f"{name}: incorrect function descriptor or module")
             checks += 1
+        # Two independent expectations are computed from the *inputs*, not
+        # from the interpreter. Rank of a 2x2 matrix is determined by its
+        # determinant and whether any entry is nonzero; utilization is the
+        # arrival/service rate ratio. Neither oracle calls the CLI.
+        entries = tuple(map(Fraction, (1, 2, 2, 4)))
+        a, b, c, d = entries
+        rank_oracle = (2 if a * d - b * c != 0 else
+                       1 if any(value != 0 for value in entries) else 0)
+        utilization_oracle = Fraction(8, 10)
+        observed = {}
         for script, kind, display in (
-            ("1/3", "Real", "0.(3)"),
-            ("matrix_rank([[1,2],[2,4]])", "Integer", "1"),
-            ("sys_mm1(8,10).utilization", "Real", "0.8"),
+            ("1/3", "Real", "0.(3)"),  # Fixed golden for periodic formatting.
+            ("matrix_rank([[1,2],[2,4]])", "Integer", str(rank_oracle)),
+            ("sys_mm1(8,10).utilization", "Real", None),
         ):
             output = call(runner, ["--eval", script, "--omit-functions", "--omit-variables"], 0)
             result = output.get("result")
-            if not isinstance(result, dict) or (result.get("kind"), result.get("display")) != (kind, display):
+            if (not isinstance(result, dict) or result.get("kind") != kind
+                    or not isinstance(result.get("display"), str)
+                    or (display is not None and result["display"] != display)):
                 fail(f"{script}: wrong typed output: {result}")
+            observed[script] = result["display"]
             checks += 1
-        if Fraction(8, 10) != Fraction(4, 5):
-            fail("independent utilization oracle invalid")
-        if Fraction(2, 4) != Fraction(1, 2):
-            fail("independent rank-dependence oracle invalid")
+        try:
+            actual_utilization = Fraction(observed["sys_mm1(8,10).utilization"])
+            actual_rank = int(observed["matrix_rank([[1,2],[2,4]])"])
+        except (ValueError, ZeroDivisionError) as exc:
+            fail(f"consumer numerical output not parseable for independent check: {exc}")
+        if actual_utilization != utilization_oracle or actual_rank != rank_oracle:
+            fail("CLI utilization/rank differs from exact independent 2x2/rate oracles")
         checks += 1
         script = ROOT / "docs/tutorials/examples/linear-algebra.ls"
         file_result = call(runner, ["--file", str(script), "--omit-functions", "--omit-variables"], 0)
