@@ -25,6 +25,7 @@ scripts end to end; [precision and formatting](language/precision-and-formatting
 | [editorial.md](editorial.md) | you are writing or reviewing documentation, a skill or an agent instruction |
 | [agent-harness.md](agent-harness.md) | you are verifying code written by agents or improving independent contract and skill checks |
 | [agent-usage.md](agent-usage.md) | you are an agent using the language and need complete registry discovery, typed results and numerical provenance |
+| [example-waivers.md](example-waivers.md) | you need to exempt an executable example for a justified and independently reviewed reason |
 | [version-applicability.md](version-applicability.md) | you need to distinguish checked-out source documentation from older release binaries |
 | [how-to/](how-to/) | you want short, task-oriented recipes rather than full reference pages |
 | [skills.md](skills.md) | you need the current agent task-skill inventory |
